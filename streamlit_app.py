@@ -124,7 +124,8 @@ FOLDERS = [
     "PO_NCC", 
     "PO_KHACH_HANG", 
     "product_images", 
-    "proof_images"
+    "proof_images",
+    "tmp_history"
 ]
 
 for d in FOLDERS:
@@ -137,6 +138,7 @@ PO_EXPORT_FOLDER = "PO_NCC"
 PO_CUSTOMER_FOLDER = "PO_KHACH_HANG"
 IMG_FOLDER = "product_images"
 PROOF_FOLDER = "proof_images"
+TMP_FOLDER = "tmp_history"
 
 ADMIN_PASSWORD = "admin"
 
@@ -945,7 +947,7 @@ with tab4:
 
         if st.button("💾 LƯU PO KHÁCH"):
              if not po_cust_no: st.error("Thiếu PO"); st.stop()
-             final_c = st.session_state.temp_cust_order_df.copy(); 
+             final_c = st.session_state.temp_cust_order_df.copy(); 
              if "Delete" in final_c.columns: del final_c["Delete"]
              final_c["po_number"] = po_cust_no; final_c["customer"] = po_cust_name; final_c["order_date"] = po_cust_date
              db_customer_orders = pd.concat([db_customer_orders, final_c], ignore_index=True); save_csv(DB_CUSTOMER_ORDERS, db_customer_orders)
