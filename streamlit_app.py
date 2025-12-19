@@ -11,30 +11,31 @@ import platform
 import subprocess
 import unicodedata
 from copy import copy
+import io
 
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO & VERSION
 # =============================================================================
-APP_VERSION = "V4800 - UPDATE V4.2 (BIG TAB TEXT & SAVE FIX FINAL)"
+APP_VERSION = "V4800 - UPDATE V4.3 (FIX FILE DOWNLOAD)"
 RELEASE_NOTE = """
-- **UI Tab:** Tăng kích thước chữ của các Tab (Menu chính) lên 300% (rất to) để dễ nhìn. Các chữ khác giữ nguyên kích thước chuẩn.
-- **Save Fix:** Tối ưu hóa đường dẫn lưu file để khắc phục lỗi file không hiển thị sau khi lưu.
-- **Data:** Giữ nguyên logic xử lý dữ liệu và import thông minh.
+- **Critical Save Fix:** Thay đổi cơ chế lưu file lịch sử. Hệ thống sẽ tạo nút 'Tải File' ngay lập tức sau khi lưu để người dùng tải về máy, tránh lỗi không tìm thấy file trên server.
+- **UI:** Chữ trên Tab Menu được phóng to 300% (48px). Các phần khác giữ nguyên.
+- **Data:** Giữ nguyên logic xử lý dữ liệu thông minh.
 """
 
 st.set_page_config(page_title=f"CRM V4800 - {APP_VERSION}", layout="wide", page_icon="💼")
 
-# --- CSS TÙY CHỈNH (CHỈ TĂNG CỠ CHỮ TAB & 3D CARDS) ---
+# --- CSS TÙY CHỈNH (CHỈ TĂNG CỠ CHỮ TAB) ---
 st.markdown("""
     <style>
     /* CHỈ TĂNG KÍCH THƯỚC CHỮ CỦA CÁC TAB (300%) */
     button[data-baseweb="tab"] div p {
-        font-size: 40px !important; /* Tăng kích thước chữ bên trong Tab */
+        font-size: 48px !important; /* Tăng cực lớn */
         font-weight: 900 !important;
-        padding: 10px !important;
+        padding: 10px 20px !important;
     }
     
-    /* Giữ nguyên các phần khác mặc định hoặc chỉnh nhẹ */
+    /* Giữ nguyên các phần khác mặc định */
     h1 { font-size: 32px !important; }
     h2 { font-size: 28px !important; }
     h3 { font-size: 24px !important; }
@@ -70,7 +71,7 @@ st.markdown("""
         text-shadow: 1px 1px 2px rgba(0,0,0,0.3);
     }
     
-    /* MÀU SẮC 3D GRADIENT CHO TỪNG LOẠI */
+    /* MÀU SẮC 3D GRADIENT */
     .bg-sales { background: linear-gradient(135deg, #00b09b 0%, #96c93d 100%); }
     .bg-cost { background: linear-gradient(135deg, #ff5f6d 0%, #ffc371 100%); }
     .bg-profit { background: linear-gradient(135deg, #f83600 0%, #f9d423 100%); }
@@ -126,7 +127,8 @@ FOLDERS = [
     "PO_NCC", 
     "PO_KHACH_HANG", 
     "product_images", 
-    "proof_images"
+    "proof_images",
+    "tmp_history" # Folder tạm để lưu file download
 ]
 
 for d in FOLDERS:
@@ -139,6 +141,7 @@ PO_EXPORT_FOLDER = "PO_NCC"
 PO_CUSTOMER_FOLDER = "PO_KHACH_HANG"
 IMG_FOLDER = "product_images"
 PROOF_FOLDER = "proof_images"
+TMP_FOLDER = "tmp_history"
 
 ADMIN_PASSWORD = "admin"
 
@@ -775,50 +778,28 @@ with tab3:
                     safe_cust = safe_filename(sel_cust)
                     safe_quote = safe_filename(quote_name)
                     
-                    # Chỉ tạo 1 folder chung cho khách hàng, không phân năm/tháng để tránh lỗi path quá dài hoặc permission
-                    base_path = os.path.join(QUOTE_ROOT_FOLDER, safe_cust)
-                    
-                    if not os.path.exists(base_path): 
-                        os.makedirs(base_path)
-                        
+                    # File tạm để download ngay
                     csv_name = f"History_{safe_quote}_{now.strftime('%Y%m%d')}.csv"
-                    full_path = os.path.join(base_path, csv_name)
-                    
-                    try:
-                        st.session_state.current_quote_df.to_csv(full_path, index=False, encoding='utf-8-sig')
-                        
-                        meta_data = {
-                            "pct_end": st.session_state.pct_end, "pct_buy": st.session_state.pct_buy,
-                            "pct_tax": st.session_state.pct_tax, "pct_vat": st.session_state.pct_vat,
-                            "pct_pay": st.session_state.pct_pay, "pct_mgmt": st.session_state.pct_mgmt,
-                            "pct_trans": st.session_state.pct_trans, "quote_name": quote_name,
-                            "customer": sel_cust, "date": now.strftime("%d/%m/%Y")
-                        }
-                        
-                        json_path = os.path.join(base_path, csv_name + ".json")
-                        with open(json_path, "w", encoding='utf-8') as f:
-                            json.dump(meta_data, f, ensure_ascii=False, indent=4)
+                    csv_data = st.session_state.current_quote_df.to_csv(index=False, encoding='utf-8-sig')
 
-                        d = now.strftime("%d/%m/%Y")
-                        new_hist_rows = []
-                        for _, r in st.session_state.current_quote_df.iterrows():
-                            rev = to_float(r["total_price_vnd"]); prof = to_float(r["profit_vnd"]); cost = rev - prof
-                            new_hist_rows.append({
-                                "date":d, "quote_no":quote_name, "customer":sel_cust, "item_code":r["item_code"], 
-                                "item_name":r["item_name"], "specs":r["specs"], "qty":r["qty"], "total_revenue":fmt_num(rev), 
-                                "total_cost":fmt_num(cost), "profit":fmt_num(prof), "supplier":r["supplier_name"], 
-                                "status":"Pending", "delivery_date":"", "po_number": "",
-                                "gap":r["gap"], "end_user":r["end_user_val"], "buyer":r["buyer_val"], 
-                                "tax":r["import_tax_val"], "vat":r["vat_val"], "trans":r["transportation"], "mgmt":r["mgmt_fee"]
-                            })
-                        sales_history_df = pd.concat([sales_history_df, pd.DataFrame(new_hist_rows)], ignore_index=True)
-                        save_csv(SALES_HISTORY_CSV, sales_history_df)
-                        
-                        st.success(f"✅ Đã lưu thành công!\nFile: {full_path}")
-                        st.rerun() # Refresh to show updates
-                        
-                    except Exception as e:
-                        st.error(f"Lỗi khi lưu file: {str(e)}")
+                    # Lưu vào DB tổng
+                    d = now.strftime("%d/%m/%Y")
+                    new_hist_rows = []
+                    for _, r in st.session_state.current_quote_df.iterrows():
+                        rev = to_float(r["total_price_vnd"]); prof = to_float(r["profit_vnd"]); cost = rev - prof
+                        new_hist_rows.append({
+                            "date":d, "quote_no":quote_name, "customer":sel_cust, "item_code":r["item_code"], 
+                            "item_name":r["item_name"], "specs":r["specs"], "qty":r["qty"], "total_revenue":fmt_num(rev), 
+                            "total_cost":fmt_num(cost), "profit":fmt_num(prof), "supplier":r["supplier_name"], 
+                            "status":"Pending", "delivery_date":"", "po_number": "",
+                            "gap":r["gap"], "end_user":r["end_user_val"], "buyer":r["buyer_val"], 
+                            "tax":r["import_tax_val"], "vat":r["vat_val"], "trans":r["transportation"], "mgmt":r["mgmt_fee"]
+                        })
+                    sales_history_df = pd.concat([sales_history_df, pd.DataFrame(new_hist_rows)], ignore_index=True)
+                    save_csv(SALES_HISTORY_CSV, sales_history_df)
+                    
+                    st.success("Đã lưu vào hệ thống! Hãy tải file về máy:")
+                    st.download_button(label="📥 TẢI FILE LỊCH SỬ VỪA LƯU", data=csv_data, file_name=csv_name, mime="text/csv")
 
         with c_exp:
             if st.button("XUẤT EXCEL"):
@@ -826,16 +807,13 @@ with tab3:
                 else:
                     try:
                         now = datetime.now()
-                        safe_cust = safe_filename(sel_cust)
                         safe_quote = safe_filename(quote_name)
-                        
-                        target_dir = os.path.join(QUOTE_ROOT_FOLDER, safe_cust, now.strftime("%Y"), now.strftime("%b").upper())
-                        if not os.path.exists(target_dir): os.makedirs(target_dir)
-                        
                         fname = f"Quote_{safe_quote}_{now.strftime('%Y%m%d')}.xlsx"
-                        save_path = os.path.join(target_dir, fname)
                         
-                        wb = load_workbook(TEMPLATE_FILE); ws = wb.active
+                        # Tạo file tạm trong bộ nhớ
+                        output = io.BytesIO()
+                        wb = load_workbook(TEMPLATE_FILE)
+                        ws = wb.active
                         safe_write_merged(ws, 1, 2, sel_cust); safe_write_merged(ws, 2, 8, quote_name)
                         safe_write_merged(ws, 1, 8, now.strftime("%d-%b-%Y"))
                         if not st.session_state.current_quote_df.empty:
@@ -851,9 +829,10 @@ with tab3:
                             thin = Side(border_style="thin", color="000000")
                             for ci in [1,3,4,5,6,7,8]:
                                 c = ws.cell(row=ri, column=ci); c.border = Border(top=thin, left=thin, right=thin, bottom=thin)
-                        wb.save(save_path)
-                        st.success(f"Đã xuất file: {save_path}")
-                        with open(save_path, "rb") as f: st.download_button("Tải File", f, file_name=fname)
+                        
+                        wb.save(output)
+                        st.success("Đã tạo file Excel thành công!")
+                        st.download_button("📥 TẢI FILE BÁO GIÁ EXCEL", output.getvalue(), file_name=fname, mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
                     except Exception as e: st.error(str(e))
 
     with tab3_2:
@@ -981,7 +960,7 @@ with tab4:
 
         if st.button("💾 LƯU PO KHÁCH"):
              if not po_cust_no: st.error("Thiếu PO"); st.stop()
-             final_c = st.session_state.temp_cust_order_df.copy(); 
+             final_c = st.session_state.temp_cust_order_df.copy(); 
              if "Delete" in final_c.columns: del final_c["Delete"]
              final_c["po_number"] = po_cust_no; final_c["customer"] = po_cust_name; final_c["order_date"] = po_cust_date
              db_customer_orders = pd.concat([db_customer_orders, final_c], ignore_index=True); save_csv(DB_CUSTOMER_ORDERS, db_customer_orders)
@@ -1001,160 +980,160 @@ with tab4:
 
 # --- TAB 5: TRACKING ---
 with tab5:
-    t5_1, t5_2 = st.tabs(["THEO DÕI", "LỊCH SỬ THANH TOÁN"])
-    with t5_1:
-        c_up, c_view = st.columns(2)
-        uploaded_proof = c_up.file_uploader("Upload Ảnh Bằng Chứng", type=["png", "jpg"], key="proof_upl")
-        
-        st.markdown("#### Tracking Đơn Hàng")
-        if "Delete" not in tracking_df.columns: tracking_df["Delete"] = False
-        
-        if is_admin and st.button("🗑️ Xóa dòng Tracking (Admin)"):
-             tracking_df = tracking_df[~tracking_df["Delete"]]
-             if "Delete" in tracking_df.columns: del tracking_df["Delete"]
-             save_csv(TRACKING_CSV, tracking_df); st.rerun()
+    t5_1, t5_2 = st.tabs(["THEO DÕI", "LỊCH SỬ THANH TOÁN"])
+    with t5_1:
+        c_up, c_view = st.columns(2)
+        uploaded_proof = c_up.file_uploader("Upload Ảnh Bằng Chứng", type=["png", "jpg"], key="proof_upl")
+        
+        st.markdown("#### Tracking Đơn Hàng")
+        if "Delete" not in tracking_df.columns: tracking_df["Delete"] = False
+        
+        if is_admin and st.button("🗑️ Xóa dòng Tracking (Admin)"):
+             tracking_df = tracking_df[~tracking_df["Delete"]]
+             if "Delete" in tracking_df.columns: del tracking_df["Delete"]
+             save_csv(TRACKING_CSV, tracking_df); st.rerun()
 
-        edited_track = st.data_editor(tracking_df[tracking_df["finished"]=="0"], num_rows="dynamic", key="ed_track", use_container_width=True, column_config={"status": st.column_config.SelectboxColumn("Status", options=["Đã đặt hàng", "Đợi hàng từ TQ về VN", "Hàng đã về VN", "Hàng đã nhận ở VP", "Đang đợi hàng về", "Đã giao hàng"], required=True)})
+        edited_track = st.data_editor(tracking_df[tracking_df["finished"]=="0"], num_rows="dynamic", key="ed_track", use_container_width=True, column_config={"status": st.column_config.SelectboxColumn("Status", options=["Đã đặt hàng", "Đợi hàng từ TQ về VN", "Hàng đã về VN", "Hàng đã nhận ở VP", "Đang đợi hàng về", "Đã giao hàng"], required=True)})
 
-        if st.button("Cập nhật Tracking"):
-            to_keep = edited_track
-            finished_rows = tracking_df[tracking_df["finished"]=="1"]
-            for i, r in to_keep.iterrows():
-                if r["status"] in ["Hàng đã nhận ở VP", "Đã giao hàng"]:
-                    to_keep.at[i, "finished"] = "1"; to_keep.at[i, "last_update"] = datetime.now().strftime("%d/%m/%Y")
-                    if r["order_type"] == "KH":
-                        cust = r["partner"]; term = 30
-                        f_cust = customers_df[customers_df["short_name"]==cust]
-                        if not f_cust.empty: 
-                            try: term = int(to_float(f_cust.iloc[0]["payment_term"]))
-                            except: pass
-                        due = (datetime.now() + timedelta(days=term)).strftime("%d/%m/%Y")
-                        payment_df = pd.concat([payment_df, pd.DataFrame([{"no": len(payment_df)+1, "po_no": r["po_no"], "customer": cust, "invoice_no": "", "status": "Chưa thanh toán", "due_date": due, "paid_date": ""}])], ignore_index=True)
-                        save_csv(PAYMENT_CSV, payment_df)
+        if st.button("Cập nhật Tracking"):
+            to_keep = edited_track
+            finished_rows = tracking_df[tracking_df["finished"]=="1"]
+            for i, r in to_keep.iterrows():
+                if r["status"] in ["Hàng đã nhận ở VP", "Đã giao hàng"]:
+                    to_keep.at[i, "finished"] = "1"; to_keep.at[i, "last_update"] = datetime.now().strftime("%d/%m/%Y")
+                    if r["order_type"] == "KH":
+                        cust = r["partner"]; term = 30
+                        f_cust = customers_df[customers_df["short_name"]==cust]
+                        if not f_cust.empty: 
+                            try: term = int(to_float(f_cust.iloc[0]["payment_term"]))
+                            except: pass
+                        due = (datetime.now() + timedelta(days=term)).strftime("%d/%m/%Y")
+                        payment_df = pd.concat([payment_df, pd.DataFrame([{"no": len(payment_df)+1, "po_no": r["po_no"], "customer": cust, "invoice_no": "", "status": "Chưa thanh toán", "due_date": due, "paid_date": ""}])], ignore_index=True)
+                        save_csv(PAYMENT_CSV, payment_df)
 
-            tracking_df = pd.concat([finished_rows, to_keep], ignore_index=True)
-            if "Delete" in tracking_df.columns: del tracking_df["Delete"]
-            save_csv(TRACKING_CSV, tracking_df); st.success("Updated!"); st.rerun()
+            tracking_df = pd.concat([finished_rows, to_keep], ignore_index=True)
+            if "Delete" in tracking_df.columns: del tracking_df["Delete"]
+            save_csv(TRACKING_CSV, tracking_df); st.success("Updated!"); st.rerun()
 
-        view_id = c_view.text_input("ID Xem/Upload Ảnh")
-        if c_view.button("Upload") and uploaded_proof and view_id:
-             try:
-                 fname = f"proof_{view_id}_{uploaded_proof.name}"; fpath = os.path.join(PROOF_FOLDER, fname)
-                 with open(fpath, "wb") as f: f.write(uploaded_proof.getbuffer())
-                 idx = tracking_df.index[tracking_df['no'].astype(str) == view_id].tolist()
-                 if idx: tracking_df.at[idx[0], "proof_image"] = fpath; save_csv(TRACKING_CSV, tracking_df); st.success("OK")
-             except Exception as e: st.error(str(e))
-        if c_view.button("Xem") and view_id:
-             idx = tracking_df.index[tracking_df['no'].astype(str) == view_id].tolist()
-             if idx:
-                 p = tracking_df.at[idx[0], "proof_image"]
-                 if p and os.path.exists(p): st.image(p)
-                 else: st.warning("No Image")
+        view_id = c_view.text_input("ID Xem/Upload Ảnh")
+        if c_view.button("Upload") and uploaded_proof and view_id:
+             try:
+                 fname = f"proof_{view_id}_{uploaded_proof.name}"; fpath = os.path.join(PROOF_FOLDER, fname)
+                 with open(fpath, "wb") as f: f.write(uploaded_proof.getbuffer())
+                 idx = tracking_df.index[tracking_df['no'].astype(str) == view_id].tolist()
+                 if idx: tracking_df.at[idx[0], "proof_image"] = fpath; save_csv(TRACKING_CSV, tracking_df); st.success("OK")
+             except Exception as e: st.error(str(e))
+        if c_view.button("Xem") and view_id:
+             idx = tracking_df.index[tracking_df['no'].astype(str) == view_id].tolist()
+             if idx:
+                 p = tracking_df.at[idx[0], "proof_image"]
+                 if p and os.path.exists(p): st.image(p)
+                 else: st.warning("No Image")
 
-        st.divider(); st.markdown("#### 2. Theo dõi công nợ")
-        if "Delete" not in payment_df.columns: payment_df["Delete"] = False
-        
-        pending_pay = payment_df[payment_df["status"] != "Đã thanh toán"]
-        edited_pay = st.data_editor(pending_pay, key="ed_pay", num_rows="dynamic", use_container_width=True, column_config={"invoice_no": st.column_config.TextColumn("Invoice No", width="medium")})
-        
-        if is_admin and st.button("Xóa dòng Payment (Admin)"):
-             payment_df = payment_df[~payment_df["Delete"]]
-             save_csv(PAYMENT_CSV, payment_df); st.rerun()
+        st.divider(); st.markdown("#### 2. Theo dõi công nợ")
+        if "Delete" not in payment_df.columns: payment_df["Delete"] = False
+        
+        pending_pay = payment_df[payment_df["status"] != "Đã thanh toán"]
+        edited_pay = st.data_editor(pending_pay, key="ed_pay", num_rows="dynamic", use_container_width=True, column_config={"invoice_no": st.column_config.TextColumn("Invoice No", width="medium")})
+        
+        if is_admin and st.button("Xóa dòng Payment (Admin)"):
+             payment_df = payment_df[~payment_df["Delete"]]
+             save_csv(PAYMENT_CSV, payment_df); st.rerun()
 
-        if st.button("Cập nhật Payment"):
-             # Simple merge back
-             paid_items = payment_df[payment_df["status"] == "Đã thanh toán"]
-             payment_df = pd.concat([paid_items, edited_pay], ignore_index=True)
-             if "Delete" in payment_df.columns: del payment_df["Delete"]
-             save_csv(PAYMENT_CSV, payment_df); st.success("Updated")
+        if st.button("Cập nhật Payment"):
+             # Simple merge back
+             paid_items = payment_df[payment_df["status"] == "Đã thanh toán"]
+             payment_df = pd.concat([paid_items, edited_pay], ignore_index=True)
+             if "Delete" in payment_df.columns: del payment_df["Delete"]
+             save_csv(PAYMENT_CSV, payment_df); st.success("Updated")
 
-        c1, c2 = st.columns(2)
-        pop = c1.selectbox("Chọn PO thanh toán", pending_pay["po_no"].unique())
-        if c2.button("Xác nhận ĐÃ THANH TOÁN"):
-             idx = payment_df[payment_df["po_no"]==pop].index
-             payment_df.loc[idx, "status"] = "Đã thanh toán"
-             payment_df.loc[idx, "paid_date"] = datetime.now().strftime("%d/%m/%Y")
-             paid_history_df = pd.concat([paid_history_df, payment_df.loc[idx]], ignore_index=True)
-             save_csv(PAID_HISTORY_CSV, paid_history_df); save_csv(PAYMENT_CSV, payment_df); st.success("Done!"); st.rerun()
+        c1, c2 = st.columns(2)
+        pop = c1.selectbox("Chọn PO thanh toán", pending_pay["po_no"].unique())
+        if c2.button("Xác nhận ĐÃ THANH TOÁN"):
+             idx = payment_df[payment_df["po_no"]==pop].index
+             payment_df.loc[idx, "status"] = "Đã thanh toán"
+             payment_df.loc[idx, "paid_date"] = datetime.now().strftime("%d/%m/%Y")
+             paid_history_df = pd.concat([paid_history_df, payment_df.loc[idx]], ignore_index=True)
+             save_csv(PAID_HISTORY_CSV, paid_history_df); save_csv(PAYMENT_CSV, payment_df); st.success("Done!"); st.rerun()
 
-    with t5_2:
-        st.subheader("Lịch sử thanh toán")
-        if not paid_history_df.empty:
-            paid_cust = st.selectbox("Lọc KH", ["All"] + list(paid_history_df["customer"].unique()))
-            show = paid_history_df if paid_cust == "All" else paid_history_df[paid_history_df["customer"] == paid_cust]
-            st.dataframe(show, use_container_width=True)
-            sp = st.selectbox("Xem chi tiết PO", show["po_no"].unique())
-            if sp:
-                dt = db_customer_orders[db_customer_orders["po_number"] == sp]
-                if not dt.empty: st.dataframe(dt[["item_code", "item_name", "specs", "qty", "unit_price", "total_price"]], use_container_width=True)
-        else: st.info("Trống.")
+    with t5_2:
+        st.subheader("Lịch sử thanh toán")
+        if not paid_history_df.empty:
+            paid_cust = st.selectbox("Lọc KH", ["All"] + list(paid_history_df["customer"].unique()))
+            show = paid_history_df if paid_cust == "All" else paid_history_df[paid_history_df["customer"] == paid_cust]
+            st.dataframe(show, use_container_width=True)
+            sp = st.selectbox("Xem chi tiết PO", show["po_no"].unique())
+            if sp:
+                dt = db_customer_orders[db_customer_orders["po_number"] == sp]
+                if not dt.empty: st.dataframe(dt[["item_code", "item_name", "specs", "qty", "unit_price", "total_price"]], use_container_width=True)
+        else: st.info("Trống.")
 
 # --- TAB 6: MASTER DATA ---
 with tab6:
-    t6_1, t6_2, t6_3 = st.tabs(["KHÁCH HÀNG", "NHÀ CUNG CẤP", "TEMPLATE"])
-    with t6_1:
-        up_cust_master = st.file_uploader("Upload File Excel Khách Hàng (Ghi đè)", type=["xlsx"], key="cust_imp")
-        if up_cust_master and st.button("Thực hiện Import (KH)"):
-            try:
-                df_new = pd.read_excel(up_cust_master, dtype=str).fillna("")
-                cols_to_use = MASTER_COLUMNS
-                for c in cols_to_use:
-                    if c not in df_new.columns: df_new[c] = ""
-                customers_df = df_new[cols_to_use]
-                save_csv(CUSTOMERS_CSV, customers_df)
-                st.success("Đã import danh sách Khách hàng mới!")
-                st.rerun()
-            except Exception as e: st.error(f"Lỗi import: {e}")
+    t6_1, t6_2, t6_3 = st.tabs(["KHÁCH HÀNG", "NHÀ CUNG CẤP", "TEMPLATE"])
+    with t6_1:
+        up_cust_master = st.file_uploader("Upload File Excel Khách Hàng (Ghi đè)", type=["xlsx"], key="cust_imp")
+        if up_cust_master and st.button("Thực hiện Import (KH)"):
+            try:
+                df_new = pd.read_excel(up_cust_master, dtype=str).fillna("")
+                cols_to_use = MASTER_COLUMNS
+                for c in cols_to_use:
+                    if c not in df_new.columns: df_new[c] = ""
+                customers_df = df_new[cols_to_use]
+                save_csv(CUSTOMERS_CSV, customers_df)
+                st.success("Đã import danh sách Khách hàng mới!")
+                st.rerun()
+            except Exception as e: st.error(f"Lỗi import: {e}")
 
-        if is_admin and st.button("⚠️ XÓA TOÀN BỘ DATA KHÁCH HÀNG"):
-            customers_df = pd.DataFrame(columns=MASTER_COLUMNS)
-            save_csv(CUSTOMERS_CSV, customers_df)
-            st.rerun()
+        if is_admin and st.button("⚠️ XÓA TOÀN BỘ DATA KHÁCH HÀNG"):
+            customers_df = pd.DataFrame(columns=MASTER_COLUMNS)
+            save_csv(CUSTOMERS_CSV, customers_df)
+            st.rerun()
 
-        edited_cust_df = st.data_editor(customers_df, key="ed_cust", num_rows="dynamic", use_container_width=True)
-        if st.button("Lưu thay đổi Khách Hàng"):
-            if is_admin:
-                save_csv(CUSTOMERS_CSV, edited_cust_df)
-                st.success("Đã lưu")
-            else: st.error("Cần quyền Admin để lưu chỉnh sửa tay.")
-            
-    with t6_2:
-        up_supp_master = st.file_uploader("Upload File Excel NCC (Ghi đè)", type=["xlsx"], key="supp_imp")
-        if up_supp_master and st.button("Thực hiện Import (NCC)"):
-            try:
-                df_new = pd.read_excel(up_supp_master, dtype=str).fillna("")
-                cols_to_use = MASTER_COLUMNS
-                for c in cols_to_use:
-                    if c not in df_new.columns: df_new[c] = ""
-                suppliers_df = df_new[cols_to_use]
-                save_csv(SUPPLIERS_CSV, suppliers_df)
-                st.success("Đã import danh sách NCC mới!")
-                st.rerun()
-            except Exception as e: st.error(f"Lỗi import: {e}")
+        edited_cust_df = st.data_editor(customers_df, key="ed_cust", num_rows="dynamic", use_container_width=True)
+        if st.button("Lưu thay đổi Khách Hàng"):
+            if is_admin:
+                save_csv(CUSTOMERS_CSV, edited_cust_df)
+                st.success("Đã lưu")
+            else: st.error("Cần quyền Admin để lưu chỉnh sửa tay.")
+            
+    with t6_2:
+        up_supp_master = st.file_uploader("Upload File Excel NCC (Ghi đè)", type=["xlsx"], key="supp_imp")
+        if up_supp_master and st.button("Thực hiện Import (NCC)"):
+            try:
+                df_new = pd.read_excel(up_supp_master, dtype=str).fillna("")
+                cols_to_use = MASTER_COLUMNS
+                for c in cols_to_use:
+                    if c not in df_new.columns: df_new[c] = ""
+                suppliers_df = df_new[cols_to_use]
+                save_csv(SUPPLIERS_CSV, suppliers_df)
+                st.success("Đã import danh sách NCC mới!")
+                st.rerun()
+            except Exception as e: st.error(f"Lỗi import: {e}")
 
-        if is_admin and st.button("⚠️ XÓA TOÀN BỘ DATA NCC"):
-            suppliers_df = pd.DataFrame(columns=MASTER_COLUMNS)
-            save_csv(SUPPLIERS_CSV, suppliers_df)
-            st.rerun()
+        if is_admin and st.button("⚠️ XÓA TOÀN BỘ DATA NCC"):
+            suppliers_df = pd.DataFrame(columns=MASTER_COLUMNS)
+            save_csv(SUPPLIERS_CSV, suppliers_df)
+            st.rerun()
 
-        edited_supp_df = st.data_editor(suppliers_df, key="ed_supp", num_rows="dynamic", use_container_width=True)
-        if st.button("Lưu thay đổi NCC"):
-            if is_admin:
-                save_csv(SUPPLIERS_CSV, edited_supp_df)
-                st.success("Đã lưu")
-            else: st.error("Cần quyền Admin để lưu chỉnh sửa tay.")
+        edited_supp_df = st.data_editor(suppliers_df, key="ed_supp", num_rows="dynamic", use_container_width=True)
+        if st.button("Lưu thay đổi NCC"):
+            if is_admin:
+                save_csv(SUPPLIERS_CSV, edited_supp_df)
+                st.success("Đã lưu")
+            else: st.error("Cần quyền Admin để lưu chỉnh sửa tay.")
 
-    with t6_3:
-        if st.button("🗑️ Xóa Template Cũ"):
-            if is_admin:
-                if os.path.exists(TEMPLATE_FILE):
-                    os.remove(TEMPLATE_FILE)
-                    st.success("Đã xóa file template cũ.")
-                else: st.warning("Không tìm thấy file template.")
-            else: st.error("Yêu cầu quyền Admin để xóa Template!")
-        
-        up_tpl = st.file_uploader("Upload Template Mới (Ghi đè)", type=["xlsx"], key="tpl_imp")
-        if up_tpl and st.button("Lưu Template"):
-            with open(TEMPLATE_FILE, "wb") as f:
-                f.write(up_tpl.getbuffer())
-            st.success("Đã cập nhật template mới!")
+    with t6_3:
+        if st.button("🗑️ Xóa Template Cũ"):
+            if is_admin:
+                if os.path.exists(TEMPLATE_FILE):
+                    os.remove(TEMPLATE_FILE)
+                    st.success("Đã xóa file template cũ.")
+                else: st.warning("Không tìm thấy file template.")
+            else: st.error("Yêu cầu quyền Admin để xóa Template!")
+        
+        up_tpl = st.file_uploader("Upload Template Mới (Ghi đè)", type=["xlsx"], key="tpl_imp")
+        if up_tpl and st.button("Lưu Template"):
+            with open(TEMPLATE_FILE, "wb") as f:
+                f.write(up_tpl.getbuffer())
+            st.success("Đã cập nhật template mới!")
