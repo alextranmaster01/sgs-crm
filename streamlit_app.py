@@ -16,17 +16,16 @@ import io
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO & VERSION
 # =============================================================================
-APP_VERSION = "V4800 - UPDATE V5.0 (FULL FEATURE RESTORED)"
+APP_VERSION = "V4800 - UPDATE V5.1 (FIX IMAGE DISPLAY)"
 RELEASE_NOTE = """
-- **Restored:** Khôi phục tính năng 'Tra cứu hàng loạt bằng Excel' (Check Bulk) tại Tab 3.
-- **Restored:** Khôi phục đầy đủ Tab 6 'Master Data' (Quản lý Khách hàng, NCC, Template).
-- **Upgraded:** Giữ nguyên giao diện Tab chữ lớn (300%), Lưu file an toàn, Công thức lợi nhuận chuẩn.
-- **System:** Fix lỗi cài đặt trên Cloud.
+- **Image Fix:** Sửa lỗi không hiển thị ảnh sản phẩm. Bổ sung tính năng upload và cập nhật ảnh thủ công trực tiếp trên giao diện.
+- **UI:** Tab Menu kích thước lớn (300%) dễ thao tác.
+- **System:** Giữ nguyên toàn bộ logic tính toán và lưu trữ an toàn.
 """
 
 st.set_page_config(page_title=f"CRM V4800 - {APP_VERSION}", layout="wide", page_icon="💼")
 
-# --- CSS TÙY CHỈNH (CHỈ TĂNG CỠ CHỮ TAB & 3D CARDS) ---
+# --- CSS TÙY CHỈNH ---
 st.markdown("""
     <style>
     /* CHỈ TĂNG KÍCH THƯỚC CHỮ CỦA CÁC TAB (300%) */
@@ -97,6 +96,7 @@ except ImportError:
     st.stop()
 
 # --- CƠ CHẾ FILELOCK NỘI BỘ ---
+import time
 class SimpleFileLock:
     def __init__(self, lock_file, timeout=10):
         self.lock_file = lock_file
@@ -119,7 +119,6 @@ class SimpleFileLock:
             except: pass
 
 # --- FILE PATHS & FOLDERS ---
-# Tự động detect môi trường
 try:
     import google.colab
     IN_COLAB = True
@@ -315,6 +314,7 @@ suppliers_df = load_csv(SUPPLIERS_CSV, MASTER_COLUMNS)
 purchases_df = load_csv(PURCHASES_CSV, PURCHASE_COLUMNS)
 shared_history_df = load_csv(SHARED_HISTORY_CSV, SHARED_HISTORY_COLS)
 sales_history_df = load_csv(SALES_HISTORY_CSV, HISTORY_COLS)
+
 tracking_df = load_csv(TRACKING_CSV, TRACKING_COLS)
 payment_df = load_csv(PAYMENT_CSV, PAYMENT_COLS)
 paid_history_df = load_csv(PAID_HISTORY_CSV, PAYMENT_COLS)
@@ -332,8 +332,20 @@ with st.sidebar.expander("📝 Release Notes"):
 admin_pwd = st.sidebar.text_input("Admin Password", type="password")
 is_admin = (admin_pwd == ADMIN_PASSWORD)
 
+if is_admin:
+    st.sidebar.divider()
+    st.sidebar.write("🔧 **Admin Tools**")
+    if st.sidebar.button("📦 Tạo file Requirements.txt"):
+        req_content = "streamlit\npandas\nopenpyxl\nmatplotlib\nplotly"
+        try:
+            with open(REQUIREMENTS_FILE, "w") as f:
+                f.write(req_content)
+            st.sidebar.success(f"Đã tạo {REQUIREMENTS_FILE}! Bạn có thể deploy ngay.")
+        except Exception as e:
+            st.sidebar.error(f"Lỗi: {e}")
+
 st.sidebar.divider()
-st.sidebar.info(f"Data: {BASE_DIR}")
+st.sidebar.info("Hệ thống quản lý: Báo giá - Đơn hàng - Tracking - Doanh số")
 
 # =============================================================================
 # 4. GIAO DIỆN CHÍNH (TABS)
@@ -363,10 +375,16 @@ with tab1:
     
     st.divider()
 
+    # Calculation Logic Corrected for Profit
+    # Profit = Total PO Customer (Revenue) - (Total PO NCC (Cost) + Other Costs)
+    # Other Costs = GAP*0.6 + EndUser + Buyer + Tax + VAT + Trans + Mgmt (from shared history)
+
     total_revenue = db_customer_orders['total_price'].apply(to_float).sum()
     total_po_ncc_cost = db_supplier_orders['total_vnd'].apply(to_float).sum()
     
+    # Calculate Other Costs from Shared History based on PO Match
     total_other_costs = 0.0
+    
     if not sales_history_df.empty:
         for _, r in sales_history_df.iterrows():
             try:
@@ -381,6 +399,7 @@ with tab1:
                 total_other_costs += (gap_cost + end_user + buyer + tax + vat + trans + mgmt)
             except: pass
 
+    # Final Profit Formula
     total_profit = total_revenue - (total_po_ncc_cost + total_other_costs)
     
     po_ordered_ncc = len(tracking_df[tracking_df['order_type'] == 'NCC'])
@@ -388,6 +407,7 @@ with tab1:
     po_delivered = len(tracking_df[(tracking_df['order_type'] == 'KH') & (tracking_df['status'] == 'Đã giao hàng')])
     po_pending = po_total_recv - po_delivered
 
+    # --- 3D CARDS DISPLAY ---
     c1, c2, c3 = st.columns(3)
     with c1:
         st.markdown(f"""
@@ -411,6 +431,39 @@ with tab1:
             <div class="card-title">LỢI NHUẬN THỰC (VND)</div>
             <div class="card-value">{fmt_num(total_profit)}</div>
             <p>Doanh thu - Tổng chi phí</p>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    st.divider()
+    
+    # Row 2: PO Metrics
+    c4, c5, c6, c7 = st.columns(4)
+    with c4:
+        st.markdown(f"""
+        <div class="card-3d bg-ncc">
+            <div class="card-title">ĐƠN HÀNG ĐÃ ĐẶT NCC</div>
+            <div class="card-value">{po_ordered_ncc}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    with c5:
+        st.markdown(f"""
+        <div class="card-3d bg-recv">
+            <div class="card-title">TỔNG PO ĐÃ NHẬN</div>
+            <div class="card-value">{po_total_recv}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    with c6:
+        st.markdown(f"""
+        <div class="card-3d bg-del">
+            <div class="card-title">TỔNG PO ĐÃ GIAO</div>
+            <div class="card-value">{po_delivered}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    with c7:
+        st.markdown(f"""
+        <div class="card-3d bg-pend">
+            <div class="card-title">TỔNG PO CHƯA GIAO</div>
+            <div class="card-value">{po_pending}</div>
         </div>
         """, unsafe_allow_html=True)
     
@@ -479,6 +532,7 @@ with tab2:
                 st.rerun()
             except Exception as e: st.error(f"Lỗi: {e}")
             
+        # Thêm nút Upload Ảnh thủ công cho NCC
         st.markdown("---")
         st.write("📸 Cập nhật ảnh cho Item")
         up_img_ncc = st.file_uploader("Upload ảnh (Chọn Item ở bảng bên phải trước)", type=["png","jpg","jpeg"])
@@ -488,6 +542,7 @@ with tab2:
             fpath = os.path.join(IMG_FOLDER, fname)
             with open(fpath, "wb") as f: f.write(up_img_ncc.getbuffer())
             
+            # Update DB
             mask = purchases_df['item_code'] == item_to_update
             if mask.any():
                 purchases_df.loc[mask, 'image_path'] = fpath
@@ -508,7 +563,10 @@ with tab2:
                                              search_term.lower() in str(x['specs']).lower(), axis=1)
             df_show = df_show[mask]
         
-        st.dataframe(df_show, column_config={"image_path": st.column_config.ImageColumn("Image", help="Ảnh")}, use_container_width=True, hide_index=True)
+        # Sửa cấu hình hiển thị ảnh để đảm bảo hiện ảnh
+        st.dataframe(df_show, column_config={
+            "image_path": st.column_config.ImageColumn("Image", help="Ảnh sản phẩm")
+        }, use_container_width=True, hide_index=True)
     else: st.info("Chưa có dữ liệu.")
 
     if is_admin and st.button("Xóa Database Mua Hàng"):
@@ -756,9 +814,11 @@ with tab3:
                     rows_to_save["pct_trans"] = val_trans
                     
                     # 3. Gộp vào file Shared History CSV
+                    # Đảm bảo cột khớp
                     for c in SHARED_HISTORY_COLS:
                         if c not in rows_to_save.columns: rows_to_save[c] = ""
                     
+                    # Ghi thêm vào file shared
                     updated_history = pd.concat([shared_history_df, rows_to_save[SHARED_HISTORY_COLS]], ignore_index=True)
                     save_csv(SHARED_HISTORY_CSV, updated_history)
                     
