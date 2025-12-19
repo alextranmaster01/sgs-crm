@@ -19,7 +19,7 @@ from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 
 # --- !!! QUAN TRỌNG: ĐIỀN THÔNG TIN CỦA BẠN VÀO ĐÂY !!! ---
 # ID của thư mục Google Drive (Lấy từ link: drive.google.com/drive/folders/XXXXXXXX)
-DRIVE_FOLDER_ID = "HAY_DIEN_ID_THU_MUC_VAO_DAY" 
+DRIVE_FOLDER_ID = "1GLhnSK7Bz7LbTC-Q7aPt_Itmutni5Rqa?hl=vi" 
 
 # Tên file Key Google Cloud (để cùng thư mục code)
 SERVICE_ACCOUNT_FILE = 'service_account.json'
