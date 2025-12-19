@@ -16,11 +16,11 @@ import io
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO & VERSION
 # =============================================================================
-APP_VERSION = "V4800 - UPDATE V4.4 (FINAL FIX)"
+APP_VERSION = "V4800 - UPDATE V4.5 (FIX SYNTAX & FILE DOWNLOAD)"
 RELEASE_NOTE = """
-- **Critical Save Fix:** Thay đổi cơ chế lưu file. Bấm nút 'Lưu' sẽ hiện ngay nút 'Tải File' để tải về máy, đảm bảo 100% thành công.
-- **UI:** Chữ trên Tab Menu phóng to 300% (40px). Các phần khác giữ nguyên.
-- **Data:** Giữ nguyên logic xử lý dữ liệu thông minh và sửa lỗi dòng 532/533.
+- **Critical Fix:** Loại bỏ ký tự lạ gây lỗi cú pháp (SyntaxError U+00A0).
+- **File System:** Chuyển đổi cơ chế lưu file sang dạng Tải xuống trực tiếp (Download Button) để đảm bảo 100% lấy được file trên mọi môi trường (Cloud/Local).
+- **UI:** Tab Menu kích thước lớn (300%), Card 3D.
 """
 
 st.set_page_config(page_title=f"CRM V4800 - {APP_VERSION}", layout="wide", page_icon="💼")
@@ -30,12 +30,12 @@ st.markdown("""
     <style>
     /* CHỈ TĂNG KÍCH THƯỚC CHỮ CỦA CÁC TAB (300%) */
     button[data-baseweb="tab"] div p {
-        font-size: 40px !important; 
+        font-size: 40px !important;
         font-weight: 900 !important;
         padding: 10px 20px !important;
     }
     
-    /* Giữ nguyên các phần khác mặc định */
+    /* Các phần khác giữ nguyên */
     h1 { font-size: 32px !important; }
     h2 { font-size: 28px !important; }
     h3 { font-size: 24px !important; }
@@ -124,8 +124,7 @@ FOLDERS = [
     "PO_NCC", 
     "PO_KHACH_HANG", 
     "product_images", 
-    "proof_images",
-    "tmp_history"
+    "proof_images"
 ]
 
 for d in FOLDERS:
@@ -138,7 +137,6 @@ PO_EXPORT_FOLDER = "PO_NCC"
 PO_CUSTOMER_FOLDER = "PO_KHACH_HANG"
 IMG_FOLDER = "product_images"
 PROOF_FOLDER = "proof_images"
-TMP_FOLDER = "tmp_history"
 
 ADMIN_PASSWORD = "admin"
 
@@ -763,15 +761,13 @@ with tab3:
                 if not sel_cust or not quote_name: st.error("Thiếu thông tin")
                 else:
                     now = datetime.now()
-                    # FIX PATH: Tối giản hóa đường dẫn để tránh lỗi
-                    safe_cust = safe_filename(sel_cust)
                     safe_quote = safe_filename(quote_name)
                     
                     # File tạm để download ngay
                     csv_name = f"History_{safe_quote}_{now.strftime('%Y%m%d')}.csv"
                     csv_data = st.session_state.current_quote_df.to_csv(index=False, encoding='utf-8-sig')
 
-                    # Lưu vào DB tổng
+                    # Lưu vào DB tổng (để tracking trên dashboard)
                     d = now.strftime("%d/%m/%Y")
                     new_hist_rows = []
                     for _, r in st.session_state.current_quote_df.iterrows():
