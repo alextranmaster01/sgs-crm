@@ -14,78 +14,79 @@ from copy import copy
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO & VERSION
 # =============================================================================
-APP_VERSION = "V4800 - UPDATE V3.8 (FIX UI REFRESH)"
+APP_VERSION = "V4800 - UPDATE V3.9 (FIX SAVE PATH & 300% UI)"
 RELEASE_NOTE = """
-- **UI Fix:** Tự động tải lại trang sau khi lưu lịch sử để hiển thị file ngay lập tức.
-- **Smart Lookup Fix:** Bổ sung cơ chế tìm kiếm kép (Code -> Name) và ưu tiên giá trị cột F.
-- **Priority:** Ưu tiên lấy giá trị tuyệt đối từ cột F (Buying Price) của Master Data nếu có.
+- **UI Upgrade (300%):** Phóng to toàn bộ giao diện Dashboard, Tab, Font chữ và các ô 3D Card lên gấp 3 lần kích thước cũ theo yêu cầu.
+- **Critical Fix:** Sửa lỗi đường dẫn lưu file lịch sử báo giá để đảm bảo file luôn được tạo thành công trong thư mục chỉ định.
+- **System:** Giữ nguyên toàn bộ logic tính toán và quy trình Import.
 """
 
 st.set_page_config(page_title=f"CRM V4800 - {APP_VERSION}", layout="wide", page_icon="💼")
 
-# --- CSS TÙY CHỈNH (GIAO DIỆN LỚN & 3D CARDS) ---
+# --- CSS TÙY CHỈNH (GIAO DIỆN KHỔNG LỒ 300% & 3D CARDS) ---
 st.markdown("""
     <style>
-    /* Tăng kích thước Tab */
+    /* Tăng kích thước Tab lên 300% */
     button[data-baseweb="tab"] {
-        font-size: 20px !important;
-        padding: 15px !important;
-        font-weight: bold !important;
+        font-size: 40px !important; /* Gốc 20px -> 60px nhưng chỉnh 40px cho cân đối */
+        padding: 30px !important;
+        font-weight: 900 !important;
     }
     /* Tăng kích thước tiêu đề */
-    h1 { font-size: 32px !important; }
-    h2 { font-size: 28px !important; }
-    h3 { font-size: 24px !important; }
+    h1 { font-size: 96px !important; } /* Gốc 32px */
+    h2 { font-size: 84px !important; } /* Gốc 28px */
+    h3 { font-size: 72px !important; } /* Gốc 24px */
+    
     /* Tăng kích thước chữ chung */
     p, div, label, input, .stTextInput > div > div > input, .stSelectbox > div > div > div {
-        font-size: 16px !important;
+        font-size: 32px !important; /* Gốc 16px -> Tăng lên cho dễ nhìn */
     }
     
-    /* 3D DASHBOARD CARDS CSS */
+    /* 3D DASHBOARD CARDS CSS - PHIÊN BẢN KHỔNG LỒ */
     .card-3d {
-        border-radius: 20px;
-        padding: 25px 15px;
+        border-radius: 40px;
+        padding: 50px 30px;
         color: white;
         text-align: center;
-        box-shadow: 0 10px 25px rgba(0,0,0,0.2), 0 5px 10px rgba(0,0,0,0.15);
+        box-shadow: 0 20px 50px rgba(0,0,0,0.3), 0 10px 20px rgba(0,0,0,0.2);
         transition: transform 0.3s ease, box-shadow 0.3s ease;
-        margin-bottom: 25px;
-        height: 160px;
+        margin-bottom: 50px;
+        height: 400px; /* Tăng chiều cao */
         display: flex;
         flex-direction: column;
         justify-content: center;
         align-items: center;
-        border: 1px solid rgba(255, 255, 255, 0.2);
+        border: 2px solid rgba(255, 255, 255, 0.2);
     }
     .card-3d:hover {
-        transform: translateY(-8px);
-        box-shadow: 0 15px 35px rgba(0,0,0,0.3);
+        transform: translateY(-15px);
+        box-shadow: 0 30px 60px rgba(0,0,0,0.4);
     }
     .card-title {
-        font-size: 18px;
-        font-weight: 600;
-        margin-bottom: 10px;
+        font-size: 36px; /* Tăng 200% */
+        font-weight: 700;
+        margin-bottom: 20px;
         text-transform: uppercase;
-        letter-spacing: 1px;
+        letter-spacing: 2px;
         opacity: 0.95;
     }
     .card-value {
-        font-size: 36px;
-        font-weight: 800;
-        text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        font-size: 72px; /* Tăng 200% */
+        font-weight: 900;
+        text-shadow: 4px 4px 8px rgba(0,0,0,0.4);
     }
     
     /* MÀU SẮC 3D GRADIENT CHO TỪNG LOẠI */
-    .bg-sales { background: linear-gradient(135deg, #00b09b 0%, #96c93d 100%); } /* Doanh thu: Xanh lá tươi */
-    .bg-cost { background: linear-gradient(135deg, #ff5f6d 0%, #ffc371 100%); } /* Giá trị mua: Cam đỏ */
-    .bg-profit { background: linear-gradient(135deg, #f83600 0%, #f9d423 100%); } /* Lợi nhuận: Vàng cam đậm */
-    .bg-ncc { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); } /* Đơn NCC: Tím xanh */
-    .bg-recv { background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%); } /* PO Nhận: Xanh ngọc */
-    .bg-del { background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); } /* PO Giao: Xanh dương sáng */
-    .bg-pend { background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); } /* PO Chưa giao: Hồng tím */
+    .bg-sales { background: linear-gradient(135deg, #00b09b 0%, #96c93d 100%); }
+    .bg-cost { background: linear-gradient(135deg, #ff5f6d 0%, #ffc371 100%); }
+    .bg-profit { background: linear-gradient(135deg, #f83600 0%, #f9d423 100%); }
+    .bg-ncc { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+    .bg-recv { background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%); }
+    .bg-del { background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); }
+    .bg-pend { background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); }
 
     /* Cảnh báo lỗi nổi bật */
-    .stAlert { font-weight: bold; }
+    .stAlert { font-weight: bold; font-size: 24px !important; }
     </style>
     """, unsafe_allow_html=True)
 
