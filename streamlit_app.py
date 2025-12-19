@@ -14,10 +14,10 @@ from copy import copy
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO & VERSION
 # =============================================================================
-APP_VERSION = "V4800 - UPDATE V3.7 (FIX LOOKUP BY NAME)"
+APP_VERSION = "V4800 - UPDATE V3.7 (FIX SAVE HISTORY)"
 RELEASE_NOTE = """
-- **Smart Lookup Fix:** Bổ sung cơ chế tìm kiếm kép. Nếu không tìm thấy Mã hàng (Code), hệ thống sẽ tự động tìm theo Tên hàng (Name) để đảm bảo lấy được giá từ Master Data.
-- **Priority:** Ưu tiên lấy giá trị tuyệt đối từ cột F (Buying Price) của Master Data nếu có.
+- **Critical Fix:** Sửa lỗi không lưu được lịch sử báo giá do đường dẫn file/folder không hợp lệ.
+- **Smart Lookup:** Giữ nguyên logic tìm kiếm kép (Code -> Name) và ưu tiên giá trị cột F.
 - **UI:** Dashboard 3D.
 """
 
@@ -154,7 +154,13 @@ def safe_str(val):
     if s.lower() in ['nan', 'none', 'null', 'nat', '']: return ""
     return s
 
-def safe_filename(s): return re.sub(r"[\\/:*?\"<>|]+", "_", safe_str(s))
+def safe_filename(s): 
+    # Loại bỏ ký tự đặc biệt, giữ lại chữ cái, số, dấu gạch ngang, gạch dưới
+    # Thay thế khoảng trắng bằng dấu gạch dưới
+    s = safe_str(s)
+    s = re.sub(r'[\\/*?:"<>|]', '', s) # Loại bỏ ký tự cấm trong tên file Windows
+    s = s.replace(' ', '_')
+    return s
 
 def to_float(val):
     """
@@ -790,37 +796,52 @@ with tab3:
                 if not sel_cust or not quote_name: st.error("Thiếu thông tin")
                 else:
                     now = datetime.now()
-                    base_path = os.path.join(QUOTE_ROOT_FOLDER, safe_filename(sel_cust), now.strftime("%Y"), now.strftime("%b").upper())
-                    if not os.path.exists(base_path): os.makedirs(base_path)
-                    csv_name = f"History_{safe_filename(quote_name)}.csv"
-                    full_path = os.path.join(base_path, csv_name)
-                    st.session_state.current_quote_df.to_csv(full_path, index=False, encoding='utf-8-sig')
+                    # FIX PATH: Dùng safe_filename cho cả tên khách và tên báo giá để tránh ký tự lạ
+                    safe_cust = safe_filename(sel_cust)
+                    safe_quote = safe_filename(quote_name)
                     
-                    meta_data = {
-                        "pct_end": st.session_state.pct_end, "pct_buy": st.session_state.pct_buy,
-                        "pct_tax": st.session_state.pct_tax, "pct_vat": st.session_state.pct_vat,
-                        "pct_pay": st.session_state.pct_pay, "pct_mgmt": st.session_state.pct_mgmt,
-                        "pct_trans": st.session_state.pct_trans, "quote_name": quote_name,
-                        "customer": sel_cust, "date": now.strftime("%d/%m/%Y")
-                    }
-                    with open(os.path.join(base_path, csv_name + ".json"), "w", encoding='utf-8') as f:
-                        json.dump(meta_data, f, ensure_ascii=False, indent=4)
+                    base_path = os.path.join(QUOTE_ROOT_FOLDER, safe_cust, now.strftime("%Y"), now.strftime("%b").upper())
+                    
+                    if not os.path.exists(base_path): 
+                        os.makedirs(base_path)
+                        
+                    csv_name = f"History_{safe_quote}.csv"
+                    full_path = os.path.join(base_path, csv_name)
+                    
+                    try:
+                        st.session_state.current_quote_df.to_csv(full_path, index=False, encoding='utf-8-sig')
+                        
+                        meta_data = {
+                            "pct_end": st.session_state.pct_end, "pct_buy": st.session_state.pct_buy,
+                            "pct_tax": st.session_state.pct_tax, "pct_vat": st.session_state.pct_vat,
+                            "pct_pay": st.session_state.pct_pay, "pct_mgmt": st.session_state.pct_mgmt,
+                            "pct_trans": st.session_state.pct_trans, "quote_name": quote_name,
+                            "customer": sel_cust, "date": now.strftime("%d/%m/%Y")
+                        }
+                        
+                        json_path = os.path.join(base_path, csv_name + ".json")
+                        with open(json_path, "w", encoding='utf-8') as f:
+                            json.dump(meta_data, f, ensure_ascii=False, indent=4)
 
-                    d = now.strftime("%d/%m/%Y")
-                    new_hist_rows = []
-                    for _, r in st.session_state.current_quote_df.iterrows():
-                        rev = to_float(r["total_price_vnd"]); prof = to_float(r["profit_vnd"]); cost = rev - prof
-                        new_hist_rows.append({
-                            "date":d, "quote_no":quote_name, "customer":sel_cust, "item_code":r["item_code"], 
-                            "item_name":r["item_name"], "specs":r["specs"], "qty":r["qty"], "total_revenue":fmt_num(rev), 
-                            "total_cost":fmt_num(cost), "profit":fmt_num(prof), "supplier":r["supplier_name"], 
-                            "status":"Pending", "delivery_date":"", "po_number": "",
-                            "gap":r["gap"], "end_user":r["end_user_val"], "buyer":r["buyer_val"], 
-                            "tax":r["import_tax_val"], "vat":r["vat_val"], "trans":r["transportation"], "mgmt":r["mgmt_fee"]
-                        })
-                    sales_history_df = pd.concat([sales_history_df, pd.DataFrame(new_hist_rows)], ignore_index=True)
-                    save_csv(SALES_HISTORY_CSV, sales_history_df)
-                    st.success(f"Đã lưu lịch sử và tham số vào {base_path}")
+                        d = now.strftime("%d/%m/%Y")
+                        new_hist_rows = []
+                        for _, r in st.session_state.current_quote_df.iterrows():
+                            rev = to_float(r["total_price_vnd"]); prof = to_float(r["profit_vnd"]); cost = rev - prof
+                            new_hist_rows.append({
+                                "date":d, "quote_no":quote_name, "customer":sel_cust, "item_code":r["item_code"], 
+                                "item_name":r["item_name"], "specs":r["specs"], "qty":r["qty"], "total_revenue":fmt_num(rev), 
+                                "total_cost":fmt_num(cost), "profit":fmt_num(prof), "supplier":r["supplier_name"], 
+                                "status":"Pending", "delivery_date":"", "po_number": "",
+                                "gap":r["gap"], "end_user":r["end_user_val"], "buyer":r["buyer_val"], 
+                                "tax":r["import_tax_val"], "vat":r["vat_val"], "trans":r["transportation"], "mgmt":r["mgmt_fee"]
+                            })
+                        sales_history_df = pd.concat([sales_history_df, pd.DataFrame(new_hist_rows)], ignore_index=True)
+                        save_csv(SALES_HISTORY_CSV, sales_history_df)
+                        
+                        st.success(f"✅ Đã lưu thành công!\nFolder: {base_path}\nFile: {csv_name}")
+                        
+                    except Exception as e:
+                        st.error(f"Lỗi khi lưu file: {str(e)}")
 
         with c_exp:
             if st.button("XUẤT EXCEL"):
@@ -828,10 +849,15 @@ with tab3:
                 else:
                     try:
                         now = datetime.now()
-                        target_dir = os.path.join(QUOTE_ROOT_FOLDER, safe_filename(sel_cust), now.strftime("%Y"), now.strftime("%b").upper())
+                        safe_cust = safe_filename(sel_cust)
+                        safe_quote = safe_filename(quote_name)
+                        
+                        target_dir = os.path.join(QUOTE_ROOT_FOLDER, safe_cust, now.strftime("%Y"), now.strftime("%b").upper())
                         if not os.path.exists(target_dir): os.makedirs(target_dir)
-                        fname = f"Quote_{safe_filename(quote_name)}_{now.strftime('%Y%m%d')}.xlsx"
+                        
+                        fname = f"Quote_{safe_quote}_{now.strftime('%Y%m%d')}.xlsx"
                         save_path = os.path.join(target_dir, fname)
+                        
                         wb = load_workbook(TEMPLATE_FILE); ws = wb.active
                         safe_write_merged(ws, 1, 2, sel_cust); safe_write_merged(ws, 2, 8, quote_name)
                         safe_write_merged(ws, 1, 8, now.strftime("%d-%b-%Y"))
