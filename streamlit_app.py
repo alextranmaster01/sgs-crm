@@ -14,12 +14,13 @@ from copy import copy
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO & VERSION
 # =============================================================================
-APP_VERSION = "V4800 - UPDATE V3.0 (CLOUD READY)"
+APP_VERSION = "V4800 - UPDATE V3.1 (FIX PRICE RANGE)"
 RELEASE_NOTE = """
 - **System:** Tích hợp nút tạo requirements.txt tự động cho Deploy.
 - **UI:** Chuẩn hóa use_container_width=True cho toàn bộ bảng.
 - **Fix:** Xử lý lỗi tính ngày công nợ khi Payment Term không phải số.
 - **Data:** Tối ưu hóa luồng Import dữ liệu Purchase & Customer.
+- **Hotfix:** Hỗ trợ đọc giá dạng khoảng (vd: 1800-2200) -> lấy giá lớn nhất.
 """
 
 st.set_page_config(page_title=f"CRM V4800 - {APP_VERSION}", layout="wide", page_icon="💼")
@@ -117,7 +118,19 @@ def to_float(val):
     try:
         s = str(val).strip()
         if s.lower() in ['nan', 'none', '', 'null']: return 0.0
+        # Xử lý trường hợp range giá ví dụ "1800-2200" -> lấy giá lớn nhất (2200) để an toàn
+        if "-" in s and len(s.split("-")) == 2:
+            parts = s.split("-")
+            try:
+                v1 = float(parts[0].replace(",", "").strip())
+                v2 = float(parts[1].replace(",", "").strip())
+                return max(v1, v2)
+            except: pass
+            
         clean = s.replace(",", "").replace("%", "")
+        # Xử lý các ký tự lạ khác nếu có (ví dụ "¥100")
+        clean = re.sub(r'[^\d.]', '', clean)
+        if not clean: return 0.0
         return float(clean)
     except: return 0.0
 
@@ -1005,4 +1018,3 @@ with tab6:
             with open(TEMPLATE_FILE, "wb") as f:
                 f.write(up_tpl.getbuffer())
             st.success("Đã cập nhật template mới!")
-
