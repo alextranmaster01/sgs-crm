@@ -14,11 +14,11 @@ import mimetypes
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO & VERSION
 # =============================================================================
-APP_VERSION = "V4800 - HYBRID FIXED (SUPABASE DB + GOOGLE DRIVE SHARED)"
+APP_VERSION = "V4800 - HYBRID FIXED (HARDCODED FOLDER ID)"
 RELEASE_NOTE = """
 - **Database:** Supabase (PostgreSQL).
-- **Storage:** Google Drive (Upload vào Shared Folder để tránh lỗi Quota).
-- **Fix:** Đã cập nhật logic upload file vào thư mục gốc được chỉ định (root_folder_id).
+- **Storage:** Google Drive (Upload vào Shared Folder ID cố định).
+- **Config:** Đã tích hợp sẵn Folder ID: 1GLhnSK7Bz7LbTC-Q7aPt_Itmutni5Rqa.
 - **Profit:** Giữ nguyên công thức tính lợi nhuận chuẩn.
 """
 
@@ -27,19 +27,15 @@ st.set_page_config(page_title=f"CRM V4800 - {APP_VERSION}", layout="wide", page_
 # --- CSS TÙY CHỈNH ---
 st.markdown("""
     <style>
-    /* CHỈ TĂNG KÍCH THƯỚC CHỮ CỦA CÁC TAB (300%) */
     button[data-baseweb="tab"] div p {
         font-size: 40px !important;
         font-weight: 900 !important;
         padding: 10px 20px !important;
     }
-    
-    /* Các phần khác giữ nguyên */
     h1 { font-size: 32px !important; }
     h2 { font-size: 28px !important; }
     h3 { font-size: 24px !important; }
     
-    /* 3D DASHBOARD CARDS CSS */
     .card-3d {
         border-radius: 15px;
         padding: 20px;
@@ -70,7 +66,6 @@ st.markdown("""
         text-shadow: 1px 1px 2px rgba(0,0,0,0.3);
     }
     
-    /* MÀU SẮC 3D GRADIENT */
     .bg-sales { background: linear-gradient(135deg, #00b09b 0%, #96c93d 100%); }
     .bg-cost { background: linear-gradient(135deg, #ff5f6d 0%, #ffc371 100%); }
     .bg-profit { background: linear-gradient(135deg, #f83600 0%, #f9d423 100%); }
@@ -112,12 +107,8 @@ except Exception as e:
     st.stop()
 
 # --- CẤU HÌNH GOOGLE DRIVE ---
-try:
-    # Lấy thông tin Root Folder ID (Thư mục được chia sẻ cho Service Account)
-    ROOT_FOLDER_ID = st.secrets["gcp_service_account"]["root_folder_id"]
-except:
-    st.error("⚠️ Thiếu 'root_folder_id' trong secrets.toml. Vui lòng tạo folder trên Drive, share cho email Service Account và lấy ID.")
-    st.stop()
+# ID THƯ MỤC GỐC ĐÃ ĐƯỢC CHỈ ĐỊNH CỐ ĐỊNH
+ROOT_FOLDER_ID = "1GLhnSK7Bz7LbTC-Q7aPt_Itmutni5Rqa"
 
 SCOPES = ['https://www.googleapis.com/auth/drive']
 drive_service = None
@@ -129,7 +120,7 @@ def get_drive_service():
     
     try:
         service_account_info = st.secrets["gcp_service_account"]
-        # Loại bỏ root_folder_id khỏi dict info nếu nó gây lỗi cho thư viện google
+        # Loại bỏ các key thừa nếu có để tránh lỗi thư viện
         sa_info_clean = {k:v for k,v in service_account_info.items() if k != 'root_folder_id'}
         
         creds = service_account.Credentials.from_service_account_info(
@@ -137,7 +128,7 @@ def get_drive_service():
         drive_service = build('drive', 'v3', credentials=creds)
         return drive_service
     except Exception as e:
-        st.error(f"⚠️ Lỗi kết nối Google Drive: {e}")
+        st.error(f"⚠️ Lỗi kết nối Google Drive: {e}. Kiểm tra lại secrets [gcp_service_account]")
         return None
 
 warnings.filterwarnings("ignore")
@@ -257,7 +248,6 @@ def save_data(table_name, df, key_col=None):
 def get_or_create_subfolder(folder_name, parent_id):
     """
     Tìm hoặc tạo folder con TRONG folder cha (parent_id)
-    Để đảm bảo file được tạo trong thư mục của User (không phải root của Service Account)
     """
     service = get_drive_service()
     if not service: return None
