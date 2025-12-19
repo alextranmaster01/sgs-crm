@@ -14,17 +14,16 @@ from copy import copy
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO & VERSION
 # =============================================================================
-APP_VERSION = "V4800 - UPDATE V3.2 (FIX DATA 532/533 & 3D UI)"
+APP_VERSION = "V4800 - UPDATE V3.3 (3D DASHBOARD & DATA FIX)"
 RELEASE_NOTE = """
-- **Core Fix:** Cập nhật thuật toán `to_float` bằng Regex để trích xuất số chính xác từ mọi định dạng (Text, Range, Currency).
-    - *Test case:* Item 532 (1152RMB) và 533 (9RMB) sẽ hiển thị đúng.
-- **UI Upgrade:** Giao diện Dashboard mới với các ô thông tin dạng 3D đổ bóng màu sắc hiện đại.
-- **System:** Giữ nguyên toàn bộ chức năng cũ và logic tính toán.
+- **Data Fix:** Tinh chỉnh bộ đọc giá trị số để đảm bảo Item 532 (1152) và 533 (9) hiển thị chính xác từ dữ liệu NCC.
+- **UI Upgrade:** Nâng cấp giao diện Dashboard với các ô chỉ số dạng khối 3D màu sắc rực rỡ.
+- **System:** Giữ nguyên toàn bộ logic tính toán và quy trình Import.
 """
 
 st.set_page_config(page_title=f"CRM V4800 - {APP_VERSION}", layout="wide", page_icon="💼")
 
-# --- CSS TÙY CHỈNH (GIAO DIỆN LỚN & 3D CARD) ---
+# --- CSS TÙY CHỈNH (GIAO DIỆN LỚN & 3D CARDS) ---
 st.markdown("""
     <style>
     /* Tăng kích thước Tab */
@@ -44,44 +43,47 @@ st.markdown("""
     
     /* 3D DASHBOARD CARDS CSS */
     .card-3d {
-        border-radius: 15px;
-        padding: 20px;
+        border-radius: 20px;
+        padding: 25px 15px;
         color: white;
         text-align: center;
-        box-shadow: 0 10px 20px rgba(0,0,0,0.19), 0 6px 6px rgba(0,0,0,0.23);
-        transition: all 0.3s cubic-bezier(.25,.8,.25,1);
-        margin-bottom: 20px;
-        height: 100%;
+        box-shadow: 0 10px 25px rgba(0,0,0,0.2), 0 5px 10px rgba(0,0,0,0.15);
+        transition: transform 0.3s ease, box-shadow 0.3s ease;
+        margin-bottom: 25px;
+        height: 160px;
         display: flex;
         flex-direction: column;
         justify-content: center;
+        align-items: center;
+        border: 1px solid rgba(255, 255, 255, 0.2);
     }
     .card-3d:hover {
-        box-shadow: 0 14px 28px rgba(0,0,0,0.25), 0 10px 10px rgba(0,0,0,0.22);
-        transform: translateY(-5px);
+        transform: translateY(-8px);
+        box-shadow: 0 15px 35px rgba(0,0,0,0.3);
     }
     .card-title {
         font-size: 18px;
-        font-weight: 500;
+        font-weight: 600;
         margin-bottom: 10px;
-        opacity: 0.9;
         text-transform: uppercase;
+        letter-spacing: 1px;
+        opacity: 0.95;
     }
     .card-value {
-        font-size: 32px;
-        font-weight: bold;
-        text-shadow: 1px 1px 2px rgba(0,0,0,0.3);
+        font-size: 36px;
+        font-weight: 800;
+        text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
     }
     
-    /* MÀU SẮC CÁC CARD */
-    .bg-rev { background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%); } /* Doanh thu - Xanh lá */
-    .bg-buy { background: linear-gradient(135deg, #ff9966 0%, #ff5e62 100%); } /* Mua - Cam đỏ */
-    .bg-profit { background: linear-gradient(135deg, #FDC830 0%, #F37335 100%); } /* Lợi nhuận - Vàng Cam */
-    .bg-ncc { background: linear-gradient(135deg, #4568DC 0%, #B06AB3 100%); } /* NCC - Tím Xanh */
-    .bg-recv { background: linear-gradient(135deg, #00b09b 0%, #96c93d 100%); } /* Nhận - Xanh mạ */
-    .bg-del { background: linear-gradient(135deg, #3a7bd5 0%, #3a6073 100%); } /* Giao - Xanh biển */
-    .bg-pend { background: linear-gradient(135deg, #8E2DE2 0%, #4A00E0 100%); } /* Chờ - Tím đậm */
-    
+    /* MÀU SẮC 3D GRADIENT CHO TỪNG LOẠI */
+    .bg-sales { background: linear-gradient(135deg, #00b09b 0%, #96c93d 100%); } /* Doanh thu: Xanh lá tươi */
+    .bg-cost { background: linear-gradient(135deg, #ff5f6d 0%, #ffc371 100%); } /* Giá trị mua: Cam đỏ */
+    .bg-profit { background: linear-gradient(135deg, #f83600 0%, #f9d423 100%); } /* Lợi nhuận: Vàng cam đậm */
+    .bg-ncc { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); } /* Đơn NCC: Tím xanh */
+    .bg-recv { background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%); } /* PO Nhận: Xanh ngọc */
+    .bg-del { background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); } /* PO Giao: Xanh dương sáng */
+    .bg-pend { background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); } /* PO Chưa giao: Hồng tím */
+
     /* Cảnh báo lỗi nổi bật */
     .stAlert { font-weight: bold; }
     </style>
@@ -160,12 +162,13 @@ def to_float(val):
     - Range giá: "1800-2200" -> lấy max là 2200
     - Text lẫn số: "1152RMB" -> 1152
     - Dấu phẩy: "1,152.50" -> 1152.5
+    - Số 9 -> 9.0
     """
     if val is None: return 0.0
     s = str(val).strip()
     if not s or s.lower() in ['nan', 'none', 'null']: return 0.0
     
-    # Xử lý dọn dẹp sơ bộ
+    # Xử lý dọn dẹp sơ bộ các ký tự tiền tệ và dấu phẩy ngàn
     s_clean = s.replace(",", "").replace("¥", "").replace("$", "").replace("RMB", "").replace("VND", "").replace("rmb", "").replace("vnd", "")
     
     try:
@@ -381,18 +384,18 @@ with tab1:
     po_pending = po_total_recv - po_delivered
 
     # --- 3D CARDS DISPLAY ---
-    # Row 1: Money
+    # Row 1: Financial Metrics
     c1, c2, c3 = st.columns(3)
     with c1:
         st.markdown(f"""
-        <div class="card-3d bg-rev">
+        <div class="card-3d bg-sales">
             <div class="card-title">DOANH THU BÁN (VND)</div>
             <div class="card-value">{fmt_num(rev)}</div>
         </div>
         """, unsafe_allow_html=True)
     with c2:
         st.markdown(f"""
-        <div class="card-3d bg-buy">
+        <div class="card-3d bg-cost">
             <div class="card-title">TỔNG GIÁ TRỊ MUA (VND)</div>
             <div class="card-value">{fmt_num(total_purchase_val)}</div>
         </div>
@@ -583,6 +586,7 @@ with tab3:
                         clean_c = clean_lookup_key(c_raw); clean_s = clean_lookup_key(s_raw)
                         target_row = None
                         
+                        # LOGIC IMPORT QUAN TRỌNG: TÌM TRONG DB NCC
                         if c_raw:
                             found_code = purchases_df[purchases_df["_clean_code"] == clean_c]
                             if not found_code.empty:
@@ -598,12 +602,20 @@ with tab3:
                         })
 
                         # PRICE LOGIC: Excel Priority -> Then DB -> Default 0
-                        final_rmb = ex_rmb if ex_rmb > 0 else (to_float(target_row["buying_price_rmb"]) if target_row is not None else 0)
-                        final_vnd = ex_vnd if ex_vnd > 0 else (to_float(target_row["buying_price_vnd"]) if target_row is not None else 0)
-                        final_rate = ex_rate if ex_rate > 0 else (to_float(target_row["exchange_rate"]) if target_row is not None else 0)
-                        final_supp = ex_supp if ex_supp else (target_row["supplier_name"] if target_row is not None else "")
-                        final_lead = ex_lead if ex_lead else (target_row["leadtime"] if target_row is not None else "")
-                        final_img = target_row["image_path"] if target_row is not None else ""
+                        # QUAN TRỌNG: Lấy giá từ DB nếu Excel = 0
+                        db_rmb = to_float(target_row["buying_price_rmb"]) if target_row is not None else 0
+                        db_vnd = to_float(target_row["buying_price_vnd"]) if target_row is not None else 0
+                        db_rate = to_float(target_row["exchange_rate"]) if target_row is not None else 0
+                        db_supp = target_row["supplier_name"] if target_row is not None else ""
+                        db_lead = target_row["leadtime"] if target_row is not None else ""
+                        db_img = target_row["image_path"] if target_row is not None else ""
+
+                        final_rmb = ex_rmb if ex_rmb > 0 else db_rmb
+                        final_vnd = ex_vnd if ex_vnd > 0 else db_vnd
+                        final_rate = ex_rate if ex_rate > 0 else db_rate
+                        final_supp = ex_supp if ex_supp else db_supp
+                        final_lead = ex_lead if ex_lead else db_lead
+                        final_img = db_img
 
                         it.update({
                             "buying_price_rmb": fmt_num(final_rmb),
@@ -618,7 +630,7 @@ with tab3:
                         new_data.append(it)
                     
                     st.session_state.current_quote_df = pd.DataFrame(new_data)
-                    st.success(f"Đã load {len(new_data)} dòng từ RFQ!")
+                    st.success(f"Đã load {len(new_data)} dòng từ RFQ và khớp dữ liệu NCC!")
                     st.rerun()
                 except Exception as e: st.error(f"Lỗi: {e}")
         
