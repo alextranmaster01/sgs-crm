@@ -9,16 +9,17 @@ import warnings
 import json
 import platform
 import subprocess
+import unicodedata
 from copy import copy
 
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO & VERSION
 # =============================================================================
-APP_VERSION = "V4800 - UPDATE V3.9 (FIX SAVE PATH & 300% UI)"
+APP_VERSION = "V4800 - UPDATE V4.0 (FINAL SAVE FIX & UI ADJUST)"
 RELEASE_NOTE = """
-- **UI Upgrade (300%):** Phóng to toàn bộ giao diện Dashboard, Tab, Font chữ và các ô 3D Card lên gấp 3 lần kích thước cũ theo yêu cầu.
-- **Critical Fix:** Sửa lỗi đường dẫn lưu file lịch sử báo giá để đảm bảo file luôn được tạo thành công trong thư mục chỉ định.
-- **System:** Giữ nguyên toàn bộ logic tính toán và quy trình Import.
+- **Save Fix:** Sửa lỗi không lưu được file do tên file chứa ký tự tiếng Việt hoặc ký tự đặc biệt. Hệ thống sẽ tự động chuyển tên file sang tiếng Việt không dấu an toàn.
+- **UI Adjust:** Điều chỉnh kích thước Tab nhỏ gọn lại (25px) nhưng nội dung bên trong vẫn phóng to 300% rõ ràng.
+- **Refresh:** Tự động tải lại trang sau khi lưu thành công để hiển thị kết quả ngay lập tức.
 """
 
 st.set_page_config(page_title=f"CRM V4800 - {APP_VERSION}", layout="wide", page_icon="💼")
@@ -26,22 +27,30 @@ st.set_page_config(page_title=f"CRM V4800 - {APP_VERSION}", layout="wide", page_
 # --- CSS TÙY CHỈNH (GIAO DIỆN KHỔNG LỒ 300% & 3D CARDS) ---
 st.markdown("""
     <style>
-    /* Tăng kích thước Tab lên 300% */
+    /* Tăng kích thước Tab lên vừa phải theo yêu cầu (25px) */
     button[data-baseweb="tab"] {
-        font-size: 40px !important; /* Gốc 20px -> 60px nhưng chỉnh 40px cho cân đối */
-        padding: 30px !important;
-        font-weight: 900 !important;
+        font-size: 25px !important;
+        padding: 15px 30px !important;
+        font-weight: 700 !important;
     }
-    /* Tăng kích thước tiêu đề */
-    h1 { font-size: 96px !important; } /* Gốc 32px */
-    h2 { font-size: 84px !important; } /* Gốc 28px */
-    h3 { font-size: 72px !important; } /* Gốc 24px */
     
-    /* Tăng kích thước chữ chung */
+    /* Tăng kích thước tiêu đề (300%) */
+    h1 { font-size: 96px !important; }
+    h2 { font-size: 84px !important; }
+    h3 { font-size: 72px !important; }
+    
+    /* Tăng kích thước chữ chung (300%) */
     p, div, label, input, .stTextInput > div > div > input, .stSelectbox > div > div > div {
-        font-size: 32px !important; /* Gốc 16px -> Tăng lên cho dễ nhìn */
+        font-size: 32px !important;
+        line-height: 1.5 !important;
     }
     
+    /* Nút bấm to ra tương ứng */
+    .stButton > button {
+        font-size: 32px !important;
+        padding: 20px 40px !important;
+    }
+
     /* 3D DASHBOARD CARDS CSS - PHIÊN BẢN KHỔNG LỒ */
     .card-3d {
         border-radius: 40px;
@@ -51,7 +60,7 @@ st.markdown("""
         box-shadow: 0 20px 50px rgba(0,0,0,0.3), 0 10px 20px rgba(0,0,0,0.2);
         transition: transform 0.3s ease, box-shadow 0.3s ease;
         margin-bottom: 50px;
-        height: 400px; /* Tăng chiều cao */
+        height: 450px; /* Tăng chiều cao để chứa chữ to */
         display: flex;
         flex-direction: column;
         justify-content: center;
@@ -156,12 +165,20 @@ def safe_str(val):
     return s
 
 def safe_filename(s): 
-    # Loại bỏ ký tự đặc biệt, giữ lại chữ cái, số, dấu gạch ngang, gạch dưới
-    # Thay thế khoảng trắng bằng dấu gạch dưới
+    """
+    Chuyển đổi chuỗi thành tên file an toàn tuyệt đối:
+    1. Chuyển tiếng Việt có dấu thành không dấu.
+    2. Loại bỏ ký tự đặc biệt.
+    3. Thay khoảng trắng bằng gạch dưới.
+    """
     s = safe_str(s)
-    s = re.sub(r'[\\/*?:"<>|]', '', s) # Loại bỏ ký tự cấm trong tên file Windows
-    s = s.replace(' ', '_')
-    return s
+    # Chuyển tiếng Việt có dấu thành không dấu (Normalize)
+    s = unicodedata.normalize('NFKD', s).encode('ascii', 'ignore').decode('utf-8')
+    # Loại bỏ ký tự đặc biệt, giữ lại chữ cái, số, gạch ngang, gạch dưới
+    s = re.sub(r'[^\w\-_]', '_', s)
+    # Xóa gạch dưới kép
+    s = re.sub(r'_{2,}', '_', s)
+    return s.strip('_')
 
 def to_float(val):
     """
