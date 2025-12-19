@@ -15,7 +15,7 @@ from copy import copy
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO & VERSION
 # =============================================================================
-APP_VERSION = "V4800 - UPDATE V4.1 (BIG TAB TEXT & SAVE FIX)"
+APP_VERSION = "V4800 - UPDATE V4.2 (BIG TAB TEXT & SAVE FIX FINAL)"
 RELEASE_NOTE = """
 - **UI Tab:** Tăng kích thước chữ của các Tab (Menu chính) lên 300% (rất to) để dễ nhìn. Các chữ khác giữ nguyên kích thước chuẩn.
 - **Save Fix:** Tối ưu hóa đường dẫn lưu file để khắc phục lỗi file không hiển thị sau khi lưu.
@@ -24,12 +24,12 @@ RELEASE_NOTE = """
 
 st.set_page_config(page_title=f"CRM V4800 - {APP_VERSION}", layout="wide", page_icon="💼")
 
-# --- CSS TÙY CHỈNH (CHỈ TĂNG CỠ CHỮ TAB) ---
+# --- CSS TÙY CHỈNH (CHỈ TĂNG CỠ CHỮ TAB & 3D CARDS) ---
 st.markdown("""
     <style>
     /* CHỈ TĂNG KÍCH THƯỚC CHỮ CỦA CÁC TAB (300%) */
     button[data-baseweb="tab"] div p {
-        font-size: 36px !important; /* Tăng kích thước chữ bên trong Tab */
+        font-size: 40px !important; /* Tăng kích thước chữ bên trong Tab */
         font-weight: 900 !important;
         padding: 10px !important;
     }
@@ -829,7 +829,7 @@ with tab3:
                         safe_cust = safe_filename(sel_cust)
                         safe_quote = safe_filename(quote_name)
                         
-                        target_dir = os.path.join(QUOTE_ROOT_FOLDER, safe_cust)
+                        target_dir = os.path.join(QUOTE_ROOT_FOLDER, safe_cust, now.strftime("%Y"), now.strftime("%b").upper())
                         if not os.path.exists(target_dir): os.makedirs(target_dir)
                         
                         fname = f"Quote_{safe_quote}_{now.strftime('%Y%m%d')}.xlsx"
