@@ -14,11 +14,11 @@ from copy import copy
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO & VERSION
 # =============================================================================
-APP_VERSION = "V4800 - UPDATE V3.3 (3D DASHBOARD & DATA FIX)"
+APP_VERSION = "V4800 - UPDATE V3.3 (FINAL FIX DATA 532/533)"
 RELEASE_NOTE = """
-- **Data Fix:** Tinh chỉnh bộ đọc giá trị số để đảm bảo Item 532 (1152) và 533 (9) hiển thị chính xác từ dữ liệu NCC.
-- **UI Upgrade:** Nâng cấp giao diện Dashboard với các ô chỉ số dạng khối 3D màu sắc rực rỡ.
-- **System:** Giữ nguyên toàn bộ logic tính toán và quy trình Import.
+- **Data Core:** Cập nhật bộ xử lý số học (Regex) để đọc chính xác giá trị từ các ô Excel chứa ký tự lạ (Vd: 1152RMB, 20-30).
+- **UI:** Giao diện Dashboard 3D gradient hiện đại.
+- **Workflow:** Tối ưu hóa quy trình Import để khớp dữ liệu Master Data chuẩn xác.
 """
 
 st.set_page_config(page_title=f"CRM V4800 - {APP_VERSION}", layout="wide", page_icon="💼")
@@ -76,8 +76,8 @@ st.markdown("""
     }
     
     /* MÀU SẮC 3D GRADIENT CHO TỪNG LOẠI */
-    .bg-sales { background: linear-gradient(135deg, #00b09b 0%, #96c93d 100%); } /* Doanh thu: Xanh lá tươi */
-    .bg-cost { background: linear-gradient(135deg, #ff5f6d 0%, #ffc371 100%); } /* Giá trị mua: Cam đỏ */
+    .bg-rev { background: linear-gradient(135deg, #00b09b 0%, #96c93d 100%); } /* Doanh thu: Xanh lá tươi */
+    .bg-buy { background: linear-gradient(135deg, #ff5f6d 0%, #ffc371 100%); } /* Giá trị mua: Cam đỏ */
     .bg-profit { background: linear-gradient(135deg, #f83600 0%, #f9d423 100%); } /* Lợi nhuận: Vàng cam đậm */
     .bg-ncc { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); } /* Đơn NCC: Tím xanh */
     .bg-recv { background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%); } /* PO Nhận: Xanh ngọc */
