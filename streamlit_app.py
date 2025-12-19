@@ -15,74 +15,59 @@ from copy import copy
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO & VERSION
 # =============================================================================
-APP_VERSION = "V4800 - UPDATE V4.0 (FINAL SAVE FIX & UI ADJUST)"
+APP_VERSION = "V4800 - UPDATE V4.1 (BIG TAB TEXT & SAVE FIX)"
 RELEASE_NOTE = """
-- **Save Fix:** Sửa lỗi không lưu được file do tên file chứa ký tự tiếng Việt hoặc ký tự đặc biệt. Hệ thống sẽ tự động chuyển tên file sang tiếng Việt không dấu an toàn.
-- **UI Adjust:** Điều chỉnh kích thước Tab nhỏ gọn lại (25px) nhưng nội dung bên trong vẫn phóng to 300% rõ ràng.
-- **Refresh:** Tự động tải lại trang sau khi lưu thành công để hiển thị kết quả ngay lập tức.
+- **UI Tab:** Tăng kích thước chữ của các Tab (Menu chính) lên 300% (rất to) để dễ nhìn. Các chữ khác giữ nguyên kích thước chuẩn.
+- **Save Fix:** Tối ưu hóa đường dẫn lưu file để khắc phục lỗi file không hiển thị sau khi lưu.
+- **Data:** Giữ nguyên logic xử lý dữ liệu và import thông minh.
 """
 
 st.set_page_config(page_title=f"CRM V4800 - {APP_VERSION}", layout="wide", page_icon="💼")
 
-# --- CSS TÙY CHỈNH (GIAO DIỆN KHỔNG LỒ 300% & 3D CARDS) ---
+# --- CSS TÙY CHỈNH (CHỈ TĂNG CỠ CHỮ TAB) ---
 st.markdown("""
     <style>
-    /* Tăng kích thước Tab lên vừa phải theo yêu cầu (25px) */
-    button[data-baseweb="tab"] {
-        font-size: 25px !important;
-        padding: 15px 30px !important;
-        font-weight: 700 !important;
+    /* CHỈ TĂNG KÍCH THƯỚC CHỮ CỦA CÁC TAB (300%) */
+    button[data-baseweb="tab"] div p {
+        font-size: 36px !important; /* Tăng kích thước chữ bên trong Tab */
+        font-weight: 900 !important;
+        padding: 10px !important;
     }
     
-    /* Tăng kích thước tiêu đề (300%) */
-    h1 { font-size: 96px !important; }
-    h2 { font-size: 84px !important; }
-    h3 { font-size: 72px !important; }
+    /* Giữ nguyên các phần khác mặc định hoặc chỉnh nhẹ */
+    h1 { font-size: 32px !important; }
+    h2 { font-size: 28px !important; }
+    h3 { font-size: 24px !important; }
     
-    /* Tăng kích thước chữ chung (300%) */
-    p, div, label, input, .stTextInput > div > div > input, .stSelectbox > div > div > div {
-        font-size: 32px !important;
-        line-height: 1.5 !important;
-    }
-    
-    /* Nút bấm to ra tương ứng */
-    .stButton > button {
-        font-size: 32px !important;
-        padding: 20px 40px !important;
-    }
-
-    /* 3D DASHBOARD CARDS CSS - PHIÊN BẢN KHỔNG LỒ */
+    /* 3D DASHBOARD CARDS CSS */
     .card-3d {
-        border-radius: 40px;
-        padding: 50px 30px;
+        border-radius: 15px;
+        padding: 20px;
         color: white;
         text-align: center;
-        box-shadow: 0 20px 50px rgba(0,0,0,0.3), 0 10px 20px rgba(0,0,0,0.2);
-        transition: transform 0.3s ease, box-shadow 0.3s ease;
-        margin-bottom: 50px;
-        height: 450px; /* Tăng chiều cao để chứa chữ to */
+        box-shadow: 0 10px 20px rgba(0,0,0,0.19), 0 6px 6px rgba(0,0,0,0.23);
+        transition: all 0.3s cubic-bezier(.25,.8,.25,1);
+        margin-bottom: 20px;
+        height: 100%;
         display: flex;
         flex-direction: column;
         justify-content: center;
-        align-items: center;
-        border: 2px solid rgba(255, 255, 255, 0.2);
     }
     .card-3d:hover {
-        transform: translateY(-15px);
-        box-shadow: 0 30px 60px rgba(0,0,0,0.4);
+        box-shadow: 0 14px 28px rgba(0,0,0,0.25), 0 10px 10px rgba(0,0,0,0.22);
+        transform: translateY(-5px);
     }
     .card-title {
-        font-size: 36px; /* Tăng 200% */
-        font-weight: 700;
-        margin-bottom: 20px;
+        font-size: 18px;
+        font-weight: 500;
+        margin-bottom: 10px;
+        opacity: 0.9;
         text-transform: uppercase;
-        letter-spacing: 2px;
-        opacity: 0.95;
     }
     .card-value {
-        font-size: 72px; /* Tăng 200% */
-        font-weight: 900;
-        text-shadow: 4px 4px 8px rgba(0,0,0,0.4);
+        font-size: 32px;
+        font-weight: bold;
+        text-shadow: 1px 1px 2px rgba(0,0,0,0.3);
     }
     
     /* MÀU SẮC 3D GRADIENT CHO TỪNG LOẠI */
@@ -95,7 +80,7 @@ st.markdown("""
     .bg-pend { background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); }
 
     /* Cảnh báo lỗi nổi bật */
-    .stAlert { font-weight: bold; font-size: 24px !important; }
+    .stAlert { font-weight: bold; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -166,47 +151,28 @@ def safe_str(val):
 
 def safe_filename(s): 
     """
-    Chuyển đổi chuỗi thành tên file an toàn tuyệt đối:
-    1. Chuyển tiếng Việt có dấu thành không dấu.
-    2. Loại bỏ ký tự đặc biệt.
-    3. Thay khoảng trắng bằng gạch dưới.
+    Chuyển đổi chuỗi thành tên file an toàn tuyệt đối.
     """
     s = safe_str(s)
-    # Chuyển tiếng Việt có dấu thành không dấu (Normalize)
     s = unicodedata.normalize('NFKD', s).encode('ascii', 'ignore').decode('utf-8')
-    # Loại bỏ ký tự đặc biệt, giữ lại chữ cái, số, gạch ngang, gạch dưới
     s = re.sub(r'[^\w\-_]', '_', s)
-    # Xóa gạch dưới kép
     s = re.sub(r'_{2,}', '_', s)
     return s.strip('_')
 
 def to_float(val):
     """
-    Chuyển đổi chuỗi sang số float, xử lý mạnh mẽ các trường hợp:
-    - Range giá: "1800-2200" -> lấy max là 2200
-    - Text lẫn số: "1152RMB" -> 1152
-    - Dấu phẩy: "1,152.50" -> 1152.5
-    - Số 9 -> 9.0
+    Chuyển đổi chuỗi sang số float, xử lý mạnh mẽ.
     """
     if val is None: return 0.0
     s = str(val).strip()
     if not s or s.lower() in ['nan', 'none', 'null']: return 0.0
     
-    # Xử lý dọn dẹp sơ bộ các ký tự tiền tệ và dấu phẩy ngàn
     s_clean = s.replace(",", "").replace("¥", "").replace("$", "").replace("RMB", "").replace("VND", "").replace("rmb", "").replace("vnd", "")
     
     try:
-        # Tìm tất cả các số (nguyên hoặc thập phân) trong chuỗi
-        # Regex này bắt: 123, 123.45, -123.45
         numbers = re.findall(r"[-+]?\d*\.\d+|\d+", s_clean)
-        
-        if not numbers:
-            return 0.0
-        
-        # Chuyển list string thành list float
+        if not numbers: return 0.0
         floats = [float(n) for n in numbers]
-        
-        # Trả về giá trị lớn nhất (Logic: Giá mua an toàn nhất là giá cao nhất trong range)
         return max(floats)
     except:
         return 0.0
@@ -216,20 +182,12 @@ def fmt_num(x):
     except: return "0"
 
 def clean_lookup_key(s):
-    """
-    Hàm làm sạch khóa tìm kiếm mạnh mẽ hơn.
-    Chỉ giữ lại chữ cái và số, bỏ hết dấu cách, gạch ngang, chấm...
-    VD: "Item-532" -> "item532", "532 " -> "532"
-    """
     if s is None: return ""
     s_str = str(s)
-    # Loại bỏ .0 nếu là số nguyên dạng float (vd: 532.0 -> 532)
     try:
         f = float(s_str)
         if f.is_integer(): s_str = str(int(f))
     except: pass
-    
-    # Chỉ giữ lại a-z, 0-9
     clean = re.sub(r'[^a-zA-Z0-9]', '', s_str).lower()
     return clean
 
@@ -281,7 +239,6 @@ def open_folder(path):
         elif platform.system() == "Darwin": subprocess.Popen(["open", path])
         else: subprocess.Popen(["xdg-open", path])
     except: pass 
-    # st.warning("Không thể mở folder tự động trên Cloud.")
 
 def safe_write_merged(ws, row, col, value):
     try:
@@ -814,16 +771,17 @@ with tab3:
                 if not sel_cust or not quote_name: st.error("Thiếu thông tin")
                 else:
                     now = datetime.now()
-                    # FIX PATH: Dùng safe_filename cho cả tên khách và tên báo giá để tránh ký tự lạ
+                    # FIX PATH: Tối giản hóa đường dẫn để tránh lỗi
                     safe_cust = safe_filename(sel_cust)
                     safe_quote = safe_filename(quote_name)
                     
-                    base_path = os.path.join(QUOTE_ROOT_FOLDER, safe_cust, now.strftime("%Y"), now.strftime("%b").upper())
+                    # Chỉ tạo 1 folder chung cho khách hàng, không phân năm/tháng để tránh lỗi path quá dài hoặc permission
+                    base_path = os.path.join(QUOTE_ROOT_FOLDER, safe_cust)
                     
                     if not os.path.exists(base_path): 
                         os.makedirs(base_path)
                         
-                    csv_name = f"History_{safe_quote}.csv"
+                    csv_name = f"History_{safe_quote}_{now.strftime('%Y%m%d')}.csv"
                     full_path = os.path.join(base_path, csv_name)
                     
                     try:
@@ -856,7 +814,7 @@ with tab3:
                         sales_history_df = pd.concat([sales_history_df, pd.DataFrame(new_hist_rows)], ignore_index=True)
                         save_csv(SALES_HISTORY_CSV, sales_history_df)
                         
-                        st.success(f"✅ Đã lưu thành công!\nFolder: {base_path}\nFile: {csv_name}")
+                        st.success(f"✅ Đã lưu thành công!\nFile: {full_path}")
                         st.rerun() # Refresh to show updates
                         
                     except Exception as e:
@@ -871,7 +829,7 @@ with tab3:
                         safe_cust = safe_filename(sel_cust)
                         safe_quote = safe_filename(quote_name)
                         
-                        target_dir = os.path.join(QUOTE_ROOT_FOLDER, safe_cust, now.strftime("%Y"), now.strftime("%b").upper())
+                        target_dir = os.path.join(QUOTE_ROOT_FOLDER, safe_cust)
                         if not os.path.exists(target_dir): os.makedirs(target_dir)
                         
                         fname = f"Quote_{safe_quote}_{now.strftime('%Y%m%d')}.xlsx"
