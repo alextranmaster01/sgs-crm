@@ -14,11 +14,11 @@ from copy import copy
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO & VERSION
 # =============================================================================
-APP_VERSION = "V4800 - UPDATE V3.5 (FIX DUPLICATE & 3D UI)"
+APP_VERSION = "V4800 - UPDATE V3.7 (FIX LOOKUP BY NAME)"
 RELEASE_NOTE = """
-- **Smart Lookup:** Khi import RFQ, nếu Master Data có nhiều dòng trùng mã, hệ thống sẽ tự động chọn dòng có Giá Mua cao nhất (Tránh lấy nhầm dòng giá 0).
-- **Data Core:** Regex xử lý số liệu mạnh mẽ (Hỗ trợ 1152RMB, 1800-2200).
-- **UI:** Dashboard 3D Gradient Cards.
+- **Smart Lookup Fix:** Bổ sung cơ chế tìm kiếm kép. Nếu không tìm thấy Mã hàng (Code), hệ thống sẽ tự động tìm theo Tên hàng (Name) để đảm bảo lấy được giá từ Master Data.
+- **Priority:** Ưu tiên lấy giá trị tuyệt đối từ cột F (Buying Price) của Master Data nếu có.
+- **UI:** Dashboard 3D.
 """
 
 st.set_page_config(page_title=f"CRM V4800 - {APP_VERSION}", layout="wide", page_icon="💼")
@@ -76,8 +76,8 @@ st.markdown("""
     }
     
     /* MÀU SẮC 3D GRADIENT CHO TỪNG LOẠI */
-    .bg-rev { background: linear-gradient(135deg, #00b09b 0%, #96c93d 100%); } /* Doanh thu: Xanh lá tươi */
-    .bg-buy { background: linear-gradient(135deg, #ff5f6d 0%, #ffc371 100%); } /* Giá trị mua: Cam đỏ */
+    .bg-sales { background: linear-gradient(135deg, #00b09b 0%, #96c93d 100%); } /* Doanh thu: Xanh lá tươi */
+    .bg-cost { background: linear-gradient(135deg, #ff5f6d 0%, #ffc371 100%); } /* Giá trị mua: Cam đỏ */
     .bg-profit { background: linear-gradient(135deg, #f83600 0%, #f9d423 100%); } /* Lợi nhuận: Vàng cam đậm */
     .bg-ncc { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); } /* Đơn NCC: Tím xanh */
     .bg-recv { background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%); } /* PO Nhận: Xanh ngọc */
@@ -575,6 +575,7 @@ with tab3:
                     # TẠO KHÓA TÌM KIẾM SẠCH CHO DB
                     purchases_df["_clean_code"] = purchases_df["item_code"].apply(clean_lookup_key)
                     purchases_df["_clean_specs"] = purchases_df["specs"].apply(clean_lookup_key)
+                    purchases_df["_clean_name"] = purchases_df["item_name"].apply(clean_lookup_key)
                     
                     df_rfq = pd.read_excel(uploaded_rfq, header=None, dtype=str).fillna("")
                     new_data = []
@@ -594,30 +595,32 @@ with tab3:
                         ex_supp = safe_str(r.iloc[11]) if len(r) > 11 else ""
                         ex_lead = safe_str(r.iloc[10]) if len(r) > 10 else ""
 
-                        clean_c = clean_lookup_key(c_raw); clean_s = clean_lookup_key(s_raw)
+                        clean_c = clean_lookup_key(c_raw); clean_s = clean_lookup_key(s_raw); clean_n = clean_lookup_key(n_raw)
                         target_row = None
+                        found_in_db = pd.DataFrame()
                         
                         # LOGIC IMPORT QUAN TRỌNG: TÌM TRONG DB NCC
+                        # 1. Tìm theo Mã hàng
                         if c_raw:
-                            found_code = purchases_df[purchases_df["_clean_code"] == clean_c]
-                            if not found_code.empty:
-                                # --- FIX: Sort by price to get the best match (avoid 0 price duplicates) ---
-                                # Helper to get float value for sorting
-                                def get_price_val(row): return to_float(row["buying_price_rmb"])
-                                
-                                # Sort descending by price
-                                found_code = found_code.sort_values(by="buying_price_rmb", key=lambda x: x.apply(to_float), ascending=False)
-                                
-                                if s_raw:
-                                    found_specs = found_code[found_code["_clean_specs"] == clean_s]
-                                    if not found_specs.empty:
-                                         # Sort specs matches too
-                                         found_specs = found_specs.sort_values(by="buying_price_rmb", key=lambda x: x.apply(to_float), ascending=False)
-                                         target_row = found_specs.iloc[0]
-                                    else:
-                                         target_row = found_code.iloc[0]
+                            found_in_db = purchases_df[purchases_df["_clean_code"] == clean_c]
+                        
+                        # 2. Nếu không thấy Mã, Tìm theo Tên hàng (Fallback)
+                        if found_in_db.empty and n_raw:
+                            found_in_db = purchases_df[purchases_df["_clean_name"] == clean_n]
+
+                        if not found_in_db.empty:
+                            # Sắp xếp để lấy dòng có giá cao nhất
+                            found_in_db = found_in_db.sort_values(by="buying_price_rmb", key=lambda x: x.apply(to_float), ascending=False)
+                            
+                            if s_raw:
+                                found_specs = found_in_db[found_in_db["_clean_specs"] == clean_s]
+                                if not found_specs.empty:
+                                     found_specs = found_specs.sort_values(by="buying_price_rmb", key=lambda x: x.apply(to_float), ascending=False)
+                                     target_row = found_specs.iloc[0]
                                 else:
-                                    target_row = found_code.iloc[0]
+                                     target_row = found_in_db.iloc[0]
+                            else:
+                                target_row = found_in_db.iloc[0]
                         
                         it = {k:"0" if "price" in k or "val" in k or "fee" in k else "" for k in QUOTE_KH_COLUMNS}
                         it.update({
