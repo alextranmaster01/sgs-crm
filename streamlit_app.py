@@ -14,18 +14,17 @@ from copy import copy
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO & VERSION
 # =============================================================================
-APP_VERSION = "V4800 - UPDATE V3.1 (FIX PRICE RANGE)"
+APP_VERSION = "V4800 - UPDATE V3.2 (FIX DATA 532/533 & 3D UI)"
 RELEASE_NOTE = """
-- **System:** Tích hợp nút tạo requirements.txt tự động cho Deploy.
-- **UI:** Chuẩn hóa use_container_width=True cho toàn bộ bảng.
-- **Fix:** Xử lý lỗi tính ngày công nợ khi Payment Term không phải số.
-- **Data:** Tối ưu hóa luồng Import dữ liệu Purchase & Customer.
-- **Hotfix:** Hỗ trợ đọc giá dạng khoảng (vd: 1800-2200) -> lấy giá lớn nhất.
+- **Core Fix:** Cập nhật thuật toán `to_float` bằng Regex để trích xuất số chính xác từ mọi định dạng (Text, Range, Currency).
+    - *Test case:* Item 532 (1152RMB) và 533 (9RMB) sẽ hiển thị đúng.
+- **UI Upgrade:** Giao diện Dashboard mới với các ô thông tin dạng 3D đổ bóng màu sắc hiện đại.
+- **System:** Giữ nguyên toàn bộ chức năng cũ và logic tính toán.
 """
 
 st.set_page_config(page_title=f"CRM V4800 - {APP_VERSION}", layout="wide", page_icon="💼")
 
-# --- CSS TÙY CHỈNH (GIAO DIỆN LỚN) ---
+# --- CSS TÙY CHỈNH (GIAO DIỆN LỚN & 3D CARD) ---
 st.markdown("""
     <style>
     /* Tăng kích thước Tab */
@@ -42,6 +41,47 @@ st.markdown("""
     p, div, label, input, .stTextInput > div > div > input, .stSelectbox > div > div > div {
         font-size: 16px !important;
     }
+    
+    /* 3D DASHBOARD CARDS CSS */
+    .card-3d {
+        border-radius: 15px;
+        padding: 20px;
+        color: white;
+        text-align: center;
+        box-shadow: 0 10px 20px rgba(0,0,0,0.19), 0 6px 6px rgba(0,0,0,0.23);
+        transition: all 0.3s cubic-bezier(.25,.8,.25,1);
+        margin-bottom: 20px;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+    }
+    .card-3d:hover {
+        box-shadow: 0 14px 28px rgba(0,0,0,0.25), 0 10px 10px rgba(0,0,0,0.22);
+        transform: translateY(-5px);
+    }
+    .card-title {
+        font-size: 18px;
+        font-weight: 500;
+        margin-bottom: 10px;
+        opacity: 0.9;
+        text-transform: uppercase;
+    }
+    .card-value {
+        font-size: 32px;
+        font-weight: bold;
+        text-shadow: 1px 1px 2px rgba(0,0,0,0.3);
+    }
+    
+    /* MÀU SẮC CÁC CARD */
+    .bg-rev { background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%); } /* Doanh thu - Xanh lá */
+    .bg-buy { background: linear-gradient(135deg, #ff9966 0%, #ff5e62 100%); } /* Mua - Cam đỏ */
+    .bg-profit { background: linear-gradient(135deg, #FDC830 0%, #F37335 100%); } /* Lợi nhuận - Vàng Cam */
+    .bg-ncc { background: linear-gradient(135deg, #4568DC 0%, #B06AB3 100%); } /* NCC - Tím Xanh */
+    .bg-recv { background: linear-gradient(135deg, #00b09b 0%, #96c93d 100%); } /* Nhận - Xanh mạ */
+    .bg-del { background: linear-gradient(135deg, #3a7bd5 0%, #3a6073 100%); } /* Giao - Xanh biển */
+    .bg-pend { background: linear-gradient(135deg, #8E2DE2 0%, #4A00E0 100%); } /* Chờ - Tím đậm */
+    
     /* Cảnh báo lỗi nổi bật */
     .stAlert { font-weight: bold; }
     </style>
@@ -115,24 +155,34 @@ def safe_str(val):
 def safe_filename(s): return re.sub(r"[\\/:*?\"<>|]+", "_", safe_str(s))
 
 def to_float(val):
+    """
+    Chuyển đổi chuỗi sang số float, xử lý mạnh mẽ các trường hợp:
+    - Range giá: "1800-2200" -> lấy max là 2200
+    - Text lẫn số: "1152RMB" -> 1152
+    - Dấu phẩy: "1,152.50" -> 1152.5
+    """
+    if val is None: return 0.0
+    s = str(val).strip()
+    if not s or s.lower() in ['nan', 'none', 'null']: return 0.0
+    
+    # Xử lý dọn dẹp sơ bộ
+    s_clean = s.replace(",", "").replace("¥", "").replace("$", "").replace("RMB", "").replace("VND", "").replace("rmb", "").replace("vnd", "")
+    
     try:
-        s = str(val).strip()
-        if s.lower() in ['nan', 'none', '', 'null']: return 0.0
-        # Xử lý trường hợp range giá ví dụ "1800-2200" -> lấy giá lớn nhất (2200) để an toàn
-        if "-" in s and len(s.split("-")) == 2:
-            parts = s.split("-")
-            try:
-                v1 = float(parts[0].replace(",", "").strip())
-                v2 = float(parts[1].replace(",", "").strip())
-                return max(v1, v2)
-            except: pass
-            
-        clean = s.replace(",", "").replace("%", "")
-        # Xử lý các ký tự lạ khác nếu có (ví dụ "¥100")
-        clean = re.sub(r'[^\d.]', '', clean)
-        if not clean: return 0.0
-        return float(clean)
-    except: return 0.0
+        # Tìm tất cả các số (nguyên hoặc thập phân) trong chuỗi
+        # Regex này bắt: 123, 123.45, -123.45
+        numbers = re.findall(r"[-+]?\d*\.\d+|\d+", s_clean)
+        
+        if not numbers:
+            return 0.0
+        
+        # Chuyển list string thành list float
+        floats = [float(n) for n in numbers]
+        
+        # Trả về giá trị lớn nhất (Logic: Giá mua an toàn nhất là giá cao nhất trong range)
+        return max(floats)
+    except:
+        return 0.0
 
 def fmt_num(x):
     try: return "{:,.0f}".format(float(x))
@@ -302,6 +352,7 @@ with tab1:
     
     st.divider()
 
+    # Calculation Logic
     rev = db_customer_orders['total_price'].apply(to_float).sum()
     profit = sales_history_df['profit'].apply(to_float).sum()
     
@@ -329,20 +380,66 @@ with tab1:
     po_delivered = len(tracking_df[(tracking_df['order_type'] == 'KH') & (tracking_df['status'] == 'Đã giao hàng')])
     po_pending = po_total_recv - po_delivered
 
+    # --- 3D CARDS DISPLAY ---
+    # Row 1: Money
     c1, c2, c3 = st.columns(3)
-    c1.metric("DOANH THU BÁN (VND)", fmt_num(rev))
-    c2.metric("TỔNG GIÁ TRỊ MUA (VND)", fmt_num(total_purchase_val))
-    c3.metric("LỢI NHUẬN TỔNG (VND)", fmt_num(profit), delta_color="normal")
+    with c1:
+        st.markdown(f"""
+        <div class="card-3d bg-rev">
+            <div class="card-title">DOANH THU BÁN (VND)</div>
+            <div class="card-value">{fmt_num(rev)}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    with c2:
+        st.markdown(f"""
+        <div class="card-3d bg-buy">
+            <div class="card-title">TỔNG GIÁ TRỊ MUA (VND)</div>
+            <div class="card-value">{fmt_num(total_purchase_val)}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    with c3:
+        st.markdown(f"""
+        <div class="card-3d bg-profit">
+            <div class="card-title">LỢI NHUẬN TỔNG (VND)</div>
+            <div class="card-value">{fmt_num(profit)}</div>
+        </div>
+        """, unsafe_allow_html=True)
     
     st.divider()
+    
+    # Row 2: PO Metrics
     c4, c5, c6, c7 = st.columns(4)
-    c4.metric("ĐƠN HÀNG ĐÃ ĐẶT NCC", po_ordered_ncc)
-    c5.metric("TỔNG PO ĐÃ NHẬN", po_total_recv)
-    c6.metric("TỔNG PO ĐÃ GIAO", po_delivered)
-    c7.metric("TỔNG PO CHƯA GIAO", po_pending)
+    with c4:
+        st.markdown(f"""
+        <div class="card-3d bg-ncc">
+            <div class="card-title">ĐƠN HÀNG ĐÃ ĐẶT NCC</div>
+            <div class="card-value">{po_ordered_ncc}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    with c5:
+        st.markdown(f"""
+        <div class="card-3d bg-recv">
+            <div class="card-title">TỔNG PO ĐÃ NHẬN</div>
+            <div class="card-value">{po_total_recv}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    with c6:
+        st.markdown(f"""
+        <div class="card-3d bg-del">
+            <div class="card-title">TỔNG PO ĐÃ GIAO</div>
+            <div class="card-value">{po_delivered}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    with c7:
+        st.markdown(f"""
+        <div class="card-3d bg-pend">
+            <div class="card-title">TỔNG PO CHƯA GIAO</div>
+            <div class="card-value">{po_pending}</div>
+        </div>
+        """, unsafe_allow_html=True)
     
     st.divider()
-    st.metric("TỔNG CHI PHÍ (VND)", fmt_num(total_cost_calc))
+    st.metric("TỔNG CHI PHÍ KHÁC (VND)", fmt_num(total_cost_calc))
     st.caption("*Tổng chi phí = (GAP*60%) + EndUser + Buyer + ImportTax + VAT + Trans + MgmtFee")
     st.divider()
     
