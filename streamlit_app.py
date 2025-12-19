@@ -130,7 +130,7 @@ if IN_COLAB:
     if not os.path.exists('/content/drive'):
         from google.colab import drive
         drive.mount('/content/drive')
-    BASE_DIR = "/content/drive/MyDrive/"CRM DATA 1ST"
+    BASE_DIR = "/content/drive/MyDrive/CRM_V4800_DATA"
 else:
     BASE_DIR = os.getcwd()
 
