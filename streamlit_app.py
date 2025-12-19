@@ -14,11 +14,11 @@ from copy import copy
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO & VERSION
 # =============================================================================
-APP_VERSION = "V4800 - UPDATE V3.7 (FIX SAVE HISTORY)"
+APP_VERSION = "V4800 - UPDATE V3.8 (FIX UI REFRESH)"
 RELEASE_NOTE = """
-- **Critical Fix:** Sửa lỗi không lưu được lịch sử báo giá do đường dẫn file/folder không hợp lệ.
-- **Smart Lookup:** Giữ nguyên logic tìm kiếm kép (Code -> Name) và ưu tiên giá trị cột F.
-- **UI:** Dashboard 3D.
+- **UI Fix:** Tự động tải lại trang sau khi lưu lịch sử để hiển thị file ngay lập tức.
+- **Smart Lookup Fix:** Bổ sung cơ chế tìm kiếm kép (Code -> Name) và ưu tiên giá trị cột F.
+- **Priority:** Ưu tiên lấy giá trị tuyệt đối từ cột F (Buying Price) của Master Data nếu có.
 """
 
 st.set_page_config(page_title=f"CRM V4800 - {APP_VERSION}", layout="wide", page_icon="💼")
@@ -839,6 +839,7 @@ with tab3:
                         save_csv(SALES_HISTORY_CSV, sales_history_df)
                         
                         st.success(f"✅ Đã lưu thành công!\nFolder: {base_path}\nFile: {csv_name}")
+                        st.rerun() # Refresh to show updates
                         
                     except Exception as e:
                         st.error(f"Lỗi khi lưu file: {str(e)}")
