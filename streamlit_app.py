@@ -14,11 +14,11 @@ from copy import copy
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO & VERSION
 # =============================================================================
-APP_VERSION = "V4800 - UPDATE V3.3 (FINAL FIX DATA 532/533)"
+APP_VERSION = "V4800 - UPDATE V3.4 (FIX LOOKUP LOGIC)"
 RELEASE_NOTE = """
-- **Data Core:** Cập nhật bộ xử lý số học (Regex) để đọc chính xác giá trị từ các ô Excel chứa ký tự lạ (Vd: 1152RMB, 20-30).
-- **UI:** Giao diện Dashboard 3D gradient hiện đại.
-- **Workflow:** Tối ưu hóa quy trình Import để khớp dữ liệu Master Data chuẩn xác.
+- **Critical Fix:** Cải thiện thuật toán đối chiếu mã hàng (Lookup). Hệ thống sẽ tự động loại bỏ ký tự đặc biệt để khớp mã giữa RFQ và Database NCC chính xác hơn.
+- **UI:** Dashboard 3D Cards.
+- **Data:** Xử lý triệt để Item 532/533 hiển thị đúng giá mua.
 """
 
 st.set_page_config(page_title=f"CRM V4800 - {APP_VERSION}", layout="wide", page_icon="💼")
@@ -76,8 +76,8 @@ st.markdown("""
     }
     
     /* MÀU SẮC 3D GRADIENT CHO TỪNG LOẠI */
-    .bg-rev { background: linear-gradient(135deg, #00b09b 0%, #96c93d 100%); } /* Doanh thu: Xanh lá tươi */
-    .bg-buy { background: linear-gradient(135deg, #ff5f6d 0%, #ffc371 100%); } /* Giá trị mua: Cam đỏ */
+    .bg-sales { background: linear-gradient(135deg, #00b09b 0%, #96c93d 100%); } /* Doanh thu: Xanh lá tươi */
+    .bg-cost { background: linear-gradient(135deg, #ff5f6d 0%, #ffc371 100%); } /* Giá trị mua: Cam đỏ */
     .bg-profit { background: linear-gradient(135deg, #f83600 0%, #f9d423 100%); } /* Lợi nhuận: Vàng cam đậm */
     .bg-ncc { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); } /* Đơn NCC: Tím xanh */
     .bg-recv { background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%); } /* PO Nhận: Xanh ngọc */
@@ -192,13 +192,22 @@ def fmt_num(x):
     except: return "0"
 
 def clean_lookup_key(s):
+    """
+    Hàm làm sạch khóa tìm kiếm mạnh mẽ hơn.
+    Chỉ giữ lại chữ cái và số, bỏ hết dấu cách, gạch ngang, chấm...
+    VD: "Item-532" -> "item532", "532 " -> "532"
+    """
     if s is None: return ""
     s_str = str(s)
+    # Loại bỏ .0 nếu là số nguyên dạng float (vd: 532.0 -> 532)
     try:
         f = float(s_str)
         if f.is_integer(): s_str = str(int(f))
     except: pass
-    return re.sub(r'\s+', '', s_str).lower()
+    
+    # Chỉ giữ lại a-z, 0-9
+    clean = re.sub(r'[^a-zA-Z0-9]', '', s_str).lower()
+    return clean
 
 def calc_eta(order_date_str, leadtime_val):
     try:
@@ -563,8 +572,10 @@ with tab3:
             uploaded_rfq = st.file_uploader("📂 Import RFQ (Excel)", type=["xlsx"])
             if uploaded_rfq and st.button("Load RFQ"):
                 try:
+                    # TẠO KHÓA TÌM KIẾM SẠCH CHO DB
                     purchases_df["_clean_code"] = purchases_df["item_code"].apply(clean_lookup_key)
                     purchases_df["_clean_specs"] = purchases_df["specs"].apply(clean_lookup_key)
+                    
                     df_rfq = pd.read_excel(uploaded_rfq, header=None, dtype=str).fillna("")
                     new_data = []
                     
@@ -592,6 +603,7 @@ with tab3:
                             if not found_code.empty:
                                 if s_raw:
                                     found_specs = found_code[found_code["_clean_specs"] == clean_s]
+                                    # Lấy dòng đầu tiên tìm thấy
                                     target_row = found_specs.iloc[0] if not found_specs.empty else found_code.iloc[0]
                                 else: target_row = found_code.iloc[0]
                         
@@ -610,6 +622,7 @@ with tab3:
                         db_lead = target_row["leadtime"] if target_row is not None else ""
                         db_img = target_row["image_path"] if target_row is not None else ""
 
+                        # NẾU GIÁ EXCEL = 0 THÌ LẤY GIÁ DB (Dòng này sửa lỗi 532, 533)
                         final_rmb = ex_rmb if ex_rmb > 0 else db_rmb
                         final_vnd = ex_vnd if ex_vnd > 0 else db_vnd
                         final_rate = ex_rate if ex_rate > 0 else db_rate
