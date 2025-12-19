@@ -18,7 +18,7 @@ from supabase import create_client
 
 # --- THƯ VIỆN XỬ LÝ EXCEL & ĐỒ HỌA ---
 try:
-    from openpyxl import load_workbook
+    from openpyxl import load_workbook, Workbook
     from openpyxl.styles import Alignment, Border, Side, Font, PatternFill
 except ImportError:
     st.error("Thiếu thư viện openpyxl. Vui lòng cài đặt.")
@@ -31,11 +31,11 @@ warnings.filterwarnings("ignore")
 # 1. CẤU HÌNH HỆ THỐNG
 # =============================================================================
 
-# --- !!! ĐIỀN ID FOLDER GOOGLE DRIVE CỦA BẠN VÀO ĐÂY !!! ---
-DRIVE_FOLDER_ID = "15-j8O4g_..." # <--- THAY ID CỦA BẠN VÀO ĐÂY
+# --- !!! QUAN TRỌNG: ĐIỀN ID FOLDER GOOGLE DRIVE VÀO ĐÂY !!! ---
+DRIVE_FOLDER_ID = "1GLhnSK7Bz7LbTC-Q7aPt_Itmutni5Rqa?hl=vi" # <--- THAY ID CỦA BẠN VÀO ĐÂY
 SCOPES = ['https://www.googleapis.com/auth/drive']
 
-APP_VERSION = "V6.3 - FULL LOGIC MIRROR (V4.7 ON CLOUD)"
+APP_VERSION = "V6.4 - FINAL CLOUD (V4.7 LOGIC MIRRORED)"
 RELEASE_NOTE = """
 - **Logic Mirror:** Sao chép chính xác 100% logic tính toán từ bản V4.7.
 - **Profit Fix:** Lợi Nhuận = Tổng PO Khách - (Tổng PO NCC + Tổng Chi Phí).
@@ -49,15 +49,10 @@ st.markdown("""
     <style>
     /* CHỈ TĂNG KÍCH THƯỚC CHỮ CỦA CÁC TAB (300%) */
     button[data-baseweb="tab"] div p {
-        font-size: 40px !important;
+        font-size: 20px !important;
         font-weight: 900 !important;
         padding: 10px 20px !important;
     }
-    
-    /* Các phần khác giữ nguyên */
-    h1 { font-size: 32px !important; }
-    h2 { font-size: 28px !important; }
-    h3 { font-size: 24px !important; }
     
     /* 3D DASHBOARD CARDS CSS */
     .card-3d {
@@ -112,13 +107,23 @@ st.markdown("""
 def get_drive_service():
     try:
         creds = None
+        # Ưu tiên lấy từ Secrets (Cloud)
         if "gcp_service_account" in st.secrets:
             creds = service_account.Credentials.from_service_account_info(
                 st.secrets["gcp_service_account"], scopes=SCOPES)
+        # Dự phòng lấy từ biến JSON gộp
+        elif "gcp_json" in st.secrets:
+            key_dict = json.loads(st.secrets["gcp_json"])
+            creds = service_account.Credentials.from_service_account_info(
+                key_dict, scopes=SCOPES)
+        # Dự phòng lấy từ file (Local)
         elif os.path.exists('service_account.json'):
             creds = service_account.Credentials.from_service_account_file(
                 'service_account.json', scopes=SCOPES)
-        return build('drive', 'v3', credentials=creds)
+        
+        if creds:
+            return build('drive', 'v3', credentials=creds)
+        return None
     except: return None
 
 # --- KẾT NỐI SUPABASE ---
@@ -203,7 +208,7 @@ def save_data(table_name, df, key_col=None):
         # Làm sạch dữ liệu (Supabase không nhận NaN, phải là None hoặc "")
         cleaned = [{k: (None if v == "" else v) for k, v in r.items()} for r in data]
         
-        # Loại bỏ cột ID giả nếu có để Database tự sinh ID mới
+        # Loại bỏ cột ID rỗng để Database tự sinh ID mới
         for r in cleaned:
             if 'id' in r and not r['id']: del r['id']
         
@@ -346,11 +351,7 @@ db_customer_orders = load_data(TBL_PO_C, CUST_ORDER_COLS)
 # =============================================================================
 # 4. GIAO DIỆN CHÍNH
 # =============================================================================
-st.sidebar.title("CRM V6.3")
-st.sidebar.markdown(f"**Version:** `{APP_VERSION}`")
-with st.sidebar.expander("📝 Release Notes"):
-    st.markdown(RELEASE_NOTE)
-
+st.sidebar.title("CRM V6.4")
 admin_pwd = st.sidebar.text_input("Admin Password", type="password")
 is_admin = (admin_pwd == "admin")
 
@@ -657,23 +658,45 @@ with tab3:
             else: st.error("Không thấy Template trên Drive")
 
     with t3_2:
-        st.subheader("Tra cứu lịch sử")
-        hist = load_data(TBL_HIST, SHARED_HIST_COLS)
-        if not hist.empty:
-            s = st.text_input("Tìm kiếm lịch sử")
-            if s:
-                m = hist.apply(lambda x: s.lower() in str(x).lower(), axis=1)
-                st.dataframe(hist[m], use_container_width=True)
-            else: st.dataframe(hist, use_container_width=True)
+        st.subheader("Tra cứu lịch sử chung (Toàn bộ 20 người)")
+        
+        # Load lại file shared history mới nhất
+        shared_history_df = load_data(TBL_HIST, SHARED_HIST_COLS)
+        
+        if not shared_history_df.empty:
+            search_h = st.text_input("🔍 Tìm theo Mã/Tên/Khách hàng")
+            df_search = shared_history_df.copy()
             
-            sel = st.selectbox("Chọn để tải lại", [""]+list(hist['history_id'].unique()))
-            if st.button("♻️ Tải lại") and sel:
-                sdf = hist[hist['history_id']==sel]
-                if not sdf.empty:
-                    fr = sdf.iloc[0]
-                    st.session_state.pct_end = str(fr.get('pct_end','0')); st.session_state.pct_buy = str(fr.get('pct_buy','0'))
-                    st.session_state.current_quote_df = sdf[QUOTE_COLS].copy()
-                    st.success("Loaded!"); st.rerun()
+            if search_h:
+                mask = df_search.apply(lambda x: search_h.lower() in str(x['item_code']).lower() or 
+                                                 search_h.lower() in str(x['item_name']).lower() or
+                                                 search_h.lower() in str(x['customer']).lower() or
+                                                 search_h.lower() in str(x['quote_no']).lower(), axis=1)
+                df_search = df_search[mask]
+            
+            st.dataframe(df_search, use_container_width=True)
+            
+            # Chọn load lại báo giá cũ
+            selected_quote_id = st.selectbox("Chọn báo giá để tải lại:", [""] + list(df_search['history_id'].unique()))
+            if st.button("♻️ TẢI LẠI BÁO GIÁ NÀY"):
+                if selected_quote_id:
+                    # Lấy data của báo giá đó
+                    df_selected = shared_history_df[shared_history_df['history_id'] == selected_quote_id]
+                    if not df_selected.empty:
+                        # Lấy tham số từ dòng đầu tiên
+                        first_row = df_selected.iloc[0]
+                        st.session_state.pct_end = str(first_row.get('pct_end','0'))
+                        st.session_state.pct_buy = str(first_row.get('pct_buy','0'))
+                        st.session_state.pct_tax = str(first_row.get('pct_tax','0'))
+                        st.session_state.pct_vat = str(first_row.get('pct_vat','0'))
+                        st.session_state.pct_pay = str(first_row.get('pct_pay','0'))
+                        st.session_state.pct_mgmt = str(first_row.get('pct_mgmt','0'))
+                        st.session_state.pct_trans = str(first_row.get('pct_trans','0'))
+                        
+                        # Load item vào bảng
+                        st.session_state.current_quote_df = df_selected[QUOTE_COLS].copy()
+                        st.success("Đã tải lại toàn bộ thông tin báo giá và tham số!")
+                        st.rerun()
 
 # --- TAB 4: PO ---
 with tab4:
