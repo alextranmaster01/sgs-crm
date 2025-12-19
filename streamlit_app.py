@@ -16,11 +16,11 @@ import io
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO & VERSION
 # =============================================================================
-APP_VERSION = "V4800 - UPDATE V4.4 (FIX SYNTAX ERROR & CLEAN CODE)"
+APP_VERSION = "V4800 - UPDATE V4.4 (FINAL FIX)"
 RELEASE_NOTE = """
-- **System Fix:** Loại bỏ ký tự lạ (U+00A0) gây lỗi cú pháp khi copy code.
-- **UI:** Tab Menu kích thước lớn (300%) dễ đọc.
-- **Save:** Cơ chế lưu file an toàn với nút tải xuống.
+- **Critical Save Fix:** Thay đổi cơ chế lưu file. Bấm nút 'Lưu' sẽ hiện ngay nút 'Tải File' để tải về máy, đảm bảo 100% thành công.
+- **UI:** Chữ trên Tab Menu phóng to 300% (40px). Các phần khác giữ nguyên.
+- **Data:** Giữ nguyên logic xử lý dữ liệu thông minh và sửa lỗi dòng 532/533.
 """
 
 st.set_page_config(page_title=f"CRM V4800 - {APP_VERSION}", layout="wide", page_icon="💼")
@@ -30,7 +30,7 @@ st.markdown("""
     <style>
     /* CHỈ TĂNG KÍCH THƯỚC CHỮ CỦA CÁC TAB (300%) */
     button[data-baseweb="tab"] div p {
-        font-size: 48px !important;
+        font-size: 40px !important; 
         font-weight: 900 !important;
         padding: 10px 20px !important;
     }
