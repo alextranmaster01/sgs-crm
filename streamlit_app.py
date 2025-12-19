@@ -14,11 +14,11 @@ from copy import copy
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO & VERSION
 # =============================================================================
-APP_VERSION = "V4800 - UPDATE V3.4 (FIX LOOKUP LOGIC)"
+APP_VERSION = "V4800 - UPDATE V3.5 (FIX DUPLICATE & 3D UI)"
 RELEASE_NOTE = """
-- **Critical Fix:** Cải thiện thuật toán đối chiếu mã hàng (Lookup). Hệ thống sẽ tự động loại bỏ ký tự đặc biệt để khớp mã giữa RFQ và Database NCC chính xác hơn.
-- **UI:** Dashboard 3D Cards.
-- **Data:** Xử lý triệt để Item 532/533 hiển thị đúng giá mua.
+- **Smart Lookup:** Khi import RFQ, nếu Master Data có nhiều dòng trùng mã, hệ thống sẽ tự động chọn dòng có Giá Mua cao nhất (Tránh lấy nhầm dòng giá 0).
+- **Data Core:** Regex xử lý số liệu mạnh mẽ (Hỗ trợ 1152RMB, 1800-2200).
+- **UI:** Dashboard 3D Gradient Cards.
 """
 
 st.set_page_config(page_title=f"CRM V4800 - {APP_VERSION}", layout="wide", page_icon="💼")
@@ -76,8 +76,8 @@ st.markdown("""
     }
     
     /* MÀU SẮC 3D GRADIENT CHO TỪNG LOẠI */
-    .bg-sales { background: linear-gradient(135deg, #00b09b 0%, #96c93d 100%); } /* Doanh thu: Xanh lá tươi */
-    .bg-cost { background: linear-gradient(135deg, #ff5f6d 0%, #ffc371 100%); } /* Giá trị mua: Cam đỏ */
+    .bg-rev { background: linear-gradient(135deg, #00b09b 0%, #96c93d 100%); } /* Doanh thu: Xanh lá tươi */
+    .bg-buy { background: linear-gradient(135deg, #ff5f6d 0%, #ffc371 100%); } /* Giá trị mua: Cam đỏ */
     .bg-profit { background: linear-gradient(135deg, #f83600 0%, #f9d423 100%); } /* Lợi nhuận: Vàng cam đậm */
     .bg-ncc { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); } /* Đơn NCC: Tím xanh */
     .bg-recv { background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%); } /* PO Nhận: Xanh ngọc */
@@ -601,11 +601,23 @@ with tab3:
                         if c_raw:
                             found_code = purchases_df[purchases_df["_clean_code"] == clean_c]
                             if not found_code.empty:
+                                # --- FIX: Sort by price to get the best match (avoid 0 price duplicates) ---
+                                # Helper to get float value for sorting
+                                def get_price_val(row): return to_float(row["buying_price_rmb"])
+                                
+                                # Sort descending by price
+                                found_code = found_code.sort_values(by="buying_price_rmb", key=lambda x: x.apply(to_float), ascending=False)
+                                
                                 if s_raw:
                                     found_specs = found_code[found_code["_clean_specs"] == clean_s]
-                                    # Lấy dòng đầu tiên tìm thấy
-                                    target_row = found_specs.iloc[0] if not found_specs.empty else found_code.iloc[0]
-                                else: target_row = found_code.iloc[0]
+                                    if not found_specs.empty:
+                                         # Sort specs matches too
+                                         found_specs = found_specs.sort_values(by="buying_price_rmb", key=lambda x: x.apply(to_float), ascending=False)
+                                         target_row = found_specs.iloc[0]
+                                    else:
+                                         target_row = found_code.iloc[0]
+                                else:
+                                    target_row = found_code.iloc[0]
                         
                         it = {k:"0" if "price" in k or "val" in k or "fee" in k else "" for k in QUOTE_KH_COLUMNS}
                         it.update({
