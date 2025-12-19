@@ -12,15 +12,16 @@ import subprocess
 import unicodedata
 from copy import copy
 import io
+import time
 
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO & VERSION
 # =============================================================================
-APP_VERSION = "V4800 - UPDATE V5.1 (FIX IMAGE DISPLAY)"
+APP_VERSION = "V4800 - UPDATE V5.2 (AUTO EXTRACT EXCEL IMAGES)"
 RELEASE_NOTE = """
-- **Image Fix:** Sửa lỗi không hiển thị ảnh sản phẩm. Bổ sung tính năng upload và cập nhật ảnh thủ công trực tiếp trên giao diện.
-- **UI:** Tab Menu kích thước lớn (300%) dễ thao tác.
-- **System:** Giữ nguyên toàn bộ logic tính toán và lưu trữ an toàn.
+- **Excel Image Import:** Tự động trích xuất hình ảnh từ file Excel khi import vào Báo giá NCC.
+- **Auto Save:** Ảnh trích xuất được tự động lưu vào Google Drive (nếu chạy Colab) hoặc ổ cứng máy chủ.
+- **UI:** Giữ nguyên giao diện Tab lớn 300%.
 """
 
 st.set_page_config(page_title=f"CRM V4800 - {APP_VERSION}", layout="wide", page_icon="💼")
@@ -96,7 +97,6 @@ except ImportError:
     st.stop()
 
 # --- CƠ CHẾ FILELOCK NỘI BỘ ---
-import time
 class SimpleFileLock:
     def __init__(self, lock_file, timeout=10):
         self.lock_file = lock_file
@@ -314,7 +314,6 @@ suppliers_df = load_csv(SUPPLIERS_CSV, MASTER_COLUMNS)
 purchases_df = load_csv(PURCHASES_CSV, PURCHASE_COLUMNS)
 shared_history_df = load_csv(SHARED_HISTORY_CSV, SHARED_HISTORY_COLS)
 sales_history_df = load_csv(SALES_HISTORY_CSV, HISTORY_COLS)
-
 tracking_df = load_csv(TRACKING_CSV, TRACKING_COLS)
 payment_df = load_csv(PAYMENT_CSV, PAYMENT_COLS)
 paid_history_df = load_csv(PAID_HISTORY_CSV, PAYMENT_COLS)
@@ -375,16 +374,11 @@ with tab1:
     
     st.divider()
 
-    # Calculation Logic Corrected for Profit
-    # Profit = Total PO Customer (Revenue) - (Total PO NCC (Cost) + Other Costs)
-    # Other Costs = GAP*0.6 + EndUser + Buyer + Tax + VAT + Trans + Mgmt (from shared history)
-
+    # Calculation Logic
     total_revenue = db_customer_orders['total_price'].apply(to_float).sum()
     total_po_ncc_cost = db_supplier_orders['total_vnd'].apply(to_float).sum()
     
-    # Calculate Other Costs from Shared History based on PO Match
     total_other_costs = 0.0
-    
     if not sales_history_df.empty:
         for _, r in sales_history_df.iterrows():
             try:
@@ -399,7 +393,6 @@ with tab1:
                 total_other_costs += (gap_cost + end_user + buyer + tax + vat + trans + mgmt)
             except: pass
 
-    # Final Profit Formula
     total_profit = total_revenue - (total_po_ncc_cost + total_other_costs)
     
     po_ordered_ncc = len(tracking_df[tracking_df['order_type'] == 'NCC'])
@@ -436,39 +429,6 @@ with tab1:
     
     st.divider()
     
-    # Row 2: PO Metrics
-    c4, c5, c6, c7 = st.columns(4)
-    with c4:
-        st.markdown(f"""
-        <div class="card-3d bg-ncc">
-            <div class="card-title">ĐƠN HÀNG ĐÃ ĐẶT NCC</div>
-            <div class="card-value">{po_ordered_ncc}</div>
-        </div>
-        """, unsafe_allow_html=True)
-    with c5:
-        st.markdown(f"""
-        <div class="card-3d bg-recv">
-            <div class="card-title">TỔNG PO ĐÃ NHẬN</div>
-            <div class="card-value">{po_total_recv}</div>
-        </div>
-        """, unsafe_allow_html=True)
-    with c6:
-        st.markdown(f"""
-        <div class="card-3d bg-del">
-            <div class="card-title">TỔNG PO ĐÃ GIAO</div>
-            <div class="card-value">{po_delivered}</div>
-        </div>
-        """, unsafe_allow_html=True)
-    with c7:
-        st.markdown(f"""
-        <div class="card-3d bg-pend">
-            <div class="card-title">TỔNG PO CHƯA GIAO</div>
-            <div class="card-value">{po_pending}</div>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    st.divider()
-    
     c_top1, c_top2 = st.columns(2)
     with c_top1:
         st.subheader("🥇 Top Khách Hàng (Doanh Số)")
@@ -496,41 +456,79 @@ with tab2:
         uploaded_pur = st.file_uploader("Import Excel Purchases (Kèm ảnh)", type=["xlsx"])
         if uploaded_pur and st.button("Thực hiện Import"):
             try:
-                wb = load_workbook(uploaded_pur, data_only=False); ws = wb.active
-                img_map = {}
-                for img in getattr(ws, '_images', []):
-                    r_idx = img.anchor._from.row + 1; c_idx = img.anchor._from.col
-                    if c_idx == 12: 
-                        img_name = f"img_r{r_idx}_{datetime.now().strftime('%f')}.png"
-                        img_path = os.path.join(IMG_FOLDER, img_name)
-                        with open(img_path, "wb") as f: f.write(img._data())
-                        img_map[r_idx] = img_path.replace("\\", "/")
+                # 1. LOAD WORKBOOK ĐỂ LẤY ẢNH
+                wb = load_workbook(uploaded_pur, data_only=False)
+                ws = wb.active
                 
+                # Logic lấy ảnh từ openpyxl
+                # Cấu trúc: { row_index (1-based): path_to_saved_image }
+                image_map = {}
+                
+                # Duyệt qua tất cả các ảnh trong sheet
+                for img in getattr(ws, '_images', []):
+                    # Lấy vị trí neo của ảnh (row, col) - lưu ý openpyxl dùng 0-indexed cho row/col trong anchor
+                    # Nhưng cell row trong sheet lại là 1-indexed.
+                    # anchor._from.row là 0-indexed -> +1 để ra dòng Excel
+                    r_idx = img.anchor._from.row + 1 
+                    c_idx = img.anchor._from.col # 0-indexed column
+                    
+                    # Giả sử ảnh nằm ở cột L (cột 12 trong Excel -> index 11) hoặc M (13 -> index 12)
+                    # Code cũ check c_idx == 12 (tức là cột M).
+                    # Bạn có thể bỏ check c_idx nếu muốn lấy ảnh ở bất kỳ cột nào trong dòng đó
+                    
+                    # Tạo tên file ảnh duy nhất
+                    img_name = f"img_row{r_idx}_{datetime.now().strftime('%Y%m%d%H%M%S%f')}.png"
+                    img_path = os.path.join(IMG_FOLDER, img_name)
+                    
+                    # Lưu ảnh ra đĩa (Google Drive)
+                    with open(img_path, "wb") as f:
+                        f.write(img._data())
+                    
+                    # Lưu vào map: dòng -> đường dẫn ảnh
+                    image_map[r_idx] = img_path
+
+                # 2. LOAD DATA BẰNG PANDAS
+                # Reset pointer file để pandas đọc lại từ đầu
+                uploaded_pur.seek(0)
                 df_ex = pd.read_excel(uploaded_pur, header=0, dtype=str).fillna("")
+                
                 rows = []
+                # Duyệt qua từng dòng dữ liệu của Pandas
+                # Pandas index bắt đầu từ 0. Header là dòng 1 Excel. Dữ liệu bắt đầu từ dòng 2 Excel.
+                # -> Pandas index 0 tương ứng dòng 2 Excel.
                 for i, r in df_ex.iterrows():
-                    excel_row_idx = i + 2
-                    im_path = img_map.get(excel_row_idx, "")
+                    excel_row_idx = i + 2  # Mapping logic quan trọng
+                    
+                    # Lấy đường dẫn ảnh từ map nếu có
+                    im_path = image_map.get(excel_row_idx, "")
+                    
                     item = {
-                        "no": safe_str(r.iloc[0]), "item_code": safe_str(r.iloc[1]), 
-                        "item_name": safe_str(r.iloc[2]), "specs": safe_str(r.iloc[3]),
+                        "no": safe_str(r.iloc[0]), 
+                        "item_code": safe_str(r.iloc[1]), 
+                        "item_name": safe_str(r.iloc[2]), 
+                        "specs": safe_str(r.iloc[3]),
                         "qty": fmt_num(to_float(r.iloc[4])), 
                         "buying_price_rmb": fmt_num(to_float(r.iloc[5])), 
                         "total_buying_price_rmb": fmt_num(to_float(r.iloc[6])), 
                         "exchange_rate": fmt_num(to_float(r.iloc[7])), 
                         "buying_price_vnd": fmt_num(to_float(r.iloc[8])), 
                         "total_buying_price_vnd": fmt_num(to_float(r.iloc[9])), 
-                        "leadtime": safe_str(r.iloc[10]), "supplier_name": safe_str(r.iloc[11]), 
-                        "image_path": im_path,
+                        "leadtime": safe_str(r.iloc[10]), 
+                        "supplier_name": safe_str(r.iloc[11]), 
+                        "image_path": im_path, # Gán đường dẫn ảnh vừa trích xuất
                         "type": safe_str(r.iloc[13]) if len(r) > 13 else "",
                         "nuoc": safe_str(r.iloc[14]) if len(r) > 14 else ""
                     }
                     if item["item_code"] or item["item_name"]: rows.append(item)
+                
+                # Lưu lại vào DB
                 purchases_df = pd.DataFrame(rows)
                 save_csv(PURCHASES_CSV, purchases_df)
-                st.success(f"Đã import {len(rows)} dòng và lưu ảnh!")
+                st.success(f"Đã import {len(rows)} dòng và trích xuất {len(image_map)} ảnh thành công!")
                 st.rerun()
-            except Exception as e: st.error(f"Lỗi: {e}")
+                
+            except Exception as e: 
+                st.error(f"Lỗi Import: {e}")
             
         # Thêm nút Upload Ảnh thủ công cho NCC
         st.markdown("---")
@@ -886,7 +884,7 @@ with tab3:
             df_search = shared_history_df.copy()
             
             if search_h:
-                mask = df_search.apply(lambda x: search_h.lower() in str(x['item_code']).lower() or 
+                mask = df_search.apply(lambda x: search_h.lower() in str(x['item_code']).lower() or 
                                                  search_h.lower() in str(x['item_name']).lower() or
                                                  search_h.lower() in str(x['customer']).lower() or
                                                  search_h.lower() in str(x['quote_no']).lower(), axis=1)
