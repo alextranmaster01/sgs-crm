@@ -14,12 +14,12 @@ import mimetypes
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO & VERSION
 # =============================================================================
-APP_VERSION = "V4800 - HYBRID CLOUD (SUPABASE DB + GOOGLE DRIVE STORAGE)"
+APP_VERSION = "V4800 - HYBRID FIXED (SUPABASE DB + GOOGLE DRIVE SHARED)"
 RELEASE_NOTE = """
-- **Database:** Sử dụng Supabase (PostgreSQL) để lưu dữ liệu bảng.
-- **File Storage:** Sử dụng Google Drive API để lưu ảnh, PO, chứng từ.
-- **Drive Logic:** Tự động tạo folder theo tên (PO_NCC, PO_KHACH,...) và set quyền 'anyone reader' để hiển thị ảnh trên Web.
-- **Profit Fix:** Giữ nguyên công thức tính lợi nhuận chuẩn.
+- **Database:** Supabase (PostgreSQL).
+- **Storage:** Google Drive (Upload vào Shared Folder để tránh lỗi Quota).
+- **Fix:** Đã cập nhật logic upload file vào thư mục gốc được chỉ định (root_folder_id).
+- **Profit:** Giữ nguyên công thức tính lợi nhuận chuẩn.
 """
 
 st.set_page_config(page_title=f"CRM V4800 - {APP_VERSION}", layout="wide", page_icon="☁️")
@@ -111,7 +111,14 @@ except Exception as e:
     st.error("⚠️ Chưa cấu hình Secrets cho Supabase. Vui lòng thêm vào `.streamlit/secrets.toml`")
     st.stop()
 
-# --- KẾT NỐI GOOGLE DRIVE ---
+# --- CẤU HÌNH GOOGLE DRIVE ---
+try:
+    # Lấy thông tin Root Folder ID (Thư mục được chia sẻ cho Service Account)
+    ROOT_FOLDER_ID = st.secrets["gcp_service_account"]["root_folder_id"]
+except:
+    st.error("⚠️ Thiếu 'root_folder_id' trong secrets.toml. Vui lòng tạo folder trên Drive, share cho email Service Account và lấy ID.")
+    st.stop()
+
 SCOPES = ['https://www.googleapis.com/auth/drive']
 drive_service = None
 
@@ -121,14 +128,16 @@ def get_drive_service():
         return drive_service
     
     try:
-        # Lấy thông tin service account từ secrets
         service_account_info = st.secrets["gcp_service_account"]
+        # Loại bỏ root_folder_id khỏi dict info nếu nó gây lỗi cho thư viện google
+        sa_info_clean = {k:v for k,v in service_account_info.items() if k != 'root_folder_id'}
+        
         creds = service_account.Credentials.from_service_account_info(
-            service_account_info, scopes=SCOPES)
+            sa_info_clean, scopes=SCOPES)
         drive_service = build('drive', 'v3', credentials=creds)
         return drive_service
     except Exception as e:
-        st.error(f"⚠️ Lỗi kết nối Google Drive: {e}. Kiểm tra lại secrets [gcp_service_account]")
+        st.error(f"⚠️ Lỗi kết nối Google Drive: {e}")
         return None
 
 warnings.filterwarnings("ignore")
@@ -144,8 +153,7 @@ TBL_TRACKING = "crm_tracking"
 TBL_PAYMENTS = "crm_payments"
 TBL_PAID_HISTORY = "crm_paid_history"
 
-TEMPLATE_FILE = "AAA-QUOTATION.xlsx" # File template vẫn dùng local cache trong session
-
+TEMPLATE_FILE = "AAA-QUOTATION.xlsx" 
 ADMIN_PASSWORD = "admin"
 
 # --- GLOBAL HELPER FUNCTIONS ---
@@ -244,15 +252,18 @@ def save_data(table_name, df, key_col=None):
     except Exception as e:
         st.error(f"Lỗi lưu Supabase {table_name}: {e}")
 
-# --- GOOGLE DRIVE HELPER FUNCTIONS ---
+# --- GOOGLE DRIVE HELPER FUNCTIONS (FIXED LOGIC) ---
 
-def get_or_create_folder(folder_name):
-    """Tìm hoặc tạo folder trên Drive và trả về ID"""
+def get_or_create_subfolder(folder_name, parent_id):
+    """
+    Tìm hoặc tạo folder con TRONG folder cha (parent_id)
+    Để đảm bảo file được tạo trong thư mục của User (không phải root của Service Account)
+    """
     service = get_drive_service()
     if not service: return None
 
     # Tìm folder
-    query = f"mimeType='application/vnd.google-apps.folder' and name='{folder_name}' and trashed=false"
+    query = f"'{parent_id}' in parents and mimeType='application/vnd.google-apps.folder' and name='{folder_name}' and trashed=false"
     results = service.files().list(q=query, fields="files(id, name)").execute()
     files = results.get('files', [])
 
@@ -262,14 +273,12 @@ def get_or_create_folder(folder_name):
         # Tạo mới
         file_metadata = {
             'name': folder_name,
-            'mimeType': 'application/vnd.google-apps.folder'
+            'mimeType': 'application/vnd.google-apps.folder',
+            'parents': [parent_id] # Quan trọng: Chỉ định cha
         }
         file = service.files().create(body=file_metadata, fields='id').execute()
         
-        # Set permission public reader (để Streamlit có thể hiển thị ảnh)
-        # Lưu ý: Điều này làm folder công khai với ai có link. 
-        # Nếu muốn bảo mật hơn, cần dùng logic khác phức tạp hơn.
-        # Ở đây dùng 'anyone' 'reader' để đơn giản hóa việc hiển thị ảnh.
+        # Set permission public reader
         try:
             service.permissions().create(
                 fileId=file.get('id'),
@@ -279,35 +288,40 @@ def get_or_create_folder(folder_name):
         
         return file.get('id')
 
-def upload_file_to_drive(file_obj, folder_name, file_name):
-    """Upload file lên Google Drive và trả về Direct Link"""
+def upload_file_to_drive(file_obj, sub_folder_name, file_name):
+    """
+    Upload file vào sub_folder nằm trong ROOT_FOLDER_ID
+    """
     service = get_drive_service()
     if not service: return ""
     
     try:
-        folder_id = get_or_create_folder(folder_name)
+        # 1. Lấy ID của folder đích (VD: CRM_PO_FILES nằm trong Root Share)
+        target_folder_id = get_or_create_subfolder(sub_folder_name, ROOT_FOLDER_ID)
         
-        # Tạo metadata
+        # 2. Upload file vào folder đó
         file_metadata = {
             'name': file_name,
-            'parents': [folder_id]
+            'parents': [target_folder_id]
         }
         
-        # Xác định mime type
         mime_type, _ = mimetypes.guess_type(file_name)
         if mime_type is None: mime_type = 'application/octet-stream'
+        
+        # Reset pointer
+        file_obj.seek(0)
         
         media = MediaIoBaseUpload(file_obj, mimetype=mime_type, resumable=True)
         
         file = service.files().create(
             body=file_metadata, 
             media_body=media, 
-            fields='id, webContentLink, webViewLink'
+            fields='id'
         ).execute()
         
         file_id = file.get('id')
         
-        # Cấp quyền public read cho file này (để hiện ảnh)
+        # 3. Cấp quyền xem
         try:
             service.permissions().create(
                 fileId=file_id,
@@ -315,15 +329,15 @@ def upload_file_to_drive(file_obj, folder_name, file_name):
             ).execute()
         except: pass
         
-        # Trick: Tạo link xem trực tiếp cho Image
-        # webContentLink thường force download. 
-        # Với ảnh, ta dùng: https://drive.google.com/uc?export=view&id={file_id}
+        # Trả về link view
         direct_link = f"https://drive.google.com/uc?export=view&id={file_id}"
-        
         return direct_link
         
     except Exception as e:
-        st.error(f"Lỗi upload Drive: {e}")
+        if "storageQuotaExceeded" in str(e):
+             st.error("❌ Lỗi Quota! Hãy chắc chắn bạn đã SHARE thư mục gốc cho email Service Account với quyền Editor.")
+        else:
+             st.error(f"Lỗi upload Drive: {e}")
         return ""
 
 def safe_write_merged(ws, row, col, value):
@@ -535,14 +549,14 @@ with tab2:
         if uploaded_pur and st.button("Thực hiện Import"):
             try:
                 wb = load_workbook(uploaded_pur, data_only=False); ws = wb.active
-                # Xử lý ảnh: Upload lên Google Drive
+                # Xử lý ảnh: Upload lên Google Drive (Folder con của Root Share)
                 img_map = {}
                 for img in getattr(ws, '_images', []):
                     r_idx = img.anchor._from.row + 1; c_idx = img.anchor._from.col
                     if c_idx == 12: # Cột M (index 12)
                         img_data = io.BytesIO(img._data())
                         img_name = f"import_r{r_idx}_{datetime.now().strftime('%f')}.png"
-                        # Upload to Drive Folder 'PURCHASE_IMAGES'
+                        # Upload to Drive Folder 'CRM_PURCHASE_IMAGES'
                         img_url = upload_file_to_drive(img_data, "CRM_PURCHASE_IMAGES", img_name)
                         img_map[r_idx] = img_url
                 
@@ -950,7 +964,7 @@ with tab4:
         
         uploaded_files = st.file_uploader("Upload File PO (Nhiều file)", type=["xlsx", "pdf", "png", "jpg", "jpeg"], accept_multiple_files=True)
         
-        # XỬ LÝ UPLOAD PO LÊN DRIVE
+        # XỬ LÝ UPLOAD PO LÊN DRIVE (SHARED FOLDER)
         uploaded_urls = []
         if uploaded_files:
             for f in uploaded_files:
@@ -1022,7 +1036,7 @@ with tab5:
                      
                      for f in uploaded_proofs:
                          fname = f"proof_{view_id}_{f.name}"
-                         # Upload Drive
+                         # Upload Drive (CRM_PROOF_IMAGES)
                          url = upload_file_to_drive(f, "CRM_PROOF_IMAGES", fname)
                          img_list.append(url)
                      
