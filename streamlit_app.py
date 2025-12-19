@@ -11,29 +11,15 @@ import platform
 import subprocess
 from copy import copy
 
-# --- THƯ VIỆN XỬ LÝ EXCEL & ĐỒ HỌA ---
-try:
-    from openpyxl import load_workbook, Workbook
-    from openpyxl.styles import Alignment, Border, Side, Font, PatternFill
-    from openpyxl.drawing.image import Image as OpenpyxlImage
-    from openpyxl.utils import range_boundaries
-    import matplotlib.pyplot as plt
-except ImportError:
-    st.error("Thiếu thư viện. Vui lòng chạy: pip install openpyxl matplotlib")
-
-# Tắt cảnh báo
-warnings.filterwarnings("ignore")
-
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO & VERSION
 # =============================================================================
-APP_VERSION = "V4800 - UPDATE V2.8 (FIXED IMPORT & UI)"
+APP_VERSION = "V4800 - UPDATE V3.0 (CLOUD READY)"
 RELEASE_NOTE = """
-- **Core Fix:** Thay thế use_container_width='True' bằng width='stretch' (Fix Warning).
-- **Báo giá Khách:** - Import đọc cả giá/NCC từ Excel nếu có.
-    - Ưu tiên data Excel > Database.
-    - Fix lỗi hiển thị 'None' cho các ô trống.
-- **Dashboard:** Hiển thị đúng KPI và Tổng tiền mua.
+- **System:** Tích hợp nút tạo requirements.txt tự động cho Deploy.
+- **UI:** Chuẩn hóa use_container_width=True cho toàn bộ bảng.
+- **Fix:** Xử lý lỗi tính ngày công nợ khi Payment Term không phải số.
+- **Data:** Tối ưu hóa luồng Import dữ liệu Purchase & Customer.
 """
 
 st.set_page_config(page_title=f"CRM V4800 - {APP_VERSION}", layout="wide", page_icon="💼")
@@ -43,27 +29,44 @@ st.markdown("""
     <style>
     /* Tăng kích thước Tab */
     button[data-baseweb="tab"] {
-        font-size: 24px !important;
-        padding: 20px !important;
+        font-size: 20px !important;
+        padding: 15px !important;
         font-weight: bold !important;
     }
     /* Tăng kích thước tiêu đề */
-    h1 { font-size: 40px !important; }
-    h2 { font-size: 36px !important; }
-    h3 { font-size: 30px !important; }
+    h1 { font-size: 32px !important; }
+    h2 { font-size: 28px !important; }
+    h3 { font-size: 24px !important; }
     /* Tăng kích thước chữ chung */
     p, div, label, input, .stTextInput > div > div > input, .stSelectbox > div > div > div {
-        font-size: 20px !important;
+        font-size: 16px !important;
     }
-    /* Tăng kích thước bảng */
-    .stDataFrame { font-size: 20px !important; }
-    /* Tăng kích thước nút bấm */
-    .stButton > button {
-        font-size: 20px !important;
-        padding: 10px 24px !important;
-    }
+    /* Cảnh báo lỗi nổi bật */
+    .stAlert { font-weight: bold; }
     </style>
     """, unsafe_allow_html=True)
+
+# --- THƯ VIỆN XỬ LÝ EXCEL & ĐỒ HỌA ---
+try:
+    from openpyxl import load_workbook, Workbook
+    from openpyxl.styles import Alignment, Border, Side, Font, PatternFill
+    from openpyxl.drawing.image import Image as OpenpyxlImage
+    from openpyxl.utils import range_boundaries
+    import matplotlib.pyplot as plt
+except ImportError:
+    st.error("""
+        ### ⚠️ Thiếu thư viện hỗ trợ
+        Hệ thống phát hiện thiếu thư viện: `openpyxl`, `matplotlib`.
+        
+        Nếu bạn đang chạy trên máy tính (Local), hãy mở Terminal và chạy lệnh:
+        `pip install openpyxl matplotlib`
+        
+        Nếu bạn đang chạy trên Cloud, hãy dùng nút **"Tạo file Requirements"** trong menu Admin bên trái.
+    """)
+    st.stop()
+
+# Tắt cảnh báo
+warnings.filterwarnings("ignore")
 
 # --- FILE PATHS ---
 BASE_DIR = os.getcwd()
@@ -77,6 +80,7 @@ PAID_HISTORY_CSV = "crm_paid_history.csv"
 DB_SUPPLIER_ORDERS = "db_supplier_orders.csv"
 DB_CUSTOMER_ORDERS = "db_customer_orders.csv"
 TEMPLATE_FILE = "AAA-QUOTATION.xlsx"
+REQUIREMENTS_FILE = "requirements.txt"
 
 # Tạo các thư mục cần thiết
 FOLDERS = [
@@ -177,7 +181,8 @@ def open_folder(path):
         if platform.system() == "Windows": os.startfile(path)
         elif platform.system() == "Darwin": subprocess.Popen(["open", path])
         else: subprocess.Popen(["xdg-open", path])
-    except: st.warning("Không thể mở folder tự động.")
+    except: pass 
+    # st.warning("Không thể mở folder tự động trên Cloud.")
 
 def safe_write_merged(ws, row, col, value):
     try:
@@ -241,6 +246,18 @@ with st.sidebar.expander("📝 Release Notes"):
 admin_pwd = st.sidebar.text_input("Admin Password", type="password")
 is_admin = (admin_pwd == ADMIN_PASSWORD)
 
+if is_admin:
+    st.sidebar.divider()
+    st.sidebar.write("🔧 **Admin Tools**")
+    if st.sidebar.button("📦 Tạo file Requirements.txt"):
+        req_content = "streamlit\npandas\nopenpyxl\nmatplotlib\nplotly"
+        try:
+            with open(REQUIREMENTS_FILE, "w") as f:
+                f.write(req_content)
+            st.sidebar.success(f"Đã tạo {REQUIREMENTS_FILE}! Bạn có thể deploy ngay.")
+        except Exception as e:
+            st.sidebar.error(f"Lỗi: {e}")
+
 st.sidebar.divider()
 st.sidebar.info("Hệ thống quản lý: Báo giá - Đơn hàng - Tracking - Doanh số")
 
@@ -275,8 +292,6 @@ with tab1:
     rev = db_customer_orders['total_price'].apply(to_float).sum()
     profit = sales_history_df['profit'].apply(to_float).sum()
     
-    # Calculate Total Cost (Formula: (Gap*0.6) + End + Buyer + Tax + VAT + Trans + Mgmt)
-    # Exclude Buying Price from this sum as per request
     cost_cols = ["gap", "end_user", "buyer", "tax", "vat", "trans", "mgmt"]
     for c in cost_cols:
          if c not in sales_history_df.columns: sales_history_df[c] = "0"
@@ -325,7 +340,7 @@ with tab1:
             top_cust = db_customer_orders.copy()
             top_cust['val'] = top_cust['total_price'].apply(to_float)
             top_cust_g = top_cust.groupby('customer')['val'].sum().sort_values(ascending=False).head(10)
-            st.dataframe(top_cust_g.apply(fmt_num), width='stretch')
+            st.dataframe(top_cust_g.apply(fmt_num), use_container_width=True)
             
     with c_top2:
         st.subheader("🏭 Top Nhà Cung Cấp (Mua Nhiều)")
@@ -335,7 +350,7 @@ with tab1:
             top_supp_g = top_supp.groupby('supplier')['val'].sum().sort_values(ascending=False).head(10)
             df_top_supp = top_supp_g.to_frame(name="Tổng tiền mua (VND)")
             df_top_supp["Tổng tiền mua (VND)"] = df_top_supp["Tổng tiền mua (VND)"].apply(fmt_num)
-            st.dataframe(df_top_supp, width='stretch')
+            st.dataframe(df_top_supp, use_container_width=True)
 
 # --- TAB 2: BÁO GIÁ NCC ---
 with tab2:
@@ -388,11 +403,11 @@ with tab2:
         df_show = purchases_df.copy()
         if search_term:
             mask = df_show.apply(lambda x: search_term.lower() in str(x['item_code']).lower() or 
-                                           search_term.lower() in str(x['item_name']).lower() or 
-                                           search_term.lower() in str(x['specs']).lower(), axis=1)
+                                             search_term.lower() in str(x['item_name']).lower() or 
+                                             search_term.lower() in str(x['specs']).lower(), axis=1)
             df_show = df_show[mask]
         
-        st.dataframe(df_show, column_config={"image_path": st.column_config.ImageColumn("Image", help="Ảnh")}, width='stretch', hide_index=True)
+        st.dataframe(df_show, column_config={"image_path": st.column_config.ImageColumn("Image", help="Ảnh")}, use_container_width=True, hide_index=True)
     else: st.info("Chưa có dữ liệu.")
 
     if is_admin and st.button("Xóa Database Mua Hàng"):
@@ -539,7 +554,7 @@ with tab3:
         edited_df = st.data_editor(
             st.session_state.current_quote_df,
             key="quote_editor",
-            width='stretch',
+            use_container_width=True,
             num_rows="dynamic",
             column_config={
                 "image_path": st.column_config.ImageColumn("Img"),
@@ -610,7 +625,7 @@ with tab3:
                 except: return ''
             cols_review = ["item_code", "item_name", "qty", "unit_price", "total_price_vnd", "profit_vnd", "profit_pct"]
             df_review = st.session_state.current_quote_df[cols_review].copy()
-            st.dataframe(df_review.style.applymap(highlight_low_profit, subset=['profit_pct']), width='stretch')
+            st.dataframe(df_review.style.applymap(highlight_low_profit, subset=['profit_pct']), use_container_width=True)
             
             low_profits = []
             for idx, r in df_review.iterrows():
@@ -710,7 +725,7 @@ with tab3:
                          u = to_float(qt["total_revenue"])/to_float(qt["qty"]) if to_float(qt["qty"]) > 0 else 0
                          results.append({"Status":"Đã báo giá", "Date":qt["date"], "Item":qt["item_code"], "Price":fmt_num(u), "Ref PO":qt["quote_no"]}); found = True
                 if not found: results.append({"Status":"Chưa có", "Date":"", "Item":c_raw, "Price":"", "Ref PO":""})
-            st.dataframe(pd.DataFrame(results))
+            st.dataframe(pd.DataFrame(results), use_container_width=True)
 
 # --- TAB 4: QUẢN LÝ PO ---
 with tab4:
@@ -741,7 +756,7 @@ with tab4:
             st.session_state.temp_supp_order_df = st.session_state.temp_supp_order_df[~st.session_state.temp_supp_order_df["Delete"]]
             st.rerun()
 
-        edited_ncc = st.data_editor(st.session_state.temp_supp_order_df, num_rows="dynamic", key="ed_ncc")
+        edited_ncc = st.data_editor(st.session_state.temp_supp_order_df, num_rows="dynamic", key="ed_ncc", use_container_width=True)
         if not edited_ncc.equals(st.session_state.temp_supp_order_df): st.session_state.temp_supp_order_df = edited_ncc; st.rerun()
 
         if st.button("🚀 XÁC NHẬN PO NCC"):
@@ -808,7 +823,7 @@ with tab4:
             st.session_state.temp_cust_order_df = st.session_state.temp_cust_order_df[~st.session_state.temp_cust_order_df["Delete"]]
             st.rerun()
 
-        edited_cust_po = st.data_editor(st.session_state.temp_cust_order_df, num_rows="dynamic", key="ed_cust_po")
+        edited_cust_po = st.data_editor(st.session_state.temp_cust_order_df, num_rows="dynamic", key="ed_cust_po", use_container_width=True)
         if not edited_cust_po.equals(st.session_state.temp_cust_order_df): st.session_state.temp_cust_order_df = edited_cust_po; st.rerun()
 
         if st.button("💾 LƯU PO KHÁCH"):
@@ -846,7 +861,7 @@ with tab5:
              if "Delete" in tracking_df.columns: del tracking_df["Delete"]
              save_csv(TRACKING_CSV, tracking_df); st.rerun()
 
-        edited_track = st.data_editor(tracking_df[tracking_df["finished"]=="0"], num_rows="dynamic", key="ed_track", column_config={"status": st.column_config.SelectboxColumn("Status", options=["Đã đặt hàng", "Đợi hàng từ TQ về VN", "Hàng đã về VN", "Hàng đã nhận ở VP", "Đang đợi hàng về", "Đã giao hàng"], required=True)})
+        edited_track = st.data_editor(tracking_df[tracking_df["finished"]=="0"], num_rows="dynamic", key="ed_track", use_container_width=True, column_config={"status": st.column_config.SelectboxColumn("Status", options=["Đã đặt hàng", "Đợi hàng từ TQ về VN", "Hàng đã về VN", "Hàng đã nhận ở VP", "Đang đợi hàng về", "Đã giao hàng"], required=True)})
 
         if st.button("Cập nhật Tracking"):
             to_keep = edited_track
@@ -858,7 +873,7 @@ with tab5:
                         cust = r["partner"]; term = 30
                         f_cust = customers_df[customers_df["short_name"]==cust]
                         if not f_cust.empty: 
-                            try: term = int(f_cust.iloc[0]["payment_term"])
+                            try: term = int(to_float(f_cust.iloc[0]["payment_term"]))
                             except: pass
                         due = (datetime.now() + timedelta(days=term)).strftime("%d/%m/%Y")
                         payment_df = pd.concat([payment_df, pd.DataFrame([{"no": len(payment_df)+1, "po_no": r["po_no"], "customer": cust, "invoice_no": "", "status": "Chưa thanh toán", "due_date": due, "paid_date": ""}])], ignore_index=True)
@@ -887,7 +902,7 @@ with tab5:
         if "Delete" not in payment_df.columns: payment_df["Delete"] = False
         
         pending_pay = payment_df[payment_df["status"] != "Đã thanh toán"]
-        edited_pay = st.data_editor(pending_pay, key="ed_pay", num_rows="dynamic", column_config={"invoice_no": st.column_config.TextColumn("Invoice No", width="medium")})
+        edited_pay = st.data_editor(pending_pay, key="ed_pay", num_rows="dynamic", use_container_width=True, column_config={"invoice_no": st.column_config.TextColumn("Invoice No", width="medium")})
         
         if is_admin and st.button("Xóa dòng Payment (Admin)"):
              payment_df = payment_df[~payment_df["Delete"]]
@@ -914,16 +929,15 @@ with tab5:
         if not paid_history_df.empty:
             paid_cust = st.selectbox("Lọc KH", ["All"] + list(paid_history_df["customer"].unique()))
             show = paid_history_df if paid_cust == "All" else paid_history_df[paid_history_df["customer"] == paid_cust]
-            st.dataframe(show, width='stretch')
+            st.dataframe(show, use_container_width=True)
             sp = st.selectbox("Xem chi tiết PO", show["po_no"].unique())
             if sp:
                 dt = db_customer_orders[db_customer_orders["po_number"] == sp]
-                if not dt.empty: st.dataframe(dt[["item_code", "item_name", "specs", "qty", "unit_price", "total_price"]], width='stretch')
+                if not dt.empty: st.dataframe(dt[["item_code", "item_name", "specs", "qty", "unit_price", "total_price"]], use_container_width=True)
         else: st.info("Trống.")
 
 # --- TAB 6: MASTER DATA ---
 with tab6:
-    # Existing Master Data Logic kept intact
     t6_1, t6_2, t6_3 = st.tabs(["KHÁCH HÀNG", "NHÀ CUNG CẤP", "TEMPLATE"])
     with t6_1:
         up_cust_master = st.file_uploader("Upload File Excel Khách Hàng (Ghi đè)", type=["xlsx"], key="cust_imp")
@@ -944,7 +958,7 @@ with tab6:
             save_csv(CUSTOMERS_CSV, customers_df)
             st.rerun()
 
-        edited_cust_df = st.data_editor(customers_df, key="ed_cust", num_rows="dynamic")
+        edited_cust_df = st.data_editor(customers_df, key="ed_cust", num_rows="dynamic", use_container_width=True)
         if st.button("Lưu thay đổi Khách Hàng"):
             if is_admin:
                 save_csv(CUSTOMERS_CSV, edited_cust_df)
@@ -970,7 +984,7 @@ with tab6:
             save_csv(SUPPLIERS_CSV, suppliers_df)
             st.rerun()
 
-        edited_supp_df = st.data_editor(suppliers_df, key="ed_supp", num_rows="dynamic")
+        edited_supp_df = st.data_editor(suppliers_df, key="ed_supp", num_rows="dynamic", use_container_width=True)
         if st.button("Lưu thay đổi NCC"):
             if is_admin:
                 save_csv(SUPPLIERS_CSV, edited_supp_df)
