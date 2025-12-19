@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import os  # <--- ĐÃ THÊM LẠI THƯ VIỆN NÀY ĐỂ SỬA LỖI
 import datetime
 from datetime import datetime, timedelta
 import re
@@ -19,9 +20,9 @@ from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 
 # --- !!! QUAN TRỌNG: ĐIỀN ID THƯ MỤC DRIVE CỦA BẠN VÀO DÒNG DƯỚI !!! ---
 # (Lấy từ link trình duyệt: drive.google.com/drive/folders/CHUỖI_KÝ_TỰ_NÀY)
-DRIVE_FOLDER_ID = "1GLhnSK7Bz7LbTC-Q7aPt_Itmutni5Rqa?hl=vi" 
+DRIVE_FOLDER_ID = "1GLhnSK7Bz7LbTC-Q7aPt_Itmutni5Rqa?hl=vi" # <--- HÃY DÁN LẠI ID CỦA BẠN VÀO ĐÂY
 
-APP_VERSION = "V5.0 - CLOUD ONLINE (MULTI-USER)"
+APP_VERSION = "V5.1 - CLOUD ONLINE (FIXED)"
 SCOPES = ['https://www.googleapis.com/auth/drive']
 
 st.set_page_config(page_title=f"CRM CLOUD", layout="wide", page_icon="☁️")
@@ -55,7 +56,7 @@ def get_drive_service():
             creds = service_account.Credentials.from_service_account_file(
                 'service_account.json', scopes=SCOPES)
         else:
-            st.error("❌ Không tìm thấy cấu hình 'gcp_service_account' trong Secrets!")
+            # Nếu không tìm thấy cả 2, trả về None nhưng không báo lỗi đỏ ngay để tránh spam màn hình
             return None
         
         return build('drive', 'v3', credentials=creds)
@@ -69,10 +70,12 @@ def get_file_id_by_name(filename):
     if not service: return None
     # Tìm file trong folder chỉ định
     query = f"name = '{filename}' and '{DRIVE_FOLDER_ID}' in parents and trashed = false"
-    results = service.files().list(q=query, fields="files(id, name)").execute()
-    items = results.get('files', [])
-    if not items: return None
-    return items[0]['id']
+    try:
+        results = service.files().list(q=query, fields="files(id, name)").execute()
+        items = results.get('files', [])
+        if not items: return None
+        return items[0]['id']
+    except: return None
 
 def load_csv_cloud(filename, cols):
     service = get_drive_service()
@@ -156,9 +159,9 @@ def calc_eta(date_str, lead):
     except: return ""
 
 try: from openpyxl import load_workbook
-except: pass # Đã cài trong requirements
+except: pass 
 
-# --- TÊN FILE DỮ LIỆU (Tự động tạo trên Drive) ---
+# --- TÊN FILE DỮ LIỆU ---
 CUSTOMERS_CSV = "crm_customers.csv"
 SUPPLIERS_CSV = "crm_suppliers.csv"
 PURCHASES_CSV = "crm_purchases.csv"
@@ -394,7 +397,8 @@ with tab4:
     with c1:
         st.subheader("PO NCC")
         po_ncc = st.text_input("Số PO NCC"); supp = st.selectbox("Nhà cung cấp", [""]+suppliers_df["short_name"].tolist())
-        edited_ncc = st.data_editor(st.session_state.temp_supp_order_df, num_rows="dynamic")
+        # Đã thêm key để tránh lỗi Duplicate
+        edited_ncc = st.data_editor(st.session_state.temp_supp_order_df, num_rows="dynamic", key="po_ncc_editor")
         if st.button("Xác nhận PO NCC"):
             if po_ncc:
                 final = edited_ncc.copy(); final["po_number"]=po_ncc; final["supplier"]=supp
@@ -458,8 +462,12 @@ with tab6:
     st.info(f"Đang kết nối Drive Folder ID: {DRIVE_FOLDER_ID}")
     c1, c2 = st.columns(2)
     with c1:
-        st.write("Khách hàng"); ed_c = st.data_editor(customers_df, num_rows="dynamic")
+        st.write("Khách hàng")
+        # Đã thêm key để tránh lỗi Duplicate
+        ed_c = st.data_editor(customers_df, num_rows="dynamic", key="cust_master_editor")
         if is_admin and st.button("Lưu KH"): save_csv_cloud(CUSTOMERS_CSV, ed_c); st.success("Saved")
     with c2:
-        st.write("Nhà cung cấp"); ed_s = st.data_editor(suppliers_df, num_rows="dynamic")
+        st.write("Nhà cung cấp")
+        # Đã thêm key để tránh lỗi Duplicate
+        ed_s = st.data_editor(suppliers_df, num_rows="dynamic", key="supp_master_editor")
         if is_admin and st.button("Lưu NCC"): save_csv_cloud(SUPPLIERS_CSV, ed_s); st.success("Saved")
