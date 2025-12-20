@@ -28,7 +28,7 @@ except ImportError:
 # =============================================================================
 # 1. CẤU HÌNH & KẾT NỐI
 # =============================================================================
-APP_VERSION = "V4807 - FULL FUNCTION + STRICT FIX"
+APP_VERSION = "V4807 - FULL APP + STRICT FIX"
 
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="🏢")
 
