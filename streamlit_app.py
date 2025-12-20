@@ -33,7 +33,7 @@ RELEASE_NOTE = """
 - **Core Logic:** Giữ nguyên 100% logic xử lý Excel và tính toán của bản gốc.
 - **Storage:** Google Drive Cá nhân (2TB) thông qua OAuth 2.0.
 - **Database:** Supabase Cloud Database.
-- **Profit Formula:** (GAP*60%) + End User + Buyer + Tax + VAT + Trans + Mgmt.
+- **Fixed:** Sửa lỗi Import Excel không hiện dữ liệu và đảm bảo ảnh vào đúng thư mục.
 """
 
 st.set_page_config(page_title=f"CRM V4800 - {APP_VERSION}", layout="wide", page_icon="☁️")
@@ -63,6 +63,7 @@ try:
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
     
     OAUTH_INFO = st.secrets["google_oauth"]
+    # ROOT_FOLDER_ID trong secrets.toml nên là ID của thư mục "CRM DATA 1ST"
     ROOT_FOLDER_ID = OAUTH_INFO.get("root_folder_id", "1GLhnSK7Bz7LbTC-Q7aPt_Itmutni5Rqa")
 except Exception as e:
     st.error(f"⚠️ Lỗi cấu hình secrets.toml: {e}")
@@ -84,10 +85,12 @@ def get_drive_service():
 def get_or_create_subfolder(folder_name, parent_id):
     srv = get_drive_service()
     if not srv: return None
+    # Tìm folder con trong folder cha
     q = f"'{parent_id}' in parents and mimeType='application/vnd.google-apps.folder' and name='{folder_name}' and trashed=false"
     files = srv.files().list(q=q, fields="files(id)").execute().get('files', [])
     if files: return files[0]['id']
     
+    # Nếu chưa có thì tạo mới
     meta = {'name': folder_name, 'mimeType': 'application/vnd.google-apps.folder', 'parents': [parent_id]}
     file = srv.files().create(body=meta, fields='id').execute()
     try: srv.permissions().create(fileId=file['id'], body={'role': 'reader', 'type': 'anyone'}).execute()
@@ -98,7 +101,10 @@ def upload_to_drive(file_obj, sub_folder, file_name):
     srv = get_drive_service()
     if not srv: return ""
     try:
+        # Code này sẽ tìm sub_folder (ví dụ: CRM_PURCHASE_IMAGES) BÊN TRONG ROOT_FOLDER_ID
+        # Nếu ROOT_FOLDER_ID là ID của "CRM DATA 1ST", thì ảnh sẽ nằm đúng trong: CRM DATA 1ST > CRM_PURCHASE_IMAGES
         target_id = get_or_create_subfolder(sub_folder, ROOT_FOLDER_ID)
+        
         media = MediaIoBaseUpload(file_obj, mimetype=mimetypes.guess_type(file_name)[0] or 'application/octet-stream', resumable=True)
         meta = {'name': file_name, 'parents': [target_id]}
         file = srv.files().create(body=meta, media_body=media, fields='id').execute()
@@ -170,7 +176,7 @@ TBL_CUSTOMERS = "crm_customers"; TBL_SUPPLIERS = "crm_suppliers"; TBL_PURCHASES 
 TBL_SHARED_HISTORY = "crm_shared_history"; TBL_TRACKING = "crm_tracking"; TBL_PAYMENTS = "crm_payments"
 TBL_PAID_HISTORY = "crm_paid_history"; TBL_SUPP_ORDERS = "crm_supplier_orders"; TBL_CUST_ORDERS = "crm_customer_orders"
 
-# Cấu trúc cột (Giữ nguyên từ code gốc của bạn)
+# Cấu trúc cột
 MASTER_COLUMNS = ["no", "short_name", "eng_name", "vn_name", "address_1", "address_2", "contact_person", "director", "phone", "fax", "tax_code", "destination", "payment_term"]
 PURCHASE_COLUMNS = ["no", "item_code", "item_name", "specs", "qty", "buying_price_rmb", "total_buying_price_rmb", "exchange_rate", "buying_price_vnd", "total_buying_price_vnd", "leadtime", "supplier_name", "image_path", "type", "nuoc"]
 QUOTE_KH_COLUMNS = ["no", "item_code", "item_name", "specs", "qty", "buying_price_rmb", "total_buying_price_rmb", "exchange_rate", "buying_price_vnd", "total_buying_price_vnd", "ap_price", "ap_total_vnd", "unit_price", "total_price_vnd", "gap", "end_user_val", "buyer_val", "import_tax_val", "vat_val", "transportation", "mgmt_fee", "payback_val", "profit_vnd", "profit_pct", "supplier_name", "image_path", "leadtime"]
@@ -207,7 +213,6 @@ with st.spinner("Đang kết nối 2TB Drive và Supabase..."):
     db_supplier_orders = load_data(TBL_SUPP_ORDERS, [c for c in SUPPLIER_ORDER_COLS if c != "Delete"])
     db_customer_orders = load_data(TBL_CUST_ORDERS, [c for c in CUSTOMER_ORDER_COLS if c != "Delete"])
 
-# Biến dùng chung để tra cứu lịch sử giá bán
 sales_history_df = db_customer_orders.copy()
 
 # =============================================================================
@@ -230,7 +235,6 @@ with tab1:
     if col_act1.button("🔄 CẬP NHẬT DỮ LIỆU"): st.rerun()
     if col_act2.button("⚠️ XÓA CACHE (Local Only)"): st.rerun()
     
-    # Calc Profit Logic
     total_revenue = db_customer_orders['total_price'].apply(to_float).sum()
     total_po_ncc_cost = db_supplier_orders['total_vnd'].apply(to_float).sum()
     
@@ -281,50 +285,82 @@ with tab1:
             top = db_supplier_orders.copy(); top['val'] = top['total_vnd'].apply(to_float)
             st.dataframe(top.groupby('supplier')['val'].sum().sort_values(ascending=False).head(10).apply(fmt_num), use_container_width=True)
 
-# --- TAB 2: BÁO GIÁ NCC ---
+# --- TAB 2: BÁO GIÁ NCC (ĐÃ SỬA LỖI IMPORT & FOLDER ẢNH) ---
 with tab2:
     st.subheader("Cơ sở dữ liệu giá đầu vào (Purchases)")
     col_p1, col_p2 = st.columns([1, 3])
     with col_p1:
         uploaded_pur = st.file_uploader("Import Excel (Kèm ảnh)", type=["xlsx"])
-        if uploaded_pur and st.button("Import"):
+        
+        # --- BẮT ĐẦU ĐOẠN CODE SỬA LỖI IMPORT (FIX) ---
+        if uploaded_pur and st.button("Thực hiện Import"):
+            status = st.empty()
+            status.info("⏳ Đang đọc file Excel...")
+            
             try:
+                # 1. Đọc dữ liệu thô để kiểm tra
+                df_debug = pd.read_excel(uploaded_pur, header=0, dtype=str).fillna("")
+                with st.expander("🔍 Xem dữ liệu đã đọc (Kiểm tra cột)", expanded=False):
+                    st.dataframe(df_debug.head())
+                
+                # 2. Xử lý ảnh (nếu có)
+                status.info("⏳ Đang xử lý ảnh từ Excel...")
                 wb = load_workbook(uploaded_pur, data_only=False); ws = wb.active
                 img_map = {}
-                # Trích xuất ảnh từ Excel -> Upload lên Drive
                 for img in getattr(ws, '_images', []):
                     try:
                         rid = img.anchor._from.row + 1; cid = img.anchor._from.col
-                        if cid == 12: # Cột M
+                        # Mặc định cột M (thứ 12) chứa ảnh
+                        if cid == 12: 
                             img_data = io.BytesIO(img._data())
                             fname = f"imp_r{rid}_{datetime.now().strftime('%f')}.png"
+                            # UPLOAD VÀO FOLDER: CRM_PURCHASE_IMAGES (Nằm trong ROOT_FOLDER_ID aka CRM DATA 1ST)
                             url = upload_to_drive(img_data, "CRM_PURCHASE_IMAGES", fname)
                             img_map[rid] = url
                     except: pass
                 
-                df_ex = pd.read_excel(uploaded_pur, header=0, dtype=str).fillna("")
+                # 3. Ghép dữ liệu
+                status.info("⏳ Đang ghép dữ liệu...")
                 rows = []
-                for i, r in df_ex.iterrows():
+                for i, r in df_debug.iterrows():
+                    # Lấy dữ liệu theo index cột (0, 1, 2...) để tránh sai tên cột
+                    item_code = safe_str(r.iloc[1]) 
+                    
+                    if not item_code: continue # Bỏ qua dòng trống
+                        
                     im_path = img_map.get(i+2, "")
                     item = {
-                        "no": safe_str(r.iloc[0]), "item_code": safe_str(r.iloc[1]), 
-                        "item_name": safe_str(r.iloc[2]), "specs": safe_str(r.iloc[3]),
+                        "no": safe_str(r.iloc[0]), 
+                        "item_code": item_code, 
+                        "item_name": safe_str(r.iloc[2]), 
+                        "specs": safe_str(r.iloc[3]),
                         "qty": fmt_num(to_float(r.iloc[4])), 
                         "buying_price_rmb": fmt_num(to_float(r.iloc[5])), 
                         "total_buying_price_rmb": fmt_num(to_float(r.iloc[6])), 
                         "exchange_rate": fmt_num(to_float(r.iloc[7])), 
                         "buying_price_vnd": fmt_num(to_float(r.iloc[8])), 
                         "total_buying_price_vnd": fmt_num(to_float(r.iloc[9])), 
-                        "leadtime": safe_str(r.iloc[10]), "supplier_name": safe_str(r.iloc[11]), 
+                        "leadtime": safe_str(r.iloc[10]), 
+                        "supplier_name": safe_str(r.iloc[11]), 
                         "image_path": im_path,
+                        # Kiểm tra độ dài hàng để tránh lỗi index out of range
                         "type": safe_str(r.iloc[13]) if len(r) > 13 else "",
                         "nuoc": safe_str(r.iloc[14]) if len(r) > 14 else ""
                     }
-                    if item["item_code"]: rows.append(item)
+                    rows.append(item)
                 
-                save_data(TBL_PURCHASES, pd.DataFrame(rows))
-                st.success(f"Đã import {len(rows)} dòng và upload ảnh lên Drive!"); st.rerun()
-            except Exception as e: st.error(f"Lỗi: {e}")
+                if len(rows) > 0:
+                    status.info(f"⏳ Đang lưu {len(rows)} dòng vào Supabase...")
+                    save_data(TBL_PURCHASES, pd.DataFrame(rows))
+                    st.success(f"✅ THÀNH CÔNG! Đã import {len(rows)} dòng.")
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.error("⚠️ KHÔNG TÌM THẤY DỮ LIỆU! Có thể cột 'Item Code' (Cột B) đang bị trống.")
+                    
+            except Exception as e:
+                st.error(f"❌ LỖI KHI IMPORT: {e}")
+        # --- KẾT THÚC IMPORT FIX ---
             
         st.markdown("---")
         st.write("📸 Cập nhật ảnh (Manual)")
@@ -332,6 +368,7 @@ with tab2:
         item_to_update = st.text_input("Nhập mã Item Code")
         if st.button("Cập nhật ảnh") and up_img_ncc and item_to_update:
             fname = f"prod_{safe_filename(item_to_update)}_{datetime.now().strftime('%f')}.png"
+            # UPLOAD VÀO ĐÚNG FOLDER YÊU CẦU
             url = upload_to_drive(up_img_ncc, "CRM_PURCHASE_IMAGES", fname)
             supabase.table(TBL_PURCHASES).update({"image_path": url}).eq("item_code", item_to_update).execute()
             st.success("Done!"); st.rerun()
