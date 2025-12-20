@@ -28,13 +28,14 @@ except ImportError:
 # =============================================================================
 # 1. CẤU HÌNH & KẾT NỐI
 # =============================================================================
-APP_VERSION = "V4803 - FIX DUPLICATE ID ERROR"
+APP_VERSION = "V4804 - FIX SUPABASE COLUMN MISMATCH"
 RELEASE_NOTE = """
-- **Fix Crash Tab 6:** Sửa lỗi StreamlitDuplicateElementId do thiếu key định danh cho bảng dữ liệu.
-- **Stable:** Ổn định các tính năng Import và Ghi đè từ V4802.
+- **Fix lỗi 'Could not find column':** Tự động bỏ qua cột 'no' nếu DB chưa tạo, giúp dữ liệu vẫn vào được.
+- **UI:** Thêm nút xóa bộ lọc tìm kiếm nhanh.
+- **Stability:** Giữ nguyên tính năng Import ảnh và Ghi đè thông minh.
 """
 
-st.set_page_config(page_title=f"CRM V4803 - {APP_VERSION}", layout="wide", page_icon="☁️")
+st.set_page_config(page_title=f"CRM V4804 - {APP_VERSION}", layout="wide", page_icon="☁️")
 
 # --- CSS TÙY CHỈNH ---
 st.markdown("""
@@ -78,7 +79,7 @@ def get_drive_service():
         return build('drive', 'v3', credentials=creds)
     except: return None
 
-# --- DRIVE FUNCTIONS (SMART OVERWRITE) ---
+# --- DRIVE FUNCTIONS ---
 def get_or_create_subfolder(folder_name, parent_id):
     srv = get_drive_service()
     if not srv: return None
@@ -92,23 +93,19 @@ def get_or_create_subfolder(folder_name, parent_id):
     return file['id']
 
 def upload_to_drive(file_obj, sub_folder, file_name):
-    """Kiểm tra file tồn tại -> Ghi đè (Update) hoặc Tạo mới (Create)"""
     srv = get_drive_service()
     if not srv: return ""
     try:
         target_id = get_or_create_subfolder(sub_folder, ROOT_FOLDER_ID)
-        # Tìm file trùng tên
         q = f"'{target_id}' in parents and name = '{file_name}' and trashed = false"
         existing_files = srv.files().list(q=q, fields='files(id)').execute().get('files', [])
         
         media = MediaIoBaseUpload(file_obj, mimetype=mimetypes.guess_type(file_name)[0] or 'application/octet-stream', resumable=True)
         
         if existing_files:
-            # GHI ĐÈ (UPDATE)
             file_id = existing_files[0]['id']
             srv.files().update(fileId=file_id, media_body=media, fields='id').execute()
         else:
-            # TẠO MỚI (CREATE)
             meta = {'name': file_name, 'parents': [target_id]}
             file = srv.files().create(body=meta, media_body=media, fields='id').execute()
             file_id = file['id']
@@ -167,14 +164,27 @@ def load_data(table, cols):
 def save_data(table, df):
     if df.empty: return
     try:
-        # Vệ sinh dữ liệu kỹ càng
         df_clean = df.where(pd.notnull(df), None)
         recs = df_clean.to_dict(orient='records')
         final_recs = []
         for r in recs:
             clean_r = {k: (str(v) if v is not None else "") for k, v in r.items()}
             final_recs.append(clean_r)
-        supabase.table(table).upsert(final_recs).execute()
+        
+        # Thử lưu bình thường
+        try:
+            supabase.table(table).upsert(final_recs).execute()
+        except Exception as e_inner:
+            # Nếu lỗi do thiếu cột 'no' (PGRST204), thử bỏ cột 'no' và lưu lại
+            err_msg = str(e_inner)
+            if "Could not find the 'no' column" in err_msg:
+                st.warning(f"⚠️ Cảnh báo Supabase: Bảng '{table}' thiếu cột 'no'. Hệ thống sẽ tự động bỏ qua cột này để lưu dữ liệu.")
+                for r in final_recs:
+                    if 'no' in r: del r['no']
+                supabase.table(table).upsert(final_recs).execute()
+            else:
+                raise e_inner # Nếu lỗi khác thì ném ra ngoài
+
     except Exception as e: 
         st.error(f"❌ LỖI LƯU DATA VÀO {table}: {e}")
 
@@ -224,7 +234,7 @@ sales_history_df = db_customer_orders.copy()
 # =============================================================================
 # 3. SIDEBAR & TABS
 # =============================================================================
-st.sidebar.title("CRM CLOUD (V4803)")
+st.sidebar.title("CRM CLOUD (V4804)")
 st.sidebar.info("OAuth 2.0 Connected")
 admin_pwd = st.sidebar.text_input("Admin Password", type="password")
 is_admin = (admin_pwd == ADMIN_PASSWORD)
@@ -285,32 +295,28 @@ with tab1:
             top = db_supplier_orders.copy(); top['val'] = top['total_vnd'].apply(to_float)
             st.dataframe(top.groupby('supplier')['val'].sum().sort_values(ascending=False).head(10).apply(fmt_num), use_container_width=True)
 
-# --- TAB 2: BÁO GIÁ NCC (FIXED IMPORT & OVERWRITE) ---
+# --- TAB 2: BÁO GIÁ NCC (FIXED IMPORT, OVERWRITE & NO-COL) ---
 with tab2:
     st.subheader("Cơ sở dữ liệu giá đầu vào (Purchases)")
     col_p1, col_p2 = st.columns([1, 3])
     with col_p1:
         uploaded_pur = st.file_uploader("Import Excel (Kèm ảnh)", type=["xlsx"])
         
-        # --- LOGIC IMPORT CẢI TIẾN ---
         if uploaded_pur and st.button("Thực hiện Import"):
             status = st.empty()
             status.info("⏳ Đang đọc file Excel...")
             try:
-                # 1. Đọc dữ liệu thô (Dùng dtype=str để tránh lỗi NaN)
                 df_debug = pd.read_excel(uploaded_pur, header=0, dtype=str).fillna("")
                 
-                # 2. Xử lý ảnh (Mapping theo ROW)
                 status.info("⏳ Đang xử lý ảnh từ Excel...")
                 wb = load_workbook(uploaded_pur, data_only=False); ws = wb.active
                 img_row_map = {}
                 for img in getattr(ws, '_images', []):
                     try:
-                        rid = img.anchor._from.row + 1 # Excel row index
+                        rid = img.anchor._from.row + 1 
                         img_row_map[rid] = img 
                     except: pass
                 
-                # 3. Ghép dữ liệu & Upload ảnh
                 status.info("⏳ Đang ghép dữ liệu và Upload ảnh (chế độ Ghi Đè)...")
                 rows = []
                 for i, r in df_debug.iterrows():
@@ -318,7 +324,6 @@ with tab2:
                     if not item_code: continue 
                     excel_row_idx = i + 2
                     
-                    # Xử lý ảnh
                     img_url = ""
                     if excel_row_idx in img_row_map:
                         try:
@@ -370,8 +375,15 @@ with tab2:
             st.success("Done!"); st.rerun()
 
     with col_p2:
-        search_term = st.text_input("🔍 Tìm kiếm hàng hóa (NCC)")
-        if search_term: st.caption(f"⚠️ Đang lọc theo: '{search_term}'. Xóa trắng ô tìm kiếm để xem toàn bộ.")
+        c_search, c_clear = st.columns([5, 1])
+        with c_search:
+            search_term = st.text_input("🔍 Tìm kiếm hàng hóa (NCC)", key="search_term_box")
+        with c_clear:
+            if st.button("❌ Xóa"): 
+                st.session_state.search_term_box = ""
+                st.rerun()
+        
+        if search_term: st.caption(f"⚠️ Đang lọc theo: '{search_term}'.")
         if not purchases_df.empty:
             df_show = purchases_df.copy()
             if search_term:
@@ -633,11 +645,9 @@ with tab6:
     if is_admin:
         c1, c2 = st.columns(2)
         with c1: 
-            # --- FIX: ADDED KEY ---
             st.write("KH"); ed_c = st.data_editor(customers_df, num_rows="dynamic", use_container_width=True, key="editor_kh"); 
             if st.button("Lưu KH"): save_data(TBL_CUSTOMERS, ed_c); st.success("OK")
         with c2: 
-            # --- FIX: ADDED KEY ---
             st.write("NCC"); ed_s = st.data_editor(suppliers_df, num_rows="dynamic", use_container_width=True, key="editor_ncc"); 
             if st.button("Lưu NCC"): save_data(TBL_SUPPLIERS, ed_s); st.success("OK")
     else: st.warning("Admin only")
