@@ -28,15 +28,14 @@ except ImportError:
 # =============================================================================
 # 1. CẤU HÌNH & KẾT NỐI
 # =============================================================================
-APP_VERSION = "V4800 - FULL CLOUD (DRIVE 2TB + SUPABASE)"
+APP_VERSION = "V4801 - FULL CLOUD (SMART OVERWRITE FIX)"
 RELEASE_NOTE = """
-- **Core Logic:** Giữ nguyên 100% logic xử lý Excel và tính toán của bản gốc.
-- **Storage:** Google Drive Cá nhân (2TB) thông qua OAuth 2.0.
-- **Database:** Supabase Cloud Database.
-- **Fixed:** Sửa lỗi Import Excel không hiện dữ liệu và đảm bảo ảnh vào đúng thư mục.
+- **Smart Overwrite:** Tự động ghi đè file trên Drive nếu trùng tên (tránh rác dữ liệu).
+- **Fix Import:** Sửa lỗi không nhận ảnh nếu ảnh không nằm đúng cột M.
+- **Fix Data:** Tối ưu hóa việc đọc file BUYING PRICE-ALL.xlsx.
 """
 
-st.set_page_config(page_title=f"CRM V4800 - {APP_VERSION}", layout="wide", page_icon="☁️")
+st.set_page_config(page_title=f"CRM V4801 - {APP_VERSION}", layout="wide", page_icon="☁️")
 
 # --- CSS TÙY CHỈNH ---
 st.markdown("""
@@ -81,7 +80,7 @@ def get_drive_service():
         return build('drive', 'v3', credentials=creds)
     except: return None
 
-# --- DRIVE FUNCTIONS ---
+# --- DRIVE FUNCTIONS (UPDATED FOR OVERWRITE) ---
 def get_or_create_subfolder(folder_name, parent_id):
     srv = get_drive_service()
     if not srv: return None
@@ -98,20 +97,40 @@ def get_or_create_subfolder(folder_name, parent_id):
     return file['id']
 
 def upload_to_drive(file_obj, sub_folder, file_name):
+    """
+    Hàm upload thông minh: Kiểm tra xem file đã tồn tại chưa.
+    - Nếu có: GHI ĐÈ (Update) -> Giữ nguyên ID, không tạo file rác.
+    - Nếu chưa: TẠO MỚI.
+    """
     srv = get_drive_service()
     if not srv: return ""
     try:
-        # Code này sẽ tìm sub_folder (ví dụ: CRM_PURCHASE_IMAGES) BÊN TRONG ROOT_FOLDER_ID
-        # Nếu ROOT_FOLDER_ID là ID của "CRM DATA 1ST", thì ảnh sẽ nằm đúng trong: CRM DATA 1ST > CRM_PURCHASE_IMAGES
+        # 1. Xác định Folder đích
         target_id = get_or_create_subfolder(sub_folder, ROOT_FOLDER_ID)
         
-        media = MediaIoBaseUpload(file_obj, mimetype=mimetypes.guess_type(file_name)[0] or 'application/octet-stream', resumable=True)
-        meta = {'name': file_name, 'parents': [target_id]}
-        file = srv.files().create(body=meta, media_body=media, fields='id').execute()
+        # 2. Kiểm tra file tồn tại (Tìm theo tên file trong folder đích)
+        q = f"'{target_id}' in parents and name = '{file_name}' and trashed = false"
+        existing_files = srv.files().list(q=q, fields='files(id)').execute().get('files', [])
         
-        try: srv.permissions().create(fileId=file['id'], body={'role': 'reader', 'type': 'anyone'}).execute()
+        media = MediaIoBaseUpload(file_obj, mimetype=mimetypes.guess_type(file_name)[0] or 'application/octet-stream', resumable=True)
+        
+        file_id = ""
+        if existing_files:
+            # --- UPDATE (GHI ĐÈ) ---
+            file_id = existing_files[0]['id']
+            # Dùng method update thay vì create
+            srv.files().update(fileId=file_id, media_body=media, fields='id').execute()
+        else:
+            # --- CREATE NEW ---
+            meta = {'name': file_name, 'parents': [target_id]}
+            file = srv.files().create(body=meta, media_body=media, fields='id').execute()
+            file_id = file['id']
+        
+        # Đảm bảo quyền truy cập (cho cả file mới hoặc file cũ vừa update)
+        try: srv.permissions().create(fileId=file_id, body={'role': 'reader', 'type': 'anyone'}).execute()
         except: pass
-        return f"https://drive.google.com/uc?export=view&id={file['id']}"
+        
+        return f"https://drive.google.com/uc?export=view&id={file_id}"
     except Exception as e: st.error(f"Lỗi Upload: {e}"); return ""
 
 # --- HELPER FUNCTIONS (ORIGINAL LOGIC) ---
@@ -285,50 +304,63 @@ with tab1:
             top = db_supplier_orders.copy(); top['val'] = top['total_vnd'].apply(to_float)
             st.dataframe(top.groupby('supplier')['val'].sum().sort_values(ascending=False).head(10).apply(fmt_num), use_container_width=True)
 
-# --- TAB 2: BÁO GIÁ NCC (ĐÃ SỬA LỖI IMPORT & FOLDER ẢNH) ---
+# --- TAB 2: BÁO GIÁ NCC (ĐÃ SỬA LỖI OVERWRITE & IMAGE MAPPING) ---
 with tab2:
     st.subheader("Cơ sở dữ liệu giá đầu vào (Purchases)")
     col_p1, col_p2 = st.columns([1, 3])
     with col_p1:
         uploaded_pur = st.file_uploader("Import Excel (Kèm ảnh)", type=["xlsx"])
         
-        # --- BẮT ĐẦU ĐOẠN CODE SỬA LỖI IMPORT (FIX) ---
+        # --- LOGIC IMPORT CẢI TIẾN ---
         if uploaded_pur and st.button("Thực hiện Import"):
             status = st.empty()
             status.info("⏳ Đang đọc file Excel...")
             
             try:
-                # 1. Đọc dữ liệu thô để kiểm tra
+                # 1. Đọc dữ liệu thô
                 df_debug = pd.read_excel(uploaded_pur, header=0, dtype=str).fillna("")
-                with st.expander("🔍 Xem dữ liệu đã đọc (Kiểm tra cột)", expanded=False):
+                with st.expander("🔍 Xem dữ liệu thô", expanded=False):
                     st.dataframe(df_debug.head())
                 
-                # 2. Xử lý ảnh (nếu có)
+                # 2. Xử lý ảnh (Mapping theo ROW thay vì Column cố định)
                 status.info("⏳ Đang xử lý ảnh từ Excel...")
                 wb = load_workbook(uploaded_pur, data_only=False); ws = wb.active
-                img_map = {}
+                
+                # Tạo map: Row Index -> Image Object
+                # (Sửa lỗi: Không quan tâm ảnh ở cột nào, chỉ quan tâm nó thuộc hàng nào)
+                img_row_map = {}
                 for img in getattr(ws, '_images', []):
                     try:
-                        rid = img.anchor._from.row + 1; cid = img.anchor._from.col
-                        # Mặc định cột M (thứ 12) chứa ảnh
-                        if cid == 12: 
-                            img_data = io.BytesIO(img._data())
-                            fname = f"imp_r{rid}_{datetime.now().strftime('%f')}.png"
-                            # UPLOAD VÀO FOLDER: CRM_PURCHASE_IMAGES (Nằm trong ROOT_FOLDER_ID aka CRM DATA 1ST)
-                            url = upload_to_drive(img_data, "CRM_PURCHASE_IMAGES", fname)
-                            img_map[rid] = url
+                        rid = img.anchor._from.row + 1 # Excel row index
+                        # Nếu một hàng có nhiều ảnh, nó sẽ lấy ảnh cuối cùng tìm thấy.
+                        img_row_map[rid] = img 
                     except: pass
                 
-                # 3. Ghép dữ liệu
-                status.info("⏳ Đang ghép dữ liệu...")
+                # 3. Ghép dữ liệu & Upload ảnh
+                status.info("⏳ Đang ghép dữ liệu và Upload ảnh (chế độ Ghi Đè)...")
                 rows = []
                 for i, r in df_debug.iterrows():
-                    # Lấy dữ liệu theo index cột (0, 1, 2...) để tránh sai tên cột
+                    # Lấy Item Code (Cột B - index 1)
                     item_code = safe_str(r.iloc[1]) 
                     
-                    if not item_code: continue # Bỏ qua dòng trống
-                        
-                    im_path = img_map.get(i+2, "")
+                    if not item_code: continue # Bỏ qua dòng không có mã hàng
+                    
+                    excel_row_idx = i + 2 # Header là row 1, pandas index 0 là row 2
+                    
+                    # Xử lý ảnh
+                    img_url = ""
+                    if excel_row_idx in img_row_map:
+                        try:
+                            img_obj = img_row_map[excel_row_idx]
+                            img_data = io.BytesIO(img_obj._data())
+                            # TẠO TÊN FILE CỐ ĐỊNH THEO MÃ HÀNG -> ĐỂ GHI ĐÈ
+                            fname = f"IMG_{safe_filename(item_code)}.png"
+                            
+                            # Upload (Sử dụng hàm mới có tính năng overwrite)
+                            img_url = upload_to_drive(img_data, "CRM_PURCHASE_IMAGES", fname)
+                        except Exception as e: 
+                            print(f"Err img row {excel_row_idx}: {e}")
+
                     item = {
                         "no": safe_str(r.iloc[0]), 
                         "item_code": item_code, 
@@ -342,8 +374,7 @@ with tab2:
                         "total_buying_price_vnd": fmt_num(to_float(r.iloc[9])), 
                         "leadtime": safe_str(r.iloc[10]), 
                         "supplier_name": safe_str(r.iloc[11]), 
-                        "image_path": im_path,
-                        # Kiểm tra độ dài hàng để tránh lỗi index out of range
+                        "image_path": img_url, # URL ảnh mới (hoặc rỗng)
                         "type": safe_str(r.iloc[13]) if len(r) > 13 else "",
                         "nuoc": safe_str(r.iloc[14]) if len(r) > 14 else ""
                     }
@@ -351,12 +382,14 @@ with tab2:
                 
                 if len(rows) > 0:
                     status.info(f"⏳ Đang lưu {len(rows)} dòng vào Supabase...")
+                    # Lưu vào DB (Upsert sẽ ghi đè dòng cũ nếu trùng item_code/id tùy setup, 
+                    # nhưng quan trọng là ảnh trên Drive đã được xử lý gọn gàng)
                     save_data(TBL_PURCHASES, pd.DataFrame(rows))
-                    st.success(f"✅ THÀNH CÔNG! Đã import {len(rows)} dòng.")
+                    st.success(f"✅ THÀNH CÔNG! Đã import {len(rows)} dòng và cập nhật ảnh.")
                     time.sleep(1)
                     st.rerun()
                 else:
-                    st.error("⚠️ KHÔNG TÌM THẤY DỮ LIỆU! Có thể cột 'Item Code' (Cột B) đang bị trống.")
+                    st.error("⚠️ KHÔNG TÌM THẤY DỮ LIỆU! Vui lòng kiểm tra cột Item Code (Cột B).")
                     
             except Exception as e:
                 st.error(f"❌ LỖI KHI IMPORT: {e}")
@@ -367,8 +400,8 @@ with tab2:
         up_img_ncc = st.file_uploader("Upload ảnh", type=["png","jpg","jpeg"])
         item_to_update = st.text_input("Nhập mã Item Code")
         if st.button("Cập nhật ảnh") and up_img_ncc and item_to_update:
-            fname = f"prod_{safe_filename(item_to_update)}_{datetime.now().strftime('%f')}.png"
-            # UPLOAD VÀO ĐÚNG FOLDER YÊU CẦU
+            # Tên file cố định theo mã hàng để ghi đè
+            fname = f"IMG_{safe_filename(item_to_update)}.png"
             url = upload_to_drive(up_img_ncc, "CRM_PURCHASE_IMAGES", fname)
             supabase.table(TBL_PURCHASES).update({"image_path": url}).eq("item_code", item_to_update).execute()
             st.success("Done!"); st.rerun()
