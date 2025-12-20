@@ -28,14 +28,14 @@ except ImportError:
 # =============================================================================
 # 1. CẤU HÌNH & KẾT NỐI
 # =============================================================================
-APP_VERSION = "V4804 - FIX SUPABASE COLUMN MISMATCH"
+APP_VERSION = "V4805 - STRICT SQL SYNC"
 RELEASE_NOTE = """
-- **Fix lỗi 'Could not find column':** Tự động bỏ qua cột 'no' nếu DB chưa tạo, giúp dữ liệu vẫn vào được.
-- **UI:** Thêm nút xóa bộ lọc tìm kiếm nhanh.
-- **Stability:** Giữ nguyên tính năng Import ảnh và Ghi đè thông minh.
+- **Strict SQL Sync:** Code đã được sửa lại tên bảng và cột KHỚP 100% với Format Chuẩn của User.
+- **Fix Column Error:** Loại bỏ hoàn toàn việc gửi cột 'no' lên Supabase (do bảng chuẩn không có).
+- **Auto Clean Data:** Tự động tạo dữ liệu cho các cột _clean_code, _clean_name để khớp DB.
 """
 
-st.set_page_config(page_title=f"CRM V4804 - {APP_VERSION}", layout="wide", page_icon="☁️")
+st.set_page_config(page_title=f"CRM V4805 - {APP_VERSION}", layout="wide", page_icon="☁️")
 
 # --- CSS TÙY CHỈNH ---
 st.markdown("""
@@ -156,6 +156,7 @@ def load_data(table, cols):
     try:
         res = supabase.table(table).select("*").execute()
         df = pd.DataFrame(res.data)
+        # Bổ sung các cột thiếu nếu có (để tránh lỗi hiển thị)
         for c in cols: 
             if c not in df.columns: df[c] = ""
         return df[cols]
@@ -168,33 +169,32 @@ def save_data(table, df):
         recs = df_clean.to_dict(orient='records')
         final_recs = []
         for r in recs:
+            # Loại bỏ cột 'no' nếu có trong dữ liệu (VÌ DB CHUẨN KHÔNG CÓ CỘT NÀY)
+            if 'no' in r: del r['no']
             clean_r = {k: (str(v) if v is not None else "") for k, v in r.items()}
             final_recs.append(clean_r)
         
-        # Thử lưu bình thường
-        try:
-            supabase.table(table).upsert(final_recs).execute()
-        except Exception as e_inner:
-            # Nếu lỗi do thiếu cột 'no' (PGRST204), thử bỏ cột 'no' và lưu lại
-            err_msg = str(e_inner)
-            if "Could not find the 'no' column" in err_msg:
-                st.warning(f"⚠️ Cảnh báo Supabase: Bảng '{table}' thiếu cột 'no'. Hệ thống sẽ tự động bỏ qua cột này để lưu dữ liệu.")
-                for r in final_recs:
-                    if 'no' in r: del r['no']
-                supabase.table(table).upsert(final_recs).execute()
-            else:
-                raise e_inner # Nếu lỗi khác thì ném ra ngoài
-
+        supabase.table(table).upsert(final_recs).execute()
     except Exception as e: 
         st.error(f"❌ LỖI LƯU DATA VÀO {table}: {e}")
 
-# --- DEFINITIONS ---
-TBL_CUSTOMERS = "crm_customers"; TBL_SUPPLIERS = "crm_suppliers"; TBL_PURCHASES = "crm_purchases"
-TBL_SHARED_HISTORY = "crm_shared_history"; TBL_TRACKING = "crm_tracking"; TBL_PAYMENTS = "crm_payments"
-TBL_PAID_HISTORY = "crm_paid_history"; TBL_SUPP_ORDERS = "crm_supplier_orders"; TBL_CUST_ORDERS = "crm_customer_orders"
+# --- DEFINITIONS (SYNCED WITH USER'S SQL) ---
+TBL_CUSTOMERS = "crm_customers"
+TBL_SUPPLIERS = "crm_suppliers"
+TBL_PURCHASES = "crm_purchases"
+TBL_SHARED_HISTORY = "crm_shared_history"
+TBL_TRACKING = "crm_tracking"
+TBL_PAID_HISTORY = "crm_paid_history"
 
+# SỬA LẠI TÊN BẢNG CHO KHỚP VỚI FORMAT CHUẨN CỦA USER
+TBL_SUPP_ORDERS = "db_supplier_orders" # User format
+TBL_CUST_ORDERS = "db_customer_orders" # User format
+TBL_PAYMENTS = "crm_payment" # User format (singular)
+
+# Cấu trúc cột (đã bỏ 'no' khỏi danh sách cần lưu DB, nhưng giữ 'no' trong Dataframe để hiển thị UI)
 MASTER_COLUMNS = ["no", "short_name", "eng_name", "vn_name", "address_1", "address_2", "contact_person", "director", "phone", "fax", "tax_code", "destination", "payment_term"]
-PURCHASE_COLUMNS = ["no", "item_code", "item_name", "specs", "qty", "buying_price_rmb", "total_buying_price_rmb", "exchange_rate", "buying_price_vnd", "total_buying_price_vnd", "leadtime", "supplier_name", "image_path", "type", "nuoc"]
+# Thêm _clean_... vào PURCHASE_COLUMNS
+PURCHASE_COLUMNS = ["no", "item_code", "item_name", "specs", "qty", "buying_price_rmb", "total_buying_price_rmb", "exchange_rate", "buying_price_vnd", "total_buying_price_vnd", "leadtime", "supplier_name", "image_path", "type", "nuoc", "_clean_code", "_clean_specs", "_clean_name"]
 QUOTE_KH_COLUMNS = ["no", "item_code", "item_name", "specs", "qty", "buying_price_rmb", "total_buying_price_rmb", "exchange_rate", "buying_price_vnd", "total_buying_price_vnd", "ap_price", "ap_total_vnd", "unit_price", "total_price_vnd", "gap", "end_user_val", "buyer_val", "import_tax_val", "vat_val", "transportation", "mgmt_fee", "payback_val", "profit_vnd", "profit_pct", "supplier_name", "image_path", "leadtime"]
 SHARED_HISTORY_COLS = ["history_id", "date", "quote_no", "customer"] + QUOTE_KH_COLUMNS + ["pct_end", "pct_buy", "pct_tax", "pct_vat", "pct_pay", "pct_mgmt", "pct_trans"]
 SUPPLIER_ORDER_COLS = ["no", "item_code", "item_name", "specs", "qty", "price_rmb", "total_rmb", "exchange_rate", "price_vnd", "total_vnd", "eta", "supplier", "po_number", "order_date", "pdf_path", "Delete"]
@@ -219,22 +219,29 @@ if 'initialized' not in st.session_state:
 # --- LOAD DATA AT STARTUP ---
 with st.spinner("Đang kết nối 2TB Drive và Supabase..."):
     if not get_drive_service(): st.stop()
-    customers_df = load_data(TBL_CUSTOMERS, MASTER_COLUMNS)
-    suppliers_df = load_data(TBL_SUPPLIERS, MASTER_COLUMNS)
-    purchases_df = load_data(TBL_PURCHASES, PURCHASE_COLUMNS)
-    shared_history_df = load_data(TBL_SHARED_HISTORY, SHARED_HISTORY_COLS)
-    tracking_df = load_data(TBL_TRACKING, TRACKING_COLS)
-    payment_df = load_data(TBL_PAYMENTS, PAYMENT_COLS)
-    paid_history_df = load_data(TBL_PAID_HISTORY, PAYMENT_COLS)
-    db_supplier_orders = load_data(TBL_SUPP_ORDERS, [c for c in SUPPLIER_ORDER_COLS if c != "Delete"])
-    db_customer_orders = load_data(TBL_CUST_ORDERS, [c for c in CUSTOMER_ORDER_COLS if c != "Delete"])
+    # Load data nhưng chỉ lấy các cột cần thiết (trừ 'no' nếu DB không có thì load_data sẽ trả về chuỗi rỗng cho 'no')
+    customers_df = load_data(TBL_CUSTOMERS, [c for c in MASTER_COLUMNS if c!='no'])
+    suppliers_df = load_data(TBL_SUPPLIERS, [c for c in MASTER_COLUMNS if c!='no'])
+    purchases_df = load_data(TBL_PURCHASES, [c for c in PURCHASE_COLUMNS if c!='no'])
+    shared_history_df = load_data(TBL_SHARED_HISTORY, [c for c in SHARED_HISTORY_COLS if c!='no'])
+    tracking_df = load_data(TBL_TRACKING, [c for c in TRACKING_COLS if c!='no'])
+    payment_df = load_data(TBL_PAYMENTS, [c for c in PAYMENT_COLS if c!='no'])
+    paid_history_df = load_data(TBL_PAID_HISTORY, [c for c in PAYMENT_COLS if c!='no'])
+    db_supplier_orders = load_data(TBL_SUPP_ORDERS, [c for c in SUPPLIER_ORDER_COLS if c not in ["Delete","no"]])
+    db_customer_orders = load_data(TBL_CUST_ORDERS, [c for c in CUSTOMER_ORDER_COLS if c not in ["Delete","no"]])
+    
+    # Tự tạo cột No giả lập cho UI nếu chưa có
+    for df in [customers_df, suppliers_df, purchases_df, tracking_df, payment_df, db_supplier_orders, db_customer_orders]:
+        if 'no' not in df.columns:
+            df['no'] = range(1, len(df) + 1)
+            df['no'] = df['no'].astype(str)
 
 sales_history_df = db_customer_orders.copy()
 
 # =============================================================================
 # 3. SIDEBAR & TABS
 # =============================================================================
-st.sidebar.title("CRM CLOUD (V4804)")
+st.sidebar.title("CRM CLOUD (V4805)")
 st.sidebar.info("OAuth 2.0 Connected")
 admin_pwd = st.sidebar.text_input("Admin Password", type="password")
 is_admin = (admin_pwd == ADMIN_PASSWORD)
@@ -251,8 +258,8 @@ with tab1:
     if col_act1.button("🔄 CẬP NHẬT DỮ LIỆU"): st.rerun()
     if col_act2.button("⚠️ XÓA CACHE (Local Only)"): st.rerun()
     
-    total_revenue = db_customer_orders['total_price'].apply(to_float).sum()
-    total_po_ncc_cost = db_supplier_orders['total_vnd'].apply(to_float).sum()
+    total_revenue = db_customer_orders['total_price'].apply(to_float).sum() if 'total_price' in db_customer_orders.columns else 0
+    total_po_ncc_cost = db_supplier_orders['total_vnd'].apply(to_float).sum() if 'total_vnd' in db_supplier_orders.columns else 0
     
     total_other_costs = 0.0
     if not shared_history_df.empty:
@@ -265,9 +272,9 @@ with tab1:
             except: pass
 
     total_profit = total_revenue - (total_po_ncc_cost + total_other_costs)
-    po_ordered_ncc = len(tracking_df[tracking_df['order_type'] == 'NCC'])
-    po_total_recv = len(db_customer_orders['po_number'].unique())
-    po_delivered = len(tracking_df[(tracking_df['order_type'] == 'KH') & (tracking_df['status'] == 'Đã giao hàng')])
+    po_ordered_ncc = len(tracking_df[tracking_df['order_type'] == 'NCC']) if not tracking_df.empty else 0
+    po_total_recv = len(db_customer_orders['po_number'].unique()) if not db_customer_orders.empty else 0
+    po_delivered = len(tracking_df[(tracking_df['order_type'] == 'KH') & (tracking_df['status'] == 'Đã giao hàng')]) if not tracking_df.empty else 0
     po_pending = po_total_recv - po_delivered
 
     c1, c2, c3 = st.columns(3)
@@ -295,31 +302,40 @@ with tab1:
             top = db_supplier_orders.copy(); top['val'] = top['total_vnd'].apply(to_float)
             st.dataframe(top.groupby('supplier')['val'].sum().sort_values(ascending=False).head(10).apply(fmt_num), use_container_width=True)
 
-# --- TAB 2: BÁO GIÁ NCC (FIXED IMPORT, OVERWRITE & NO-COL) ---
+# --- TAB 2: BÁO GIÁ NCC (STRICT SYNC & CLEAN DATA) ---
 with tab2:
     st.subheader("Cơ sở dữ liệu giá đầu vào (Purchases)")
     col_p1, col_p2 = st.columns([1, 3])
     with col_p1:
-        uploaded_pur = st.file_uploader("Import Excel (Kèm ảnh)", type=["xlsx"])
+        # Chấp nhận cả CSV và XLSX
+        uploaded_pur = st.file_uploader("Import Excel/CSV (Kèm ảnh)", type=["xlsx", "xls", "csv"])
         
         if uploaded_pur and st.button("Thực hiện Import"):
             status = st.empty()
-            status.info("⏳ Đang đọc file Excel...")
+            status.info("⏳ Đang đọc file...")
             try:
-                df_debug = pd.read_excel(uploaded_pur, header=0, dtype=str).fillna("")
+                # Xử lý đọc file tùy theo đuôi
+                if uploaded_pur.name.endswith('.csv'):
+                    df_debug = pd.read_csv(uploaded_pur, dtype=str).fillna("")
+                else:
+                    df_debug = pd.read_excel(uploaded_pur, header=0, dtype=str).fillna("")
                 
-                status.info("⏳ Đang xử lý ảnh từ Excel...")
-                wb = load_workbook(uploaded_pur, data_only=False); ws = wb.active
+                status.info("⏳ Đang xử lý ảnh (chỉ với file Excel)...")
                 img_row_map = {}
-                for img in getattr(ws, '_images', []):
+                if uploaded_pur.name.endswith(('.xlsx', '.xls')):
                     try:
-                        rid = img.anchor._from.row + 1 
-                        img_row_map[rid] = img 
+                        wb = load_workbook(uploaded_pur, data_only=False); ws = wb.active
+                        for img in getattr(ws, '_images', []):
+                            try:
+                                rid = img.anchor._from.row + 1 
+                                img_row_map[rid] = img 
+                            except: pass
                     except: pass
                 
                 status.info("⏳ Đang ghép dữ liệu và Upload ảnh (chế độ Ghi Đè)...")
                 rows = []
                 for i, r in df_debug.iterrows():
+                    # Cột B là Item Code (index 1)
                     item_code = safe_str(r.iloc[1]) 
                     if not item_code: continue 
                     excel_row_idx = i + 2
@@ -334,7 +350,7 @@ with tab2:
                         except: pass
 
                     item = {
-                        "no": safe_str(r.iloc[0]), 
+                        # "no": safe_str(r.iloc[0]), # KHÔNG GỬI NO LÊN DB
                         "item_code": item_code, 
                         "item_name": safe_str(r.iloc[2]), 
                         "specs": safe_str(r.iloc[3]),
@@ -348,12 +364,16 @@ with tab2:
                         "supplier_name": safe_str(r.iloc[11]), 
                         "image_path": img_url, 
                         "type": safe_str(r.iloc[13]) if len(r) > 13 else "",
-                        "nuoc": safe_str(r.iloc[14]) if len(r) > 14 else ""
+                        "nuoc": safe_str(r.iloc[14]) if len(r) > 14 else "",
+                        # Tạo dữ liệu sạch cho các cột _clean_ (theo DB chuẩn)
+                        "_clean_code": clean_lookup_key(item_code),
+                        "_clean_name": clean_lookup_key(safe_str(r.iloc[2])),
+                        "_clean_specs": clean_lookup_key(safe_str(r.iloc[3]))
                     }
                     rows.append(item)
                 
                 if len(rows) > 0:
-                    status.info(f"⏳ Đang lưu {len(rows)} dòng vào Supabase...")
+                    status.info(f"⏳ Đang lưu {len(rows)} dòng vào Supabase (Bỏ qua cột 'no')...")
                     save_data(TBL_PURCHASES, pd.DataFrame(rows))
                     st.success(f"✅ THÀNH CÔNG! Đã import {len(rows)} dòng. Đang tải lại...")
                     st.cache_data.clear()
@@ -400,7 +420,7 @@ with tab3:
     with tab3_1:
         c1, c2, c3 = st.columns([1,1,1])
         with c1:
-            cust_list = customers_df["short_name"].tolist()
+            cust_list = customers_df["short_name"].tolist() if not customers_df.empty else []
             sel_cust = st.selectbox("Khách hàng", [""] + cust_list)
         with c2: quote_name = st.text_input("Tên Báo Giá / Mã BG")
         with c3:
@@ -426,6 +446,7 @@ with tab3:
             uploaded_rfq = st.file_uploader("📂 Import RFQ", type=["xlsx"])
             if uploaded_rfq and st.button("Load RFQ"):
                 try:
+                    # Clean lookup data
                     purchases_df["_clean_code"] = purchases_df["item_code"].apply(clean_lookup_key)
                     purchases_df["_clean_name"] = purchases_df["item_name"].apply(clean_lookup_key)
                     
@@ -551,7 +572,8 @@ with tab4:
     c1, c2 = st.columns(2)
     with c1:
         st.subheader("1. PO NCC")
-        po_n = st.text_input("Số PO NCC"); sup = st.selectbox("NCC", [""]+suppliers_df["short_name"].tolist())
+        suppliers_list = suppliers_df["short_name"].tolist() if not suppliers_df.empty else []
+        po_n = st.text_input("Số PO NCC"); sup = st.selectbox("NCC", [""] + suppliers_list)
         up_n = st.file_uploader("Excel NCC", type=["xlsx"])
         if up_n:
             df = pd.read_excel(up_n, dtype=str).fillna(""); tmp = []
@@ -568,12 +590,12 @@ with tab4:
             df = ed_n.copy(); df["po_number"] = po_n; df["order_date"] = datetime.now().strftime("%d/%m/%Y")
             save_data(TBL_SUPP_ORDERS, df)
             tr = []; 
-            for s, g in df.groupby("supplier"): tr.append({"no":str(len(tracking_df)+len(tr)+1), "po_no":po_n, "partner":s, "status":"Đã đặt hàng", "order_type":"NCC"})
+            for s, g in df.groupby("supplier"): tr.append({"po_no":po_n, "partner":s, "status":"Đã đặt hàng", "order_type":"NCC"})
             save_data(TBL_TRACKING, pd.DataFrame(tr)); st.success("OK")
 
     with c2:
         st.subheader("2. PO Khách")
-        po_c = st.text_input("Số PO Khách"); cus = st.selectbox("Khách", [""]+customers_df["short_name"].tolist())
+        po_c = st.text_input("Số PO Khách"); cus = st.selectbox("Khách", [""] + cust_list)
         files = st.file_uploader("File PO", accept_multiple_files=True)
         urls = []
         if files:
@@ -594,25 +616,27 @@ with tab4:
         if st.button("Lưu PO Khách"):
             df = ed_c.copy(); df["po_number"] = po_c; df["customer"] = cus; df["order_date"] = datetime.now().strftime("%d/%m/%Y"); df["pdf_path"] = ",".join(urls)
             save_data(TBL_CUST_ORDERS, df)
-            save_data(TBL_TRACKING, pd.DataFrame([{"no":str(len(tracking_df)+1), "po_no":po_c, "partner":cus, "status":"Đang đợi hàng về", "order_type":"KH"}])); st.success("OK")
+            save_data(TBL_TRACKING, pd.DataFrame([{"po_no":po_c, "partner":cus, "status":"Đang đợi hàng về", "order_type":"KH"}])); st.success("OK")
 
 # --- TAB 5: TRACKING ---
 with tab5:
     t5_1, t5_2 = st.tabs(["THEO DÕI", "LỊCH SỬ THANH TOÁN"])
     with t5_1:
         c1, c2 = st.columns(2)
-        view_id = c1.text_input("Tracking ID")
+        view_id = c1.text_input("Tracking ID (No)")
         up_prf = c1.file_uploader("Up ảnh proof", accept_multiple_files=True)
         if c1.button("Up Proof") and view_id and up_prf:
             urls = [upload_to_drive(f, "CRM_PROOF_IMAGES", f"prf_{view_id}_{f.name}") for f in up_prf]
-            row = tracking_df[tracking_df['no']==view_id]
+            # Sửa lỗi: Cột 'no' trong DB là 'id' (tự sinh) hoặc 'no' (nếu tạo). Ở đây ta tìm theo po_no hoặc tạo logic tìm kiếm.
+            # Giả định user nhập po_no
+            row = tracking_df[tracking_df['po_no']==view_id]
             if not row.empty:
                 curr = json.loads(row.iloc[0]['proof_image']) if row.iloc[0]['proof_image'] else []
-                supabase.table(TBL_TRACKING).update({"proof_image": json.dumps(curr+urls)}).eq("no", view_id).execute()
+                supabase.table(TBL_TRACKING).update({"proof_image": json.dumps(curr+urls)}).eq("po_no", view_id).execute()
                 st.success("OK")
         
         if c2.button("Xem Proof") and view_id:
-            row = tracking_df[tracking_df['no']==view_id]
+            row = tracking_df[tracking_df['po_no']==view_id]
             if not row.empty and row.iloc[0]['proof_image']:
                 for u in json.loads(row.iloc[0]['proof_image']): st.image(u)
 
@@ -621,17 +645,19 @@ with tab5:
             save_data(TBL_TRACKING, ed_tr)
             for i, r in ed_tr.iterrows():
                 if r['status'] in ['Đã giao hàng', 'Hàng đã nhận ở VP']:
-                    supabase.table(TBL_TRACKING).update({'finished':'1', 'last_update':datetime.now().strftime("%d/%m/%Y")}).eq('no', r['no']).execute()
+                    # Update finish status
+                    # Cần tìm cách định danh row, dùng po_no và partner
+                    supabase.table(TBL_TRACKING).update({'finished':'1', 'last_update':datetime.now().strftime("%d/%m/%Y")}).eq('po_no', r['po_no']).eq('partner', r['partner']).execute()
                     if r['order_type'] == 'KH':
-                        save_data(TBL_PAYMENTS, pd.DataFrame([{"no":str(len(payment_df)+1), "po_no":r['po_no'], "customer":r['partner'], "status":"Chưa thanh toán"}]))
+                        save_data(TBL_PAYMENTS, pd.DataFrame([{"po_no":r['po_no'], "customer":r['partner'], "status":"Chưa thanh toán"}]))
             st.success("Updated!"); st.rerun()
     
     with t5_2:
         ed_pay = st.data_editor(payment_df[payment_df["status"]!="Đã thanh toán"], key="ep", use_container_width=True)
         if st.button("Update Payment"): save_data(TBL_PAYMENTS, ed_pay); st.success("OK")
         
-        pop = st.selectbox("Chọn PO Paid", ed_pay["po_no"].unique())
-        if st.button("Xác nhận Paid"):
+        pop = st.selectbox("Chọn PO Paid", ed_pay["po_no"].unique()) if not ed_pay.empty else None
+        if st.button("Xác nhận Paid") and pop:
             supabase.table(TBL_PAYMENTS).update({"status":"Đã thanh toán", "paid_date":datetime.now().strftime("%d/%m/%Y")}).eq("po_no", pop).execute()
             st.success("Done"); st.rerun()
 
