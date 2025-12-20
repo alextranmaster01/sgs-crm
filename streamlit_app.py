@@ -23,11 +23,11 @@ except ImportError:
 # =============================================================================
 # CẤU HÌNH & VERSION
 # =============================================================================
-APP_VERSION = "V4819 - MULTI-PRICE SUPPORT"
+APP_VERSION = "V4820 - FIX UI (HIDE INDEX & SHOW IMAGES)"
 RELEASE_NOTE = """
-- **Smart Unique:** Cho phép cùng mã hàng nhưng khác giá nhập (RMB) hoặc khác loại (NUOC) tồn tại song song.
-- **UI Clean:** Ẩn các cột hệ thống (ID, Clean Code).
-- **Expanded View:** Bảng dữ liệu hiển thị dài gấp đôi.
+- **UI Fix:** Ẩn cột Index thừa bên trái cột No.
+- **Image Fix:** Hiển thị ảnh trực tiếp trong bảng dữ liệu.
+- **Core:** Giữ nguyên logic đa giá (Multi-price) và ghi đè thông minh.
 """
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
@@ -44,7 +44,7 @@ st.markdown("""
     .bg-del { background: linear-gradient(135deg, #4facfe, #00f2fe); }
     .bg-pend { background: linear-gradient(135deg, #f093fb, #f5576c); }
     
-    /* Tăng chiều cao bảng */
+    /* Tăng chiều cao bảng và ẩn index mặc định */
     [data-testid="stDataFrame"] > div { height: 800px !important; }
     </style>""", unsafe_allow_html=True)
 
@@ -135,7 +135,7 @@ def load_data(table):
         if not df.empty and 'no' not in df.columns: 
             df.insert(0, 'no', range(1, len(df)+1))
         
-        # Ẩn cột kỹ thuật khỏi DF trả về (để không hiện lên bảng)
+        # Ẩn cột kỹ thuật
         drop_cols = ['id', '_clean_code', '_clean_name', '_clean_specs']
         for c in drop_cols:
             if c in df.columns: df = df.drop(columns=[c])
@@ -146,9 +146,7 @@ def load_data(table):
 def save_data(table, df, unique_cols=None):
     if df.empty: return
     try:
-        # LOGIC MỚI: Check trùng dựa trên nhiều cột (item_code + price + nuoc)
         if unique_cols and all(col in df.columns for col in unique_cols):
-            # Giữ lại dòng cuối cùng của tổ hợp trùng lặp
             df = df.drop_duplicates(subset=unique_cols, keep='last')
 
         VALID_COLS = {
@@ -169,9 +167,7 @@ def save_data(table, df, unique_cols=None):
             clean = {k: str(v) if v is not None and str(v)!='nan' else None for k,v in r.items() if k in valid}
             if clean: clean_recs.append(clean)
         
-        # Upsert
         if unique_cols:
-            # Supabase upsert sẽ dùng Unique Index (đã tạo ở bước SQL) để xử lý
             supabase.table(table).upsert(clean_recs).execute()
         else:
             supabase.table(table).upsert(clean_recs).execute()
@@ -276,8 +272,6 @@ with t2:
                     rows.append(d)
                     bar.progress((i+1)/len(df))
                 
-                # Logic: Unique key bây giờ là tổ hợp Code + Price + Nuoc
-                # (Đã xử lý ở SQL Index, Python chỉ cần gọi upsert)
                 save_data("crm_purchases", pd.DataFrame(rows), unique_cols=['item_code', 'buying_price_rmb', 'nuoc'])
                 st.success(f"✅ Thành công! Đã xử lý {len(rows)} mã hàng."); time.sleep(1); st.rerun()
             except Exception as e: st.error(f"Lỗi Import: {e}")
@@ -296,7 +290,19 @@ with t2:
         if search:
             mask = view.apply(lambda x: search.lower() in str(x.values).lower(), axis=1)
             view = view[mask]
-        st.dataframe(view, column_config={"image_path": st.column_config.ImageColumn("Img")}, use_container_width=True, height=800)
+        
+        # --- HIỂN THỊ BẢNG (FIXED: ẨN INDEX & HIỆN ẢNH) ---
+        st.dataframe(
+            view, 
+            column_config={
+                "image_path": st.column_config.ImageColumn("Hình ảnh", help="Ảnh sản phẩm"),
+                "buying_price_rmb": st.column_config.TextColumn("Giá RMB"),
+                "nuoc": st.column_config.TextColumn("Loại (N/U/O/C)")
+            }, 
+            use_container_width=True, 
+            height=800,
+            hide_index=True  # <--- DÒNG NÀY ĐỂ ẨN CỘT TRÁI CÙNG
+        )
 
 # --- TAB 3 ---
 with t3:
@@ -356,7 +362,18 @@ with t3:
             st.session_state.quote_df.at[i, "unit_price"] = fmt_num(parse_formula(unit_f, to_float(r["buying_price_vnd"]), to_float(r["ap_price"])))
         st.rerun()
 
-    edited = st.data_editor(st.session_state.quote_df, num_rows="dynamic", use_container_width=True, column_config={"image_path": st.column_config.ImageColumn()}, key="quote_main_ed", height=600)
+    # HIỂN THỊ BẢNG BÁO GIÁ (ẨN INDEX & HIỆN ẢNH)
+    edited = st.data_editor(
+        st.session_state.quote_df, 
+        num_rows="dynamic", 
+        use_container_width=True, 
+        column_config={
+            "image_path": st.column_config.ImageColumn("Hình ảnh"),
+        }, 
+        key="quote_main_ed", 
+        height=600,
+        hide_index=True
+    )
     
     final = edited.copy()
     for i, r in final.iterrows():
@@ -409,7 +426,7 @@ with t4:
                 recs.append({"item_code": safe_str(r.iloc[1]), "item_name": safe_str(r.iloc[2]), "qty": fmt_num(to_float(r.iloc[4])), "price_rmb": fmt_num(to_float(r.iloc[5]))})
             st.session_state.temp_supp = pd.DataFrame(recs)
         
-        ed_s = st.data_editor(st.session_state.temp_supp, num_rows="dynamic", use_container_width=True, key="editor_po_supp")
+        ed_s = st.data_editor(st.session_state.temp_supp, num_rows="dynamic", use_container_width=True, key="editor_po_supp", hide_index=True)
         if st.button("Save PO NCC"):
             s_data = ed_s.copy()
             s_data['po_number'] = po_s; s_data['supplier'] = sup; s_data['order_date'] = datetime.now().strftime("%d/%m/%Y")
@@ -429,7 +446,7 @@ with t4:
                 recs.append({"item_code": safe_str(r.iloc[1]), "item_name": safe_str(r.iloc[2]), "qty": fmt_num(to_float(r.iloc[4])), "unit_price": fmt_num(to_float(r.iloc[5]))})
             st.session_state.temp_cust = pd.DataFrame(recs)
             
-        ed_c = st.data_editor(st.session_state.temp_cust, num_rows="dynamic", use_container_width=True, key="editor_po_cust")
+        ed_c = st.data_editor(st.session_state.temp_cust, num_rows="dynamic", use_container_width=True, key="editor_po_cust", hide_index=True)
         if st.button("Save PO Cust"):
             c_data = ed_c.copy()
             c_data['po_number'] = po_c; c_data['customer'] = cus; c_data['order_date'] = datetime.now().strftime("%d/%m/%Y")
@@ -445,9 +462,9 @@ with t5:
     with c1:
         st.subheader("Tracking")
         if not tracking_df.empty:
-            ed_t = st.data_editor(tracking_df, key="editor_tracking_main", height=600)
+            ed_t = st.data_editor(tracking_df, key="editor_tracking_main", height=600, hide_index=True, column_config={"proof_image": st.column_config.ImageColumn("Proof")})
             if st.button("Update Tracking"):
-                save_data("crm_tracking", ed_t, unique_key="id")
+                save_data("crm_tracking", ed_t, unique_cols=["po_no", "partner"])
                 for i, r in ed_t.iterrows():
                     if r['status'] == 'Delivered' and r['order_type'] == 'KH':
                         save_data("crm_payment", pd.DataFrame([{"po_no": r['po_no'], "customer": r['partner'], "status": "Pending"}]))
@@ -457,15 +474,16 @@ with t5:
             prf = st.file_uploader("Proof Img", accept_multiple_files=True, key="up_proof")
             if st.button("Upload Proof") and pk and prf:
                 urls = [upload_to_drive(f, "CRM_PROOF_IMAGES", f"PRF_{pk}_{f.name}") for f in prf]
-                supabase.table("crm_tracking").update({"proof_image": json.dumps(urls)}).eq("po_no", pk).execute()
+                # Lưu mảng ảnh vào DB (ở đây lưu URL đầu tiên để hiển thị đơn giản)
+                if urls: supabase.table("crm_tracking").update({"proof_image": urls[0]}).eq("po_no", pk).execute()
                 st.success("Uploaded")
 
     with c2:
         st.subheader("Payment")
         if not payment_df.empty:
-            ed_p = st.data_editor(payment_df, key="editor_payment_main", height=600)
+            ed_p = st.data_editor(payment_df, key="editor_payment_main", height=600, hide_index=True)
             if st.button("Update Payment"):
-                save_data("crm_payment", ed_p, unique_key="id")
+                save_data("crm_payment", ed_p, unique_cols=["po_no", "invoice_no"])
                 st.success("Updated")
 
 # --- TAB 6 ---
@@ -484,11 +502,11 @@ with t6:
                     for nk, db in MAP_MASTER.items():
                         if nk in hn: d[db] = safe_str(r[hn[nk]])
                     if d.get('short_name'): rows.append(d)
-                save_data("crm_customers", pd.DataFrame(rows), unique_key="short_name")
+                save_data("crm_customers", pd.DataFrame(rows), unique_cols=["short_name"])
                 st.success("Imported"); st.rerun()
             
-            ed_k = st.data_editor(customers_df, num_rows="dynamic", key="editor_master_cust", height=600)
-            if st.button("Save Cust"): save_data("crm_customers", ed_k, unique_key="short_name"); st.success("OK")
+            ed_k = st.data_editor(customers_df, num_rows="dynamic", key="editor_master_cust", height=600, hide_index=True)
+            if st.button("Save Cust"): save_data("crm_customers", ed_k, unique_cols=["short_name"]); st.success("OK")
 
         with c2:
             st.write("Suppliers")
@@ -502,9 +520,9 @@ with t6:
                     for nk, db in MAP_MASTER.items():
                         if nk in hn: d[db] = safe_str(r[hn[nk]])
                     if d.get('short_name'): rows.append(d)
-                save_data("crm_suppliers", pd.DataFrame(rows), unique_key="short_name")
+                save_data("crm_suppliers", pd.DataFrame(rows), unique_cols=["short_name"])
                 st.success("Imported"); st.rerun()
             
-            ed_s = st.data_editor(suppliers_df, num_rows="dynamic", key="editor_master_supp", height=600)
-            if st.button("Save Supp"): save_data("crm_suppliers", ed_s, unique_key="short_name"); st.success("OK")
+            ed_s = st.data_editor(suppliers_df, num_rows="dynamic", key="editor_master_supp", height=600, hide_index=True)
+            if st.button("Save Supp"): save_data("crm_suppliers", ed_s, unique_cols=["short_name"]); st.success("OK")
     else: st.warning("Admin Only")
