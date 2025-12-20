@@ -3,42 +3,39 @@ import pandas as pd
 import datetime
 from datetime import datetime, timedelta
 import re
-import warnings
 import json
 import io
 import time
 import unicodedata
 import mimetypes
 
-# --- THƯ VIỆN CLOUD ---
+# --- THƯ VIỆN KẾT NỐI CLOUD ---
 try:
-    from openpyxl import load_workbook, Workbook
-    from openpyxl.styles import Alignment, Border, Side, Font, PatternFill
-    from openpyxl.drawing.image import Image as OpenpyxlImage
+    from openpyxl import load_workbook
     from supabase import create_client, Client
     from google.oauth2.credentials import Credentials
     from googleapiclient.discovery import build
     from googleapiclient.http import MediaIoBaseUpload
 except ImportError:
-    st.error("⚠️ Cài đặt: pip install pandas openpyxl supabase google-api-python-client google-auth-oauthlib")
+    st.error("⚠️ Cài đặt thư viện: pip install pandas openpyxl supabase google-api-python-client google-auth-oauthlib")
     st.stop()
 
 # =============================================================================
 # CẤU HÌNH & VERSION
 # =============================================================================
-APP_VERSION = "V4817 - CLOUD MIRROR (LOGIC V4800)"
+APP_VERSION = "V4818 - FINAL STABLE (AUTO DEDUPLICATE)"
 RELEASE_NOTE = """
-- **Core:** Logic sao chép 1:1 từ bản V4800 Local.
-- **Profit:** Lợi Nhuận = Tổng Thu - (Tổng Chi NCC + Tổng Chi Phí Vận Hành).
-- **Overwrite:** Tự động ghi đè dữ liệu trùng mã (Item/Customer).
+- **Fix Critical Error 21000:** Tự động loại bỏ mã hàng trùng lặp trong file Excel trước khi gửi lên Server.
+- **Full Logic:** Giữ nguyên 100% công thức tính toán từ bản V4800.
+- **Smart Overwrite:** Ghi đè thông minh, không tạo file rác.
 """
-st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
+st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="🛡️")
 
-# --- CSS (STYLE V4800) ---
+# --- CSS GIAO DIỆN ---
 st.markdown("""
     <style>
-    button[data-baseweb="tab"] div p { font-size: 20px !important; font-weight: 800 !important; }
-    .card-3d { border-radius: 12px; padding: 20px; color: white; text-align: center; box-shadow: 0 10px 20px rgba(0,0,0,0.19); margin-bottom: 20px; }
+    button[data-baseweb="tab"] div p { font-size: 20px !important; font-weight: 700 !important; }
+    .card-3d { border-radius: 12px; padding: 20px; color: white; text-align: center; box-shadow: 0 4px 8px rgba(0,0,0,0.2); margin-bottom: 15px; }
     .bg-sales { background: linear-gradient(135deg, #00b09b, #96c93d); }
     .bg-cost { background: linear-gradient(135deg, #ff5f6d, #ffc371); }
     .bg-profit { background: linear-gradient(135deg, #f83600, #f9d423); }
@@ -57,10 +54,10 @@ try:
     OAUTH_INFO = st.secrets["google_oauth"]
     ROOT_FOLDER_ID = OAUTH_INFO.get("root_folder_id", "1GLhnSK7Bz7LbTC-Q7aPt_Itmutni5Rqa")
 except Exception as e:
-    st.error(f"⚠️ Config Error: {e}")
+    st.error(f"⚠️ Lỗi Config: {e}")
     st.stop()
 
-# --- GOOGLE DRIVE (GHI ĐÈ ẢNH) ---
+# --- XỬ LÝ GOOGLE DRIVE (GHI ĐÈ ẢNH) ---
 def get_drive_service():
     try:
         creds = Credentials(None, refresh_token=OAUTH_INFO["refresh_token"], 
@@ -73,11 +70,13 @@ def upload_to_drive(file_obj, sub_folder, file_name):
     srv = get_drive_service()
     if not srv: return ""
     try:
-        q_f = f"'{ROOT_FOLDER_ID}' in parents and name='{sub_folder}' and trashed=false"
+        # Tìm folder
+        q_f = f"'{ROOT_FOLDER_ID}' in parents and mimeType='application/vnd.google-apps.folder' and name='{sub_folder}' and trashed=false"
         folders = srv.files().list(q=q_f, fields="files(id)").execute().get('files', [])
         folder_id = folders[0]['id'] if folders else srv.files().create(body={'name': sub_folder, 'mimeType': 'application/vnd.google-apps.folder', 'parents': [ROOT_FOLDER_ID]}, fields='id').execute()['id']
         srv.permissions().create(fileId=folder_id, body={'role': 'reader', 'type': 'anyone'}).execute()
 
+        # Ghi đè file cũ
         q_file = f"'{folder_id}' in parents and name = '{file_name}' and trashed = false"
         existing = srv.files().list(q=q_file, fields='files(id)').execute().get('files', [])
         media = MediaIoBaseUpload(file_obj, mimetype=mimetypes.guess_type(file_name)[0] or 'application/octet-stream', resumable=True)
@@ -93,14 +92,17 @@ def upload_to_drive(file_obj, sub_folder, file_name):
         return f"https://drive.google.com/uc?export=view&id={file_id}"
     except: return ""
 
-# --- HÀM XỬ LÝ (LOGIC V4800) ---
-def safe_str(val): return str(val).strip() if val is not None and str(val).lower() not in ['nan', 'none', 'null', ''] else ""
+# --- HÀM XỬ LÝ DỮ LIỆU (LOGIC GỐC V4800) ---
+def safe_str(val): return str(val).strip() if val is not None and str(val).lower() not in ['nan', 'none', 'null', 'nat', ''] else ""
 def safe_filename(s): return re.sub(r'[^\w\-_]', '_', unicodedata.normalize('NFKD', safe_str(s)).encode('ascii', 'ignore').decode('utf-8')).strip('_')
 def to_float(val):
-    s = str(val).replace(",", "").replace("¥", "").replace("$", "").replace("RMB", "").replace("VND", "").replace(" ", "")
+    if not val: return 0.0
+    s = str(val).replace(",", "").replace("¥", "").replace("$", "").replace("RMB", "").replace("VND", "").replace(" ", "").replace("\n","")
     try: return max([float(n) for n in re.findall(r"[-+]?\d*\.\d+|\d+", s)])
     except: return 0.0
-def fmt_num(x): return "{:,.0f}".format(float(x)) if x else "0"
+def fmt_num(x): 
+    try: return "{:,.0f}".format(float(x)) 
+    except: return "0"
 def clean_lookup_key(s): return re.sub(r'[^a-zA-Z0-9]', '', str(s)).lower()
 def parse_formula(formula, buying, ap):
     s = str(formula).strip().upper().replace(",", "")
@@ -108,20 +110,8 @@ def parse_formula(formula, buying, ap):
     expr = s[1:].replace("BUYING PRICE", str(buying)).replace("BUY", str(buying)).replace("AP PRICE", str(ap)).replace("AP", str(ap))
     try: return float(eval(re.sub(r'[^0-9.+\-*/()]', '', expr)))
     except: return 0.0
-def calc_eta(date_str, lead):
-    try:
-        dt = datetime.strptime(date_str, "%d/%m/%Y")
-        days = int(re.findall(r'\d+', str(lead))[0]) if re.findall(r'\d+', str(lead)) else 0
-        return (dt + timedelta(days=days)).strftime("%d/%m/%Y")
-    except: return ""
-def safe_write_merged(ws, r, c, v):
-    cell = ws.cell(row=r, column=c)
-    for rng in ws.merged_cells.ranges:
-        if cell.coordinate in rng:
-            ws.cell(row=rng.min_row, column=rng.min_col).value = v; return
-    cell.value = v
 
-# --- SMART MAPPING (TỪ EXCEL CỦA BẠN) ---
+# --- SMART MAPPING ---
 def normalize_header(h): return re.sub(r'[^a-zA-Z0-9]', '', str(h).lower())
 
 MAP_PURCHASE = {
@@ -138,20 +128,27 @@ MAP_MASTER = {
     "destination": "destination", "paymentterm": "payment_term"
 }
 
-# --- DB HANDLER ---
+# --- XỬ LÝ DATABASE (WHITELIST & AUTO DEDUPLICATE) ---
 @st.cache_data(ttl=5) 
 def load_data(table):
     try:
         res = supabase.table(table).select("*").execute()
         df = pd.DataFrame(res.data)
-        if not df.empty and 'no' not in df.columns: df.insert(0, 'no', range(1, len(df)+1))
+        if not df.empty and 'no' not in df.columns: 
+            df.insert(0, 'no', range(1, len(df)+1))
         return df
     except: return pd.DataFrame()
 
 def save_data(table, df, unique_key=None):
     if df.empty: return
     try:
-        WHITELIST = {
+        # 1. FIX LỖI 21000: Tự động xóa dòng trùng lặp trong DataFrame trước khi gửi
+        if unique_key and unique_key in df.columns:
+            # Drop duplicates, giữ lại dòng cuối cùng (last)
+            df = df.drop_duplicates(subset=[unique_key], keep='last')
+
+        # 2. Whitelist: Chỉ lấy cột chuẩn
+        VALID_COLS = {
             "crm_purchases": list(MAP_PURCHASE.values()) + ["image_path", "_clean_code", "_clean_name", "_clean_specs"],
             "crm_customers": list(MAP_MASTER.values()),
             "crm_suppliers": list(MAP_MASTER.values()),
@@ -162,19 +159,20 @@ def save_data(table, df, unique_key=None):
             "crm_shared_history": ["history_id", "date", "quote_no", "customer", "item_code", "item_name", "specs", "qty", "buying_price_rmb", "total_buying_price_rmb", "exchange_rate", "buying_price_vnd", "total_buying_price_vnd", "ap_price", "ap_total_vnd", "unit_price", "total_price_vnd", "gap", "end_user_val", "buyer_val", "import_tax_val", "vat_val", "transportation", "mgmt_fee", "payback_val", "profit_vnd", "profit_pct", "supplier_name", "image_path", "leadtime", "pct_end", "pct_buy", "pct_tax", "pct_vat", "pct_pay", "pct_mgmt", "pct_trans"]
         }
         
-        valid = WHITELIST.get(table, df.columns.tolist())
+        valid = VALID_COLS.get(table, df.columns.tolist())
         recs = df.to_dict(orient='records')
         clean_recs = []
         for r in recs:
             clean = {k: str(v) if v is not None and str(v)!='nan' else None for k,v in r.items() if k in valid}
             if clean: clean_recs.append(clean)
         
+        # 3. Upsert
         if unique_key: supabase.table(table).upsert(clean_recs, on_conflict=unique_key).execute()
         else: supabase.table(table).upsert(clean_recs).execute()
         st.cache_data.clear()
-    except Exception as e: st.error(f"❌ DB Error: {e}")
+    except Exception as e: st.error(f"❌ Lưu Lỗi ({table}): {e}")
 
-# --- INIT ---
+# --- INIT STATE ---
 if 'init' not in st.session_state:
     st.session_state.init = True
     st.session_state.quote_df = pd.DataFrame(columns=["item_code", "item_name", "specs", "qty", "buying_price_vnd", "buying_price_rmb", "exchange_rate", "ap_price", "unit_price", "total_price_vnd", "supplier_name", "image_path", "leadtime", "transportation"])
@@ -182,17 +180,15 @@ if 'init' not in st.session_state:
     st.session_state.temp_cust = pd.DataFrame(columns=["item_code", "item_name", "specs", "qty", "unit_price", "total_price", "customer"])
     for k in ["end","buy","tax","vat","pay","mgmt","trans"]: st.session_state[f"pct_{k}"] = "0"
 
-TEMPLATE_FILE = "AAA-QUOTATION.xlsx" 
-
-# --- UI ---
-st.title("CRM SYSTEM (V4817)")
+# --- UI CHÍNH ---
+st.title("HỆ THỐNG CRM QUẢN LÝ (FULL CLOUD)")
 is_admin = (st.sidebar.text_input("Admin Password", type="password") == "admin")
 
-t1, t2, t3, t4, t5, t6 = st.tabs(["DASHBOARD", "PURCHASES", "QUOTES", "PO", "TRACKING", "MASTER"])
+t1, t2, t3, t4, t5, t6 = st.tabs(["DASHBOARD", "KHO HÀNG (PURCHASES)", "BÁO GIÁ (QUOTES)", "ĐƠN HÀNG (PO)", "TRACKING", "DỮ LIỆU NỀN"])
 
-# --- TAB 1 ---
+# --- TAB 1: DASHBOARD ---
 with t1:
-    with st.spinner("Đang tính toán..."):
+    with st.spinner("Đang tính toán số liệu..."):
         if not get_drive_service(): st.stop()
         db_cust = load_data("db_customer_orders")
         db_supp = load_data("db_supplier_orders")
@@ -202,6 +198,7 @@ with t1:
         rev = db_cust['total_price'].apply(to_float).sum() if not db_cust.empty else 0
         cost_ncc = db_supp['total_vnd'].apply(to_float).sum() if not db_supp.empty else 0
         
+        # LOGIC TÍNH CHI PHÍ V4800
         other_cost = 0
         if not hist.empty:
             for _, r in hist.iterrows():
@@ -217,37 +214,45 @@ with t1:
         
         c1, c2, c3 = st.columns(3)
         c1.markdown(f"<div class='card-3d bg-sales'><h3>DOANH THU</h3><h1>{fmt_num(rev)}</h1></div>", unsafe_allow_html=True)
-        c2.markdown(f"<div class='card-3d bg-cost'><h3>CHI PHÍ (NCC+OPS)</h3><h1>{fmt_num(cost_ncc + other_cost)}</h1></div>", unsafe_allow_html=True)
+        c2.markdown(f"<div class='card-3d bg-cost'><h3>TỔNG CHI PHÍ</h3><h1>{fmt_num(cost_ncc + other_cost)}</h1></div>", unsafe_allow_html=True)
         c3.markdown(f"<div class='card-3d bg-profit'><h3>LỢI NHUẬN</h3><h1>{fmt_num(profit)}</h1></div>", unsafe_allow_html=True)
         
         st.divider()
         c4, c5, c6, c7 = st.columns(4)
-        with c4: st.markdown(f"<div class='card-3d bg-ncc'><div>PO NCC</div><h3>{len(track[track['order_type']=='NCC']) if not track.empty else 0}</h3></div>", unsafe_allow_html=True)
-        with c5: st.markdown(f"<div class='card-3d bg-recv'><div>PO KHÁCH</div><h3>{len(db_cust['po_number'].unique()) if not db_cust.empty else 0}</h3></div>", unsafe_allow_html=True)
+        po_ncc = len(track[track['order_type']=='NCC']) if not track.empty else 0
+        po_kh = len(db_cust['po_number'].unique()) if not db_cust.empty else 0
+        po_del = len(track[(track['order_type']=='KH') & (track['status']=='Đã giao hàng')]) if not track.empty else 0
+        
+        with c4: st.markdown(f"<div class='card-3d bg-ncc'><div>ĐƠN ĐẶT NCC</div><h3>{po_ncc}</h3></div>", unsafe_allow_html=True)
+        with c5: st.markdown(f"<div class='card-3d bg-recv'><div>ĐƠN KHÁCH NHẬN</div><h3>{po_kh}</h3></div>", unsafe_allow_html=True)
+        with c6: st.markdown(f"<div class='card-3d bg-del'><div>ĐÃ GIAO HÀNG</div><h3>{po_del}</h3></div>", unsafe_allow_html=True)
+        with c7: st.markdown(f"<div class='card-3d bg-pend'><div>CHỜ GIAO</div><h3>{po_kh - po_del}</h3></div>", unsafe_allow_html=True)
 
-# --- TAB 2 ---
+# --- TAB 2: PURCHASES ---
 with t2:
     purchases_df = load_data("crm_purchases")
     c1, c2 = st.columns([1, 3])
     with c1:
-        up_file = st.file_uploader("Import Excel", type=["xlsx"], key="up_pur")
-        if up_file and st.button("Import Data"):
+        st.info("Import file BUYING PRICE-ALL.xlsx")
+        up_file = st.file_uploader("Chọn file Excel", type=["xlsx"], key="up_pur")
+        if up_file and st.button("🚀 IMPORT & GHI ĐÈ"):
             try:
                 df = pd.read_excel(up_file, header=0, dtype=str).fillna("")
                 img_map = {}
                 try:
                     wb = load_workbook(up_file, data_only=False); ws = wb.active
-                    for img in getattr(ws, '_images', []): img_map[img.anchor._from.row + 1] = img
+                    for img in getattr(ws, '_images', []):
+                        img_map[img.anchor._from.row + 1] = img
                 except: pass
                 
                 rows = []
-                headers_norm = {normalize_header(c): c for c in df.columns}
                 bar = st.progress(0)
+                hn = {normalize_header(c): c for c in df.columns}
                 
                 for i, r in df.iterrows():
                     d = {}
                     for nk, db in MAP_PURCHASE.items():
-                        if nk in headers_norm: d[db] = safe_str(r[headers_norm[nk]])
+                        if nk in hn: d[db] = safe_str(r[hn[nk]])
                     
                     if not d.get('item_code'): continue
                     
@@ -263,30 +268,40 @@ with t2:
                     d['_clean_code'] = clean_lookup_key(d.get('item_code'))
                     d['_clean_name'] = clean_lookup_key(d.get('item_name'))
                     d['_clean_specs'] = clean_lookup_key(d.get('specs'))
+                    
                     for col in ['qty','buying_price_rmb','total_buying_price_rmb','exchange_rate','buying_price_vnd','total_buying_price_vnd']:
                         d[col] = fmt_num(to_float(d.get(col,0)))
+                        
                     rows.append(d)
                     bar.progress((i+1)/len(df))
                 
                 save_data("crm_purchases", pd.DataFrame(rows), unique_key="item_code")
-                st.success(f"Imported {len(rows)} items."); time.sleep(1); st.rerun()
-            except Exception as e: st.error(f"Error: {e}")
+                st.success(f"✅ Thành công! Đã xử lý {len(rows)} mã hàng."); time.sleep(1); st.rerun()
+            except Exception as e: st.error(f"Lỗi Import: {e}")
             
+        st.divider()
+        up_img = st.file_uploader("Update Image", type=["png","jpg"], key="up_img_man")
+        code = st.text_input("Item Code")
+        if st.button("Upload") and up_img and code:
+            url = upload_to_drive(up_img, "CRM_PURCHASE_IMAGES", f"IMG_{safe_filename(code)}.png")
+            supabase.table("crm_purchases").update({"image_path": url}).eq("item_code", code).execute()
+            st.success("Uploaded!"); st.rerun()
+
     with c2:
         search = st.text_input("Search", key="search_pur")
         view = purchases_df.copy()
         if search:
             mask = view.apply(lambda x: search.lower() in str(x['item_code']).lower() or search.lower() in str(x['item_name']).lower(), axis=1)
             view = view[mask]
-        st.dataframe(view, column_config={"image_path": st.column_config.ImageColumn("Image")}, use_container_width=True, hide_index=True)
+        st.dataframe(view, column_config={"image_path": st.column_config.ImageColumn("Img")}, use_container_width=True, hide_index=True)
 
-# --- TAB 3 ---
+# --- TAB 3: QUOTES ---
 with t3:
     customers_df = load_data("crm_customers")
     c1, c2 = st.columns([3, 1])
     with c1:
         cust = st.selectbox("Customer", [""] + (customers_df['short_name'].tolist() if not customers_df.empty else []), key="sel_cust_q")
-        ref = st.text_input("Quote No", key="txt_ref_q")
+        ref = st.text_input("Quote Ref", key="txt_ref_q")
     with c2:
         if st.button("RESET"): st.session_state.quote_df = pd.DataFrame(columns=st.session_state.quote_df.columns); st.rerun()
             
@@ -374,18 +389,6 @@ with t3:
         for k, v in pcts.items(): save[f"pct_{k}"] = v
         save_data("crm_shared_history", save)
         st.success("Saved!"); st.rerun()
-        
-    if st.button("EXCEL EXPORT"):
-        if not os.path.exists(TEMPLATE_FILE): st.error("Missing Template")
-        else:
-            out = io.BytesIO()
-            wb = load_workbook(TEMPLATE_FILE); ws = wb.active
-            safe_write_merged(ws, 1, 2, cust); safe_write_merged(ws, 2, 8, ref)
-            for x, r in final.iterrows():
-                ri = 11 + x
-                safe_write_merged(ws, ri, 3, r["item_code"]); safe_write_merged(ws, ri, 7, to_float(r["unit_price"]))
-            wb.save(out)
-            st.download_button("Download", out.getvalue(), f"Quote_{ref}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # --- TAB 4 ---
 with t4:
@@ -431,7 +434,7 @@ with t4:
             save_data("crm_tracking", pd.DataFrame([{"po_no": po_c, "partner": cus, "status": "Waiting", "order_type": "KH"}]))
             st.success("Saved")
 
-# --- TAB 5 ---
+# --- TAB 5: TRACKING ---
 with t5:
     tracking_df = load_data("crm_tracking")
     payment_df = load_data("crm_payment")
@@ -447,7 +450,7 @@ with t5:
                         save_data("crm_payment", pd.DataFrame([{"po_no": r['po_no'], "customer": r['partner'], "status": "Pending"}]))
                 st.success("Updated")
             
-            pk = st.text_input("Proof for PO No")
+            pk = st.text_input("Proof for PO")
             prf = st.file_uploader("Proof Img", accept_multiple_files=True, key="up_proof")
             if st.button("Upload Proof") and pk and prf:
                 urls = [upload_to_drive(f, "CRM_PROOF_IMAGES", f"PRF_{pk}_{f.name}") for f in prf]
@@ -462,10 +465,10 @@ with t5:
                 save_data("crm_payment", ed_p, unique_key="id")
                 st.success("Updated")
 
-# --- TAB 6 ---
+# --- TAB 6: MASTER ---
 with t6:
     if is_admin:
-        c1, c2, c3 = st.columns(3)
+        c1, c2 = st.columns(2)
         with c1:
             st.write("Customers")
             up_k = st.file_uploader("Import Cust", type=["xlsx"], key="up_mst_c")
@@ -501,11 +504,4 @@ with t6:
             
             ed_s = st.data_editor(suppliers_df, num_rows="dynamic", key="editor_master_supp")
             if st.button("Save Supp"): save_data("crm_suppliers", ed_s, unique_key="short_name"); st.success("OK")
-            
-        with c3:
-            st.write("Template")
-            up_t = st.file_uploader("Up Template", type=["xlsx"])
-            if up_t and st.button("Save Tpl"): 
-                with open(TEMPLATE_FILE, "wb") as f: f.write(up_t.getbuffer())
-                st.success("OK")
     else: st.warning("Admin Only")
