@@ -165,8 +165,8 @@ def save_data(table, df, unique_key=None):
 if 'init' not in st.session_state:
     st.session_state.init = True
     st.session_state.quote_df = pd.DataFrame(columns=["item_code", "item_name", "specs", "qty", "buying_price_vnd", "buying_price_rmb", "exchange_rate", "ap_price", "unit_price", "total_price_vnd", "supplier_name", "image_path", "leadtime", "transportation"])
-    st.session_state.temp_supp = pd.DataFrame(columns=["item_code", "item_name", "qty", "price_rmb"])
-    st.session_state.temp_cust = pd.DataFrame(columns=["item_code", "item_name", "qty", "unit_price"])
+    st.session_state.temp_supp = pd.DataFrame(columns=["item_code", "item_name", "specs", "qty", "price_rmb", "total_rmb", "supplier"])
+    st.session_state.temp_cust = pd.DataFrame(columns=["item_code", "item_name", "specs", "qty", "unit_price", "total_price", "customer"])
     for k in ["end","buy","tax","vat","pay","mgmt","trans"]: st.session_state[f"pct_{k}"] = "0"
 
 # --- MAIN APP ---
@@ -415,8 +415,9 @@ with t4:
     c1, c2 = st.columns(2)
     with c1:
         st.subheader("PO NCC")
+        sup_list = suppliers_df["short_name"].tolist() if not suppliers_df.empty else []
         po_s = st.text_input("PO NCC No")
-        sup = st.selectbox("Supplier", [""] + (suppliers_df['short_name'].tolist() if not suppliers_df.empty else []))
+        sup = st.selectbox("Supplier", [""] + sup_list)
         up_s = st.file_uploader("Upload PO NCC", type=["xlsx"])
         if up_s:
             df = pd.read_excel(up_s, dtype=str).fillna("")
@@ -425,7 +426,7 @@ with t4:
                 recs.append({"item_code": safe_str(r.iloc[1]), "item_name": safe_str(r.iloc[2]), "qty": fmt_num(to_float(r.iloc[4])), "price_rmb": fmt_num(to_float(r.iloc[5]))})
             st.session_state.temp_supp = pd.DataFrame(recs)
         
-        ed_s = st.data_editor(st.session_state.temp_supp, num_rows="dynamic", use_container_width=True)
+        ed_s = st.data_editor(st.session_state.temp_supp, num_rows="dynamic", use_container_width=True, key="ed_s")
         if st.button("Save PO NCC"):
             s_data = ed_s.copy()
             s_data['po_number'] = po_s; s_data['supplier'] = sup; s_data['order_date'] = datetime.now().strftime("%d/%m/%Y")
@@ -445,7 +446,7 @@ with t4:
                 recs.append({"item_code": safe_str(r.iloc[1]), "item_name": safe_str(r.iloc[2]), "qty": fmt_num(to_float(r.iloc[4])), "unit_price": fmt_num(to_float(r.iloc[5]))})
             st.session_state.temp_cust = pd.DataFrame(recs)
             
-        ed_c = st.data_editor(st.session_state.temp_cust, num_rows="dynamic", use_container_width=True)
+        ed_c = st.data_editor(st.session_state.temp_cust, num_rows="dynamic", use_container_width=True, key="ed_c")
         if st.button("Save PO Cust"):
             c_data = ed_c.copy()
             c_data['po_number'] = po_c; c_data['customer'] = cus; c_data['order_date'] = datetime.now().strftime("%d/%m/%Y")
