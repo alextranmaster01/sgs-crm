@@ -23,12 +23,7 @@ except ImportError:
 # =============================================================================
 # CẤU HÌNH & VERSION
 # =============================================================================
-APP_VERSION = "V4820 - FIX UI (HIDE INDEX & SHOW IMAGES)"
-RELEASE_NOTE = """
-- **UI Fix:** Ẩn cột Index thừa bên trái cột No.
-- **Image Fix:** Hiển thị ảnh trực tiếp trong bảng dữ liệu.
-- **Core:** Giữ nguyên logic đa giá (Multi-price) và ghi đè thông minh.
-"""
+APP_VERSION = "V4821 - FIX IMAGE VIEW & DUPLICATE KEY"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # --- CSS GIAO DIỆN ---
@@ -44,8 +39,11 @@ st.markdown("""
     .bg-del { background: linear-gradient(135deg, #4facfe, #00f2fe); }
     .bg-pend { background: linear-gradient(135deg, #f093fb, #f5576c); }
     
-    /* Tăng chiều cao bảng và ẩn index mặc định */
+    /* Tăng chiều cao bảng */
     [data-testid="stDataFrame"] > div { height: 800px !important; }
+    /* Ẩn cột index (số thứ tự mặc định bên trái cùng) */
+    [data-testid="stDataFrame"] table thead th:first-child { display: none; }
+    [data-testid="stDataFrame"] table tbody td:first-child { display: none; }
     </style>""", unsafe_allow_html=True)
 
 # --- KẾT NỐI SERVER ---
@@ -90,7 +88,8 @@ def upload_to_drive(file_obj, sub_folder, file_name):
             
         try: srv.permissions().create(fileId=file_id, body={'role': 'reader', 'type': 'anyone'}).execute()
         except: pass
-        return f"https://drive.google.com/uc?export=view&id={file_id}"
+        # Trả về link thumbnail để hiển thị được trong bảng
+        return f"https://drive.google.com/thumbnail?id={file_id}&sz=w200" 
     except: return ""
 
 # --- DATA HELPERS ---
@@ -301,7 +300,7 @@ with t2:
             }, 
             use_container_width=True, 
             height=800,
-            hide_index=True  # <--- DÒNG NÀY ĐỂ ẨN CỘT TRÁI CÙNG
+            hide_index=True
         )
 
 # --- TAB 3 ---
@@ -362,7 +361,7 @@ with t3:
             st.session_state.quote_df.at[i, "unit_price"] = fmt_num(parse_formula(unit_f, to_float(r["buying_price_vnd"]), to_float(r["ap_price"])))
         st.rerun()
 
-    # HIỂN THỊ BẢNG BÁO GIÁ (ẨN INDEX & HIỆN ẢNH)
+    # HIỂN THỊ BẢNG BÁO GIÁ
     edited = st.data_editor(
         st.session_state.quote_df, 
         num_rows="dynamic", 
