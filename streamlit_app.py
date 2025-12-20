@@ -28,7 +28,7 @@ except ImportError:
 # =============================================================================
 # 1. CẤU HÌNH & KẾT NỐI
 # =============================================================================
-APP_VERSION = "V4807 - FULL APP + STRICT FIX"
+APP_VERSION = "V4807 - FULL VERSION (STRICT FIX)"
 
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="🏢")
 
@@ -37,7 +37,7 @@ st.markdown("""
     <style>
     button[data-baseweb="tab"] div p { font-size: 20px !important; font-weight: 700 !important; }
     h1 { font-size: 28px !important; } h2 { font-size: 24px !important; } h3 { font-size: 20px !important; }
-    .card-3d { border-radius: 12px; padding: 20px; color: white; text-align: center; box-shadow: 0 4px 6px rgba(0,0,0,0.1); margin-bottom: 20px; }
+    .card-3d { border-radius: 12px; padding: 20px; color: white; text-align: center; box-shadow: 0 4px 6px rgba(0,0,0,0.1); margin-bottom: 20px; height: 100%; display: flex; flex-direction: column; justify-content: center; }
     .bg-sales { background: linear-gradient(135deg, #00b09b 0%, #96c93d 100%); }
     .bg-cost { background: linear-gradient(135deg, #ff5f6d 0%, #ffc371 100%); }
     .bg-profit { background: linear-gradient(135deg, #f83600 0%, #f9d423 100%); }
@@ -132,7 +132,6 @@ def safe_write_merged(ws, r, c, v):
 
 # --- STRICT SCHEMA DEFINITIONS (WHITELIST) ---
 # Danh sách này KHỚP 100% với file SQL chuẩn bạn cung cấp.
-# Mọi cột khác (ví dụ 'no', 'Delete') sẽ bị hàm save_data lọc bỏ.
 SCHEMA_WHITELIST = {
     "crm_purchases": [
         "item_code", "item_name", "specs", "qty", 
@@ -158,7 +157,7 @@ def load_data(table, cols):
         df = pd.DataFrame(res.data)
         for c in cols: 
             if c not in df.columns: df[c] = ""
-        # Thêm cột 'no' giả lập để hiển thị UI đẹp hơn (nhưng ko lưu lại)
+        # Thêm cột 'no' giả lập để hiển thị UI đẹp hơn (nhưng ko lưu lại DB)
         if 'no' not in df.columns: 
             df.insert(0, 'no', range(1, len(df) + 1))
             df['no'] = df['no'].astype(str)
@@ -171,7 +170,7 @@ def save_data(table, df, unique_key=None):
         # 1. Lấy danh sách cột chuẩn
         valid_cols = SCHEMA_WHITELIST.get(table)
         if not valid_cols: 
-            st.warning(f"Chưa định nghĩa Whitelist cho {table}, lưu chế độ thường.")
+            # Nếu chưa định nghĩa whitelist, fallback về cách cũ (cảnh báo)
             valid_cols = df.columns.tolist()
 
         # 2. Lọc dữ liệu
@@ -181,7 +180,7 @@ def save_data(table, df, unique_key=None):
             clean_r = {}
             for k, v in r.items():
                 if k in valid_cols:
-                    # Chuyển về string để tránh lỗi định dạng
+                    # Chuyển về string để tránh lỗi định dạng số/null
                     clean_r[k] = str(v) if v is not None and str(v) != 'nan' else None
             if clean_r: final_recs.append(clean_r)
             
@@ -205,7 +204,7 @@ TBL_TRACKING = "crm_tracking"
 TBL_PAID_HISTORY = "crm_paid_history"
 TBL_SUPP_ORDERS = "db_supplier_orders" # Tên chuẩn
 TBL_CUST_ORDERS = "db_customer_orders" # Tên chuẩn
-TBL_PAYMENTS = "crm_payment" # Tên chuẩn
+TBL_PAYMENTS = "crm_payment" # Tên chuẩn (số ít)
 
 TEMPLATE_FILE = "AAA-QUOTATION.xlsx" 
 ADMIN_PASSWORD = "admin"
