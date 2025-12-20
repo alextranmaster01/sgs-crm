@@ -23,7 +23,7 @@ except ImportError:
 # =============================================================================
 # CẤU HÌNH & VERSION
 # =============================================================================
-APP_VERSION = "V4821 - FIX IMAGE VIEW & DUPLICATE KEY"
+APP_VERSION = "V4822 - ABSOLUTE FIX (DUPLICATE & IMAGE)"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # --- CSS GIAO DIỆN ---
@@ -145,8 +145,19 @@ def load_data(table):
 def save_data(table, df, unique_cols=None):
     if df.empty: return
     try:
+        # FIX DUPLICATE KEY: Chuẩn hóa dữ liệu trước khi drop duplicates
         if unique_cols and all(col in df.columns for col in unique_cols):
-            df = df.drop_duplicates(subset=unique_cols, keep='last')
+            # Tạo bản sao để chuẩn hóa (tránh ảnh hưởng dữ liệu gốc)
+            df_check = df.copy()
+            for col in unique_cols:
+                # Xóa khoảng trắng thừa, đưa về string để so sánh chính xác
+                df_check[col] = df_check[col].astype(str).str.strip()
+            
+            # Tìm các chỉ mục (index) trùng lặp
+            duplicated_indices = df_check[df_check.duplicated(subset=unique_cols, keep='last')].index
+            
+            # Loại bỏ dòng trùng khỏi DataFrame gốc
+            df = df.drop(duplicated_indices)
 
         VALID_COLS = {
             "crm_purchases": list(MAP_PURCHASE.values()) + ["image_path", "_clean_code", "_clean_name", "_clean_specs"],
@@ -167,7 +178,7 @@ def save_data(table, df, unique_cols=None):
             if clean: clean_recs.append(clean)
         
         if unique_cols:
-            supabase.table(table).upsert(clean_recs).execute()
+            supabase.table(table).upsert(clean_recs, on_conflict=unique_cols).execute()
         else:
             supabase.table(table).upsert(clean_recs).execute()
         st.cache_data.clear()
