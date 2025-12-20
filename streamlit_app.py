@@ -28,14 +28,13 @@ except ImportError:
 # =============================================================================
 # 1. CẤU HÌNH & KẾT NỐI
 # =============================================================================
-APP_VERSION = "V4802 - FIX DATA IMPORT & OVERWRITE"
+APP_VERSION = "V4803 - FIX DUPLICATE ID ERROR"
 RELEASE_NOTE = """
-- **Fix Critical:** Sửa lỗi import file Excel nhưng không hiện dữ liệu lên bảng.
-- **Data Safety:** Vệ sinh dữ liệu (loại bỏ NaN/Null) trước khi gửi lên Supabase.
-- **Smart Overwrite:** Ảnh và Dữ liệu tự động ghi đè lên cái cũ (không tạo rác).
+- **Fix Crash Tab 6:** Sửa lỗi StreamlitDuplicateElementId do thiếu key định danh cho bảng dữ liệu.
+- **Stable:** Ổn định các tính năng Import và Ghi đè từ V4802.
 """
 
-st.set_page_config(page_title=f"CRM V4802 - {APP_VERSION}", layout="wide", page_icon="☁️")
+st.set_page_config(page_title=f"CRM V4803 - {APP_VERSION}", layout="wide", page_icon="☁️")
 
 # --- CSS TÙY CHỈNH ---
 st.markdown("""
@@ -155,7 +154,7 @@ def safe_write_merged(ws, r, c, v):
             ws.cell(row=rng.min_row, column=rng.min_col).value = v; return
     cell.value = v
 
-# --- DATA HANDLERS (UPDATED FOR ROBUSTNESS) ---
+# --- DATA HANDLERS ---
 def load_data(table, cols):
     try:
         res = supabase.table(table).select("*").execute()
@@ -168,17 +167,13 @@ def load_data(table, cols):
 def save_data(table, df):
     if df.empty: return
     try:
-        # Vệ sinh dữ liệu kỹ càng: chuyển NaN thành None (null trong SQL)
-        # Supabase ghét 'NaN' của pandas
+        # Vệ sinh dữ liệu kỹ càng
         df_clean = df.where(pd.notnull(df), None)
         recs = df_clean.to_dict(orient='records')
-        
-        # Lọc lại lần cuối để đảm bảo không có key rác
         final_recs = []
         for r in recs:
             clean_r = {k: (str(v) if v is not None else "") for k, v in r.items()}
             final_recs.append(clean_r)
-            
         supabase.table(table).upsert(final_recs).execute()
     except Exception as e: 
         st.error(f"❌ LỖI LƯU DATA VÀO {table}: {e}")
@@ -229,7 +224,7 @@ sales_history_df = db_customer_orders.copy()
 # =============================================================================
 # 3. SIDEBAR & TABS
 # =============================================================================
-st.sidebar.title("CRM CLOUD (V4802)")
+st.sidebar.title("CRM CLOUD (V4803)")
 st.sidebar.info("OAuth 2.0 Connected")
 admin_pwd = st.sidebar.text_input("Admin Password", type="password")
 is_admin = (admin_pwd == ADMIN_PASSWORD)
@@ -265,7 +260,6 @@ with tab1:
     po_delivered = len(tracking_df[(tracking_df['order_type'] == 'KH') & (tracking_df['status'] == 'Đã giao hàng')])
     po_pending = po_total_recv - po_delivered
 
-    # 3D Cards
     c1, c2, c3 = st.columns(3)
     c1.markdown(f"<div class='card-3d bg-sales'><div class='card-title'>DOANH THU (VND)</div><div class='card-value'>{fmt_num(total_revenue)}</div></div>", unsafe_allow_html=True)
     c2.markdown(f"<div class='card-3d bg-cost'><div class='card-title'>CHI PHÍ (VND)</div><div class='card-value'>{fmt_num(total_po_ncc_cost + total_other_costs)}</div></div>", unsafe_allow_html=True)
@@ -302,16 +296,13 @@ with tab2:
         if uploaded_pur and st.button("Thực hiện Import"):
             status = st.empty()
             status.info("⏳ Đang đọc file Excel...")
-            
             try:
-                # 1. Đọc dữ liệu thô (Dùng dtype=str để tránh lỗi NaN khi đọc cột trộn)
+                # 1. Đọc dữ liệu thô (Dùng dtype=str để tránh lỗi NaN)
                 df_debug = pd.read_excel(uploaded_pur, header=0, dtype=str).fillna("")
                 
                 # 2. Xử lý ảnh (Mapping theo ROW)
                 status.info("⏳ Đang xử lý ảnh từ Excel...")
                 wb = load_workbook(uploaded_pur, data_only=False); ws = wb.active
-                
-                # Tạo map: Row Index -> Image Object
                 img_row_map = {}
                 for img in getattr(ws, '_images', []):
                     try:
@@ -323,12 +314,9 @@ with tab2:
                 status.info("⏳ Đang ghép dữ liệu và Upload ảnh (chế độ Ghi Đè)...")
                 rows = []
                 for i, r in df_debug.iterrows():
-                    # Lấy Item Code (Cột B - index 1)
                     item_code = safe_str(r.iloc[1]) 
-                    
                     if not item_code: continue 
-                    
-                    excel_row_idx = i + 2 # Header=row 1, pandas start=row 2
+                    excel_row_idx = i + 2
                     
                     # Xử lý ảnh
                     img_url = ""
@@ -336,7 +324,6 @@ with tab2:
                         try:
                             img_obj = img_row_map[excel_row_idx]
                             img_data = io.BytesIO(img_obj._data())
-                            # Tên file cố định theo mã hàng để ghi đè chuẩn xác
                             fname = f"IMG_{safe_filename(item_code)}.png"
                             img_url = upload_to_drive(img_data, "CRM_PURCHASE_IMAGES", fname)
                         except: pass
@@ -362,17 +349,13 @@ with tab2:
                 
                 if len(rows) > 0:
                     status.info(f"⏳ Đang lưu {len(rows)} dòng vào Supabase...")
-                    # Lưu vào DB với hàm save_data đã cải tiến
                     save_data(TBL_PURCHASES, pd.DataFrame(rows))
                     st.success(f"✅ THÀNH CÔNG! Đã import {len(rows)} dòng. Đang tải lại...")
-                    
-                    # Xóa cache để ép buộc tải lại dữ liệu mới
                     st.cache_data.clear()
                     time.sleep(1)
                     st.rerun()
                 else:
                     st.error("⚠️ KHÔNG TÌM THẤY DỮ LIỆU! Cột Mã hàng (Cột B) bị trống.")
-                    
             except Exception as e:
                 st.error(f"❌ LỖI KHI IMPORT: {e}")
             
@@ -388,9 +371,7 @@ with tab2:
 
     with col_p2:
         search_term = st.text_input("🔍 Tìm kiếm hàng hóa (NCC)")
-        if search_term:
-            st.caption(f"⚠️ Đang lọc theo: '{search_term}'. Xóa trắng ô tìm kiếm để xem toàn bộ.")
-            
+        if search_term: st.caption(f"⚠️ Đang lọc theo: '{search_term}'. Xóa trắng ô tìm kiếm để xem toàn bộ.")
         if not purchases_df.empty:
             df_show = purchases_df.copy()
             if search_term:
@@ -442,16 +423,12 @@ with tab3:
                     for i, r in df_rfq.iloc[1:].iterrows():
                         c_raw=safe_str(r.iloc[1]); n_raw=safe_str(r.iloc[2]); s_raw=safe_str(r.iloc[3]); qty=to_float(r.iloc[4])
                         if qty <= 0: continue
-                        
                         clean_c = clean_lookup_key(c_raw); clean_n = clean_lookup_key(n_raw)
                         found = purchases_df[purchases_df["_clean_code"] == clean_c]
                         if found.empty: found = purchases_df[purchases_df["_clean_name"] == clean_n]
-                        
                         target = found.iloc[0] if not found.empty else None
-                        
                         it = {k:"" for k in QUOTE_KH_COLUMNS}
                         it.update({"no":safe_str(r.iloc[0]), "item_code":c_raw, "item_name":n_raw, "specs":s_raw, "qty":fmt_num(qty)})
-                        
                         if target is not None:
                             it.update({
                                 "buying_price_rmb": fmt_num(target["buying_price_rmb"]),
@@ -462,7 +439,6 @@ with tab3:
                                 "supplier_name": target["supplier_name"], "image_path": target["image_path"], "leadtime": target["leadtime"]
                             })
                         new_data.append(it)
-                    
                     st.session_state.current_quote_df = pd.DataFrame(new_data)
                     st.success(f"Loaded {len(new_data)} items!"); st.rerun()
                 except Exception as e: st.error(f"Lỗi: {e}")
@@ -513,12 +489,10 @@ with tab3:
 
         if not df_temp.equals(st.session_state.current_quote_df): st.session_state.current_quote_df = df_temp; st.rerun()
 
-        # Review & Save
         st.divider()
         c_rev, c_sav, c_exp = st.columns(3)
         with c_rev:
             if st.button("🔍 REVIEW"): st.session_state.show_review_table = not st.session_state.get('show_review_table', False)
-        
         if st.session_state.get('show_review_table', False):
             st.dataframe(st.session_state.current_quote_df[["item_code", "qty", "unit_price", "total_price_vnd", "profit_vnd", "profit_pct"]], use_container_width=True)
 
@@ -659,9 +633,11 @@ with tab6:
     if is_admin:
         c1, c2 = st.columns(2)
         with c1: 
-            st.write("KH"); ed_c = st.data_editor(customers_df, num_rows="dynamic", use_container_width=True); 
+            # --- FIX: ADDED KEY ---
+            st.write("KH"); ed_c = st.data_editor(customers_df, num_rows="dynamic", use_container_width=True, key="editor_kh"); 
             if st.button("Lưu KH"): save_data(TBL_CUSTOMERS, ed_c); st.success("OK")
         with c2: 
-            st.write("NCC"); ed_s = st.data_editor(suppliers_df, num_rows="dynamic", use_container_width=True); 
+            # --- FIX: ADDED KEY ---
+            st.write("NCC"); ed_s = st.data_editor(suppliers_df, num_rows="dynamic", use_container_width=True, key="editor_ncc"); 
             if st.button("Lưu NCC"): save_data(TBL_SUPPLIERS, ed_s); st.success("OK")
     else: st.warning("Admin only")
