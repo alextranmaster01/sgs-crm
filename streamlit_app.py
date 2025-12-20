@@ -23,8 +23,8 @@ except ImportError:
 # =============================================================================
 # CẤU HÌNH & VERSION
 # =============================================================================
-APP_VERSION = "V4822 - ABSOLUTE FIX (DUPLICATE & IMAGE)"
-st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
+APP_VERSION = "V4824 - FINAL IMAGE FIX (THUMBNAIL MODE)"
+st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="📸")
 
 # --- CSS GIAO DIỆN ---
 st.markdown("""
@@ -35,13 +35,9 @@ st.markdown("""
     .bg-cost { background: linear-gradient(135deg, #ff5f6d, #ffc371); }
     .bg-profit { background: linear-gradient(135deg, #f83600, #f9d423); }
     .bg-ncc { background: linear-gradient(135deg, #667eea, #764ba2); }
-    .bg-recv { background: linear-gradient(135deg, #43e97b, #38f9d7); }
-    .bg-del { background: linear-gradient(135deg, #4facfe, #00f2fe); }
-    .bg-pend { background: linear-gradient(135deg, #f093fb, #f5576c); }
     
-    /* Tăng chiều cao bảng */
+    /* Tăng chiều cao bảng và ẩn cột index */
     [data-testid="stDataFrame"] > div { height: 800px !important; }
-    /* Ẩn cột index (số thứ tự mặc định bên trái cùng) */
     [data-testid="stDataFrame"] table thead th:first-child { display: none; }
     [data-testid="stDataFrame"] table tbody td:first-child { display: none; }
     </style>""", unsafe_allow_html=True)
@@ -58,7 +54,7 @@ except Exception as e:
     st.error(f"⚠️ Lỗi Config: {e}")
     st.stop()
 
-# --- XỬ LÝ GOOGLE DRIVE ---
+# --- XỬ LÝ GOOGLE DRIVE (CHÌA KHÓA HIỂN THỊ ẢNH) ---
 def get_drive_service():
     try:
         creds = Credentials(None, refresh_token=OAUTH_INFO["refresh_token"], 
@@ -71,11 +67,13 @@ def upload_to_drive(file_obj, sub_folder, file_name):
     srv = get_drive_service()
     if not srv: return ""
     try:
+        # Tìm folder
         q_f = f"'{ROOT_FOLDER_ID}' in parents and name='{sub_folder}' and trashed=false"
         folders = srv.files().list(q=q_f, fields="files(id)").execute().get('files', [])
         folder_id = folders[0]['id'] if folders else srv.files().create(body={'name': sub_folder, 'mimeType': 'application/vnd.google-apps.folder', 'parents': [ROOT_FOLDER_ID]}, fields='id').execute()['id']
         srv.permissions().create(fileId=folder_id, body={'role': 'reader', 'type': 'anyone'}).execute()
 
+        # Check trùng -> Ghi đè
         q_file = f"'{folder_id}' in parents and name = '{file_name}' and trashed = false"
         existing = srv.files().list(q=q_file, fields='files(id)').execute().get('files', [])
         media = MediaIoBaseUpload(file_obj, mimetype=mimetypes.guess_type(file_name)[0] or 'application/octet-stream', resumable=True)
@@ -86,9 +84,12 @@ def upload_to_drive(file_obj, sub_folder, file_name):
         else:
             file_id = srv.files().create(body={'name': file_name, 'parents': [folder_id]}, media_body=media, fields='id').execute()['id']
             
+        # CẤP QUYỀN PUBLIC (BẮT BUỘC ĐỂ HIỆN ẢNH)
         try: srv.permissions().create(fileId=file_id, body={'role': 'reader', 'type': 'anyone'}).execute()
         except: pass
-        # Trả về link thumbnail để hiển thị được trong bảng
+        
+        # TRẢ VỀ LINK THUMBNAIL (ĐỊNH DẠNG NÀY MỚI HIỆN ĐƯỢC TRONG BẢNG)
+        # sz=w200 nghĩa là chiều rộng 200px, tải nhanh và nét
         return f"https://drive.google.com/thumbnail?id={file_id}&sz=w200" 
     except: return ""
 
@@ -96,6 +97,7 @@ def upload_to_drive(file_obj, sub_folder, file_name):
 def safe_str(val): return str(val).strip() if val is not None and str(val).lower() not in ['nan', 'none', 'null', 'nat', ''] else ""
 def safe_filename(s): return re.sub(r'[^\w\-_]', '_', unicodedata.normalize('NFKD', safe_str(s)).encode('ascii', 'ignore').decode('utf-8')).strip('_')
 def to_float(val):
+    if not val: return 0.0
     s = str(val).replace(",", "").replace("¥", "").replace("$", "").replace("RMB", "").replace("VND", "").replace(" ", "").replace("\n","")
     try: return max([float(n) for n in re.findall(r"[-+]?\d*\.\d+|\d+", s)])
     except: return 0.0
@@ -125,7 +127,7 @@ MAP_MASTER = {
     "destination": "destination", "paymentterm": "payment_term"
 }
 
-# --- DATABASE HANDLERS ---
+# --- DATABASE HANDLERS (AUTO CLEAN & DEDUPLICATE) ---
 @st.cache_data(ttl=5) 
 def load_data(table):
     try:
@@ -133,31 +135,22 @@ def load_data(table):
         df = pd.DataFrame(res.data)
         if not df.empty and 'no' not in df.columns: 
             df.insert(0, 'no', range(1, len(df)+1))
-        
         # Ẩn cột kỹ thuật
         drop_cols = ['id', '_clean_code', '_clean_name', '_clean_specs']
         for c in drop_cols:
             if c in df.columns: df = df.drop(columns=[c])
-            
         return df
     except: return pd.DataFrame()
 
 def save_data(table, df, unique_cols=None):
     if df.empty: return
     try:
-        # FIX DUPLICATE KEY: Chuẩn hóa dữ liệu trước khi drop duplicates
+        # 1. CLEAN DATA ĐỂ TRÁNH DUPLICATE ẢO (Do khoảng trắng)
         if unique_cols and all(col in df.columns for col in unique_cols):
-            # Tạo bản sao để chuẩn hóa (tránh ảnh hưởng dữ liệu gốc)
-            df_check = df.copy()
             for col in unique_cols:
-                # Xóa khoảng trắng thừa, đưa về string để so sánh chính xác
-                df_check[col] = df_check[col].astype(str).str.strip()
-            
-            # Tìm các chỉ mục (index) trùng lặp
-            duplicated_indices = df_check[df_check.duplicated(subset=unique_cols, keep='last')].index
-            
-            # Loại bỏ dòng trùng khỏi DataFrame gốc
-            df = df.drop(duplicated_indices)
+                df[col] = df[col].astype(str).str.strip() # Xóa khoảng trắng thừa
+            # Giữ dòng cuối cùng nếu trùng
+            df = df.drop_duplicates(subset=unique_cols, keep='last')
 
         VALID_COLS = {
             "crm_purchases": list(MAP_PURCHASE.values()) + ["image_path", "_clean_code", "_clean_name", "_clean_specs"],
@@ -177,14 +170,15 @@ def save_data(table, df, unique_cols=None):
             clean = {k: str(v) if v is not None and str(v)!='nan' else None for k,v in r.items() if k in valid}
             if clean: clean_recs.append(clean)
         
+        # Gọi Upsert (Dựa vào SQL Unique Constraint)
         if unique_cols:
             supabase.table(table).upsert(clean_recs, on_conflict=unique_cols).execute()
         else:
             supabase.table(table).upsert(clean_recs).execute()
         st.cache_data.clear()
-    except Exception as e: st.error(f"❌ Lưu Lỗi ({table}): {e}")
+    except Exception as e: st.error(f"❌ Lỗi Lưu DB ({table}): {e}")
 
-# --- INIT ---
+# --- INIT STATE ---
 if 'init' not in st.session_state:
     st.session_state.init = True
     st.session_state.quote_df = pd.DataFrame(columns=["item_code", "item_name", "specs", "qty", "buying_price_vnd", "buying_price_rmb", "exchange_rate", "ap_price", "unit_price", "total_price_vnd", "supplier_name", "image_path", "leadtime", "transportation"])
@@ -192,7 +186,7 @@ if 'init' not in st.session_state:
     st.session_state.temp_cust = pd.DataFrame(columns=["item_code", "item_name", "specs", "qty", "unit_price", "total_price", "customer"])
     for k in ["end","buy","tax","vat","pay","mgmt","trans"]: st.session_state[f"pct_{k}"] = "0"
 
-# --- UI ---
+# --- UI CHÍNH ---
 st.title("HỆ THỐNG CRM QUẢN LÝ (FULL CLOUD)")
 is_admin = (st.sidebar.text_input("Admin Password", type="password") == "admin")
 
@@ -291,6 +285,7 @@ with t2:
         code = st.text_input("Item Code")
         if st.button("Upload") and up_img and code:
             url = upload_to_drive(up_img, "CRM_PURCHASE_IMAGES", f"IMG_{safe_filename(code)}.png")
+            # Update thông qua item_code, bỏ qua unique constraint trong trường hợp này để update ảnh
             supabase.table("crm_purchases").update({"image_path": url}).eq("item_code", code).execute()
             st.success("Uploaded!"); st.rerun()
 
@@ -301,7 +296,7 @@ with t2:
             mask = view.apply(lambda x: search.lower() in str(x.values).lower(), axis=1)
             view = view[mask]
         
-        # --- HIỂN THỊ BẢNG (FIXED: ẨN INDEX & HIỆN ẢNH) ---
+        # --- HIỂN THỊ BẢNG (FIXED IMAGE CONFIG) ---
         st.dataframe(
             view, 
             column_config={
@@ -372,7 +367,6 @@ with t3:
             st.session_state.quote_df.at[i, "unit_price"] = fmt_num(parse_formula(unit_f, to_float(r["buying_price_vnd"]), to_float(r["ap_price"])))
         st.rerun()
 
-    # HIỂN THỊ BẢNG BÁO GIÁ
     edited = st.data_editor(
         st.session_state.quote_df, 
         num_rows="dynamic", 
