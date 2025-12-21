@@ -25,7 +25,7 @@ except ImportError:
 # =============================================================================
 # CẤU HÌNH & VERSION
 # =============================================================================
-APP_VERSION = "V4866 - FINAL HYBRID (V4800 ALGO + V4865 UI)"
+APP_VERSION = "V4867 - FINAL FIXED (FIX NAME ERROR + V4800 ALGO)"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="🏢")
 
 # --- CSS ---
@@ -186,8 +186,6 @@ def load_data(table):
 def save_data_overwrite(table, df, match_col):
     """
     THUẬT TOÁN GỐC TỪ V4800 (DELETE -> INSERT):
-    - Đảm bảo xóa sạch các dòng cũ có mã tương ứng.
-    - Insert toàn bộ dòng mới (bao gồm cả dòng trùng lặp nếu DB cho phép).
     """
     if df.empty: return
     try:
@@ -224,13 +222,11 @@ def save_data_overwrite(table, df, match_col):
                 clean_recs.append(clean)
                 if match_col in clean and clean[match_col]: codes_to_del.append(clean[match_col])
         
-        # 1. DELETE cũ
         if codes_to_del:
             chunk_size = 500
             for i in range(0, len(codes_to_del), chunk_size):
                 supabase.table(table).delete().in_(match_col, codes_to_del[i:i+chunk_size]).execute()
         
-        # 2. INSERT mới
         if clean_recs:
             chunk_size = 500
             for i in range(0, len(clean_recs), chunk_size):
@@ -239,7 +235,7 @@ def save_data_overwrite(table, df, match_col):
         st.cache_data.clear()
     except Exception as e: st.error(f"❌ Lưu Lỗi ({table}): {e}")
 
-# --- LOGIC MATCHING THÔNG MINH (TAB 3) ---
+# --- LOGIC MATCHING THÔNG MINH ---
 def run_smart_matching(rfq_file, db_df):
     lookup_code = {}
     lookup_name = {}
@@ -278,7 +274,6 @@ def run_smart_matching(rfq_file, db_df):
         qty_val = to_float(r.get(qty_key))
 
         info = None
-        # Logic tìm giá: chỉ cần Qty > 0
         if qty_val > 0:
             if clean_key(code) in lookup_code: info = lookup_code[clean_key(code)]
             elif clean_key(name) in lookup_name: info = lookup_name[clean_key(name)]
@@ -326,7 +321,7 @@ if 'customer_name' not in st.session_state: st.session_state.customer_name = ""
 if 'quote_number' not in st.session_state: st.session_state.quote_number = ""
 
 # --- UI ---
-st.title("HỆ THỐNG CRM QUẢN LÝ (V4866)")
+st.title("HỆ THỐNG CRM QUẢN LÝ (V4867)")
 is_admin = (st.sidebar.text_input("Admin Password", type="password") == "admin")
 
 t1, t2, t3, t4, t5, t6 = st.tabs(["DASHBOARD", "KHO HÀNG (PURCHASES)", "BÁO GIÁ (QUOTES)", "ĐƠN HÀNG (PO)", "TRACKING", "DỮ LIỆU NỀN"])
@@ -502,6 +497,8 @@ with t3:
                 
                 total_sell = unit_sell * qty
                 ap_total = ap_price * qty
+                buy_total = to_float(r["Total buying price (VND)"]) # FIX NAME ERROR
+                
                 gap = total_sell - ap_total 
                 gap_share = gap * 0.6 if gap > 0 else 0
                 
@@ -608,7 +605,7 @@ with t3:
                             st.download_button("📥 TẢI FILE BÁO GIÁ ĐÃ XONG", output.getvalue(), "Bao_Gia_Final.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
                         except Exception as e: st.error(f"Lỗi xuất Excel: {e}")
                 else:
-                    st.warning("⚠️ Chưa có Template. Vui lòng vào Tab 6 (Dữ liệu nền) để upload Template Báo Giá trước.")
+                    st.warning("⚠️ Chưa có Template. Upload tại Tab 6.")
 
             if st.button("💾 Lưu vào Lịch sử"):
                 to_save = edited_quote.copy()
@@ -643,10 +640,12 @@ with t4:
         po_s = st.text_input("PO NCC No")
         up_s = st.file_uploader("Upload PO NCC", type=["xlsx"], key="up_po_s")
         if up_s:
+            # FIX LOGIC NHẬP PO: DÙNG HÀM CŨ (HARDCODE ILOC) -> ĐẢM BẢO FULL ROWS
             df = pd.read_excel(up_s, dtype=str).fillna("")
             recs = []
             for i, r in df.iterrows():
                 try:
+                    # Lấy trực tiếp theo cột, bỏ qua header phức tạp
                     recs.append({
                         "item_code": safe_str(r.iloc[1]), 
                         "item_name": safe_str(r.iloc[2]), 
@@ -670,6 +669,7 @@ with t4:
         po_c = st.text_input("PO Cust No")
         up_c = st.file_uploader("Upload PO Cust", type=["xlsx"], key="up_po_c")
         if up_c:
+            # FIX LOGIC NHẬP PO CUST TƯƠNG TỰ
             df = pd.read_excel(up_c, dtype=str).fillna("")
             recs = []
             for i, r in df.iterrows():
@@ -714,7 +714,7 @@ with t5:
                 if urls: supabase.table("crm_tracking").update({"proof_image": urls[0]}).eq("po_no", pk).execute()
                 st.success("Uploaded")
         else:
-            st.info("Chưa có dữ liệu Tracking.")
+            st.info("Chưa có dữ liệu Tracking. Hãy tạo PO ở Tab 4 trước.")
 
     with c2:
         st.subheader("Payment")
