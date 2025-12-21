@@ -7,4 +7,3 @@ supabase
 streamlit
 pandas
 psycopg2-binary
-openpyxl
