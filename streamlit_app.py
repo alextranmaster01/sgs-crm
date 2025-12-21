@@ -25,8 +25,8 @@ except ImportError:
 # =============================================================================
 # CẤU HÌNH & VERSION
 # =============================================================================
-APP_VERSION = "V4860 - FINAL ULTIMATE (FIX IMPORT + UI + TEMPLATE)"
-st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="🏢")
+APP_VERSION = "V4860 - FINAL BUG FIX (DB CONSTRAINT FIXED)"
+st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="🛠️")
 
 # --- CSS ---
 st.markdown("""
@@ -44,7 +44,7 @@ st.markdown("""
     [data-testid="stDataFrame"] table thead th:first-child { display: none; }
     [data-testid="stDataFrame"] table tbody td:first-child { display: none; }
     
-    /* Style cho cảnh báo */
+    /* Style cảnh báo */
     .alert-box {
         padding: 15px;
         background-color: #ffcccc;
@@ -168,7 +168,7 @@ MAP_MASTER = {
     "destination": "destination", "paymentterm": "payment_term"
 }
 
-# --- DB HANDLERS (SỬ DỤNG THUẬT TOÁN APP-3: DELETE THEN INSERT) ---
+# --- DB HANDLERS (SỬ DỤNG THUẬT TOÁN UPSERT CỦA APP-3) ---
 @st.cache_data(ttl=5) 
 def load_data(table):
     try:
@@ -181,10 +181,11 @@ def load_data(table):
         return df
     except: return pd.DataFrame()
 
-def save_data_overwrite(table, df, match_col):
+def save_data(table, df, unique_cols=None):
     """
-    Thuật toán từ app-(3): Xóa các dòng có match_col trùng, sau đó insert mới.
-    Đảm bảo dữ liệu được cập nhật đầy đủ, không bị mất dòng.
+    Sử dụng thuật toán Upsert chuẩn xác:
+    - Nếu unique_cols được cung cấp, sử dụng nó làm conflict target để update dòng cũ.
+    - Đảm bảo các dòng khác nhau về khóa (vd: giá khác nhau) vẫn được thêm mới.
     """
     if df.empty: return
     try:
@@ -202,7 +203,8 @@ def save_data_overwrite(table, df, match_col):
             "Profit (VND)": "profit_vnd", "Profit (%)": "profit_pct",
             "Leadtime": "leadtime", "Supplier": "supplier_name", "Images": "image_path"
         }
-        
+        df = df.rename(columns=db_cols_map)
+
         valid_db_cols = set(list(MAP_PURCHASE.values()) + list(MAP_MASTER.values()) + [
             "image_path", "po_number", "order_date", "price_rmb", "total_rmb", "price_vnd", "total_vnd", "eta", "supplier", "pdf_path",
             "customer", "unit_price", "total_price", "base_buying_vnd", "full_cost_total",
@@ -211,30 +213,22 @@ def save_data_overwrite(table, df, match_col):
             "history_id", "date", "quote_no", "ap_price", "ap_total_vnd", "gap", "end_user_val", "buyer_val", "import_tax_val", "vat_val", "transportation", "mgmt_fee", "payback_val", "profit_vnd", "profit_pct", "pct_end", "pct_buy", "pct_tax", "pct_vat", "pct_pay", "pct_mgmt", "pct_trans"
         ])
         
-        # Đổi tên cột nếu cần
-        df_save = df.rename(columns=db_cols_map)
-        
-        recs = df_save.to_dict(orient='records')
+        recs = df.to_dict(orient='records')
         clean_recs = []
-        codes_to_del = []
-        
         for r in recs:
             clean = {k: safe_str(v) for k,v in r.items() if k in valid_db_cols}
-            if clean: 
-                clean_recs.append(clean)
-                if match_col in clean and clean[match_col]: codes_to_del.append(clean[match_col])
+            if clean: clean_recs.append(clean)
         
-        # 1. DELETE
-        if codes_to_del:
-            chunk_size = 500
-            for i in range(0, len(codes_to_del), chunk_size):
-                supabase.table(table).delete().in_(match_col, codes_to_del[i:i+chunk_size]).execute()
-        
-        # 2. INSERT
-        if clean_recs:
+        # LOGIC UPSERT (QUAN TRỌNG)
+        if unique_cols:
+            conflict_target = ",".join(unique_cols)
             chunk_size = 500
             for i in range(0, len(clean_recs), chunk_size):
-                supabase.table(table).insert(clean_recs[i:i+chunk_size]).execute()
+                supabase.table(table).upsert(clean_recs[i:i+chunk_size], on_conflict=conflict_target).execute()
+        else:
+            chunk_size = 500
+            for i in range(0, len(clean_recs), chunk_size):
+                supabase.table(table).upsert(clean_recs[i:i+chunk_size]).execute()
             
         st.cache_data.clear()
     except Exception as e: st.error(f"❌ Lưu Lỗi ({table}): {e}")
@@ -295,13 +289,11 @@ def run_smart_matching(rfq_file, db_df):
             "Exchange rate": fmt_num(rate),
             "Buying price (VND)": fmt_num(rmb * rate),
             "Total buying price (VND)": fmt_num(rmb * qty_val * rate),
-            
             "AP price (VND)": "0", "AP total price (VND)": "0",
             "Unit price (VND)": "0", "Total price (VND)": "0",
             "GAP": "0", "End user": "0", "Buyer": "0", "Import tax": "0", "VAT": "0",
             "Transportation": "0", "Management fee": "0", "Payback": "0",
             "Profit (VND)": "0", "Profit (%)": "0%",
-            
             "Leadtime": info['lead'], "Supplier": info['supp'], "Images": info['img'],
             "Type": info['type'], "N/U/O/C": info['nuoc']
         }
@@ -408,8 +400,9 @@ with t2:
                     rows.append(d)
                     bar.progress((i+1)/len(df))
                 
-                # SỬ DỤNG save_data_overwrite (DELETE THEN INSERT)
-                save_data_overwrite("crm_purchases", pd.DataFrame(rows), match_col='item_code')
+                # QUAN TRỌNG: CẬP NHẬT KEY UPSERT THÊM 'nuoc'
+                save_data("crm_purchases", pd.DataFrame(rows), unique_cols=['item_code', 'buying_price_rmb', 'nuoc'])
+                
                 st.success(f"✅ Đã import {len(rows)} mã hàng!"); time.sleep(1); st.rerun()
             except Exception as e: st.error(f"Lỗi Import: {e}")
             
@@ -423,11 +416,11 @@ with t2:
 
 # --- TAB 3: QUOTES ---
 with t3:
-    # 1. NÚT RESET TẠO MỚI
-    if st.button("🆕 TẠO BÁO GIÁ MỚI (XÓA DỮ LIỆU CŨ)"):
+    if st.button("🆕 TẠO BÁO GIÁ MỚI (RESET)"):
         st.session_state.quote_result = pd.DataFrame()
         st.rerun()
 
+    # --- KHU VỰC 1: NHẬP LIỆU & TÍNH TOÁN ---
     with st.container(border=True):
         st.header("1. TÍNH TOÁN GIÁ")
         
@@ -534,6 +527,7 @@ with t3:
                 st.session_state.quote_result = df
                 st.success("Đã tính toán xong!")
 
+            # BẢNG CHỈNH SỬA
             edited_quote = st.data_editor(
                 st.session_state.quote_result,
                 column_config={
@@ -554,7 +548,7 @@ with t3:
             if not edited_quote.equals(st.session_state.quote_result):
                 st.session_state.quote_result = edited_quote
 
-    # --- KHU VỰC 2: REVIEW (FIX CHỒNG CHÉO) ---
+    # --- KHU VỰC 2: REVIEW ---
     if 'quote_result' in st.session_state and not st.session_state.quote_result.empty:
         with st.container(border=True):
             st.header("2. REVIEW LỢI NHUẬN")
@@ -564,7 +558,6 @@ with t3:
             
             if not df_low.empty:
                 st.dataframe(df_low[REVIEW_COLS], use_container_width=True, hide_index=True)
-                # Cảnh báo nằm dưới bảng (Fix UI)
                 st.markdown(f"<div class='alert-box'>⚠️ CẢNH BÁO: Có {len(df_low)} mặt hàng lợi nhuận dưới 10%!</div>", unsafe_allow_html=True)
             else:
                 st.success("✅ Tất cả mặt hàng đều đạt lợi nhuận > 10%.")
@@ -606,24 +599,7 @@ with t3:
 
             if st.button("💾 Lưu vào Lịch sử"):
                 to_save = edited_quote.copy()
-                rename_map = {
-                    "Item code": "item_code", "Item name": "item_name", "Specs": "specs", "Q'ty": "qty",
-                    "Buying price (RMB)": "buying_price_rmb", "Total buying price (RMB)": "total_buying_price_rmb",
-                    "Exchange rate": "exchange_rate", "Buying price (VND)": "buying_price_vnd",
-                    "Total buying price (VND)": "total_buying_price_vnd", "Leadtime": "leadtime",
-                    "Supplier": "supplier_name", "Images": "image_path",
-                    "Unit price (VND)": "unit_price", "Total price (VND)": "total_price_vnd", 
-                    "Profit (VND)": "profit_vnd", "Profit (%)": "profit_pct",
-                    "AP price (VND)": "ap_price", "AP total price (VND)": "ap_total_vnd",
-                    "GAP": "gap", "End user": "end_user_val", "Buyer": "buyer_val",
-                    "Import tax": "import_tax_val", "VAT": "vat_val", "Transportation": "transportation",
-                    "Management fee": "mgmt_fee", "Payback": "payback_val"
-                }
-                to_save = to_save.rename(columns=rename_map)
-                to_save["history_id"] = f"QUOTE_{int(time.time())}"
-                to_save["date"] = datetime.now().strftime("%d/%m/%Y")
-                to_save["quote_no"] = "AUTO_SAVE"
-                save_data_overwrite("crm_shared_history", to_save, "history_id")
+                save_data("crm_shared_history", to_save)
                 st.success("Đã lưu!")
 
 # --- TAB 4: PO ---
@@ -654,8 +630,8 @@ with t4:
         if st.button("Save PO NCC"):
             s_data = ed_s.copy()
             s_data['po_number'] = po_s; s_data['supplier'] = sup; s_data['order_date'] = datetime.now().strftime("%d/%m/%Y")
-            save_data_overwrite("db_supplier_orders", s_data, "id")
-            save_data_overwrite("crm_tracking", pd.DataFrame([{"po_no": po_s, "partner": sup, "status": "Ordered", "order_type": "NCC"}]), "po_no")
+            save_data("db_supplier_orders", s_data)
+            save_data("crm_tracking", pd.DataFrame([{"po_no": po_s, "partner": sup, "status": "Ordered", "order_type": "NCC"}]), unique_cols=['po_no'])
             st.success("Saved")
 
     with c2:
@@ -681,8 +657,8 @@ with t4:
         if st.button("Save PO Cust"):
             c_data = ed_c.copy()
             c_data['po_number'] = po_c; c_data['customer'] = cus; c_data['order_date'] = datetime.now().strftime("%d/%m/%Y")
-            save_data_overwrite("db_customer_orders", c_data, "id")
-            save_data_overwrite("crm_tracking", pd.DataFrame([{"po_no": po_c, "partner": cus, "status": "Waiting", "order_type": "KH"}]), "po_no")
+            save_data("db_customer_orders", c_data)
+            save_data("crm_tracking", pd.DataFrame([{"po_no": po_c, "partner": cus, "status": "Waiting", "order_type": "KH"}]), unique_cols=['po_no'])
             st.success("Saved")
 
 # --- TAB 5: TRACKING & PAYMENT ---
@@ -695,10 +671,10 @@ with t5:
         if not tracking_df.empty:
             ed_t = st.data_editor(tracking_df, key="editor_tracking_main", height=600, hide_index=True, column_config={"proof_image": st.column_config.ImageColumn("Proof")})
             if st.button("Update Tracking"):
-                save_data_overwrite("crm_tracking", ed_t, "po_no")
+                save_data("crm_tracking", ed_t, unique_cols=['po_no', 'partner'])
                 for i, r in ed_t.iterrows():
                     if r['status'] == 'Delivered' and r['order_type'] == 'KH':
-                        save_data_overwrite("crm_payment", pd.DataFrame([{"po_no": r['po_no'], "customer": r['partner'], "status": "Pending"}]), "po_no")
+                        save_data("crm_payment", pd.DataFrame([{"po_no": r['po_no'], "customer": r['partner'], "status": "Pending"}]), unique_cols=['po_no'])
                 st.success("Updated")
             
             pk = st.text_input("Proof for PO")
@@ -707,14 +683,18 @@ with t5:
                 urls = [upload_to_drive(f, "CRM_PROOF_IMAGES", f"PRF_{pk}_{f.name}") for f in prf]
                 if urls: supabase.table("crm_tracking").update({"proof_image": urls[0]}).eq("po_no", pk).execute()
                 st.success("Uploaded")
+        else:
+            st.info("Chưa có dữ liệu Tracking. Hãy tạo PO ở Tab 4 trước.")
 
     with c2:
         st.subheader("Payment")
         if not payment_df.empty:
             ed_p = st.data_editor(payment_df, key="editor_payment_main", height=600, hide_index=True)
             if st.button("Update Payment"):
-                save_data_overwrite("crm_payment", ed_p, "po_no")
+                save_data("crm_payment", ed_p, unique_cols=['po_no'])
                 st.success("Updated")
+        else:
+            st.info("Chưa có dữ liệu Payment. (Sẽ có khi Tracking = Delivered)")
 
 # --- TAB 6: MASTER DATA ---
 with t6:
@@ -733,11 +713,11 @@ with t6:
                     for nk, db in MAP_MASTER.items():
                         if nk in hn: d[db] = safe_str(r[hn[nk]])
                     if d.get('short_name'): rows.append(d)
-                save_data_overwrite("crm_customers", pd.DataFrame(rows), "short_name")
+                save_data("crm_customers", pd.DataFrame(rows), unique_cols=['short_name'])
                 st.success("Imported"); st.rerun()
             
             ed_k = st.data_editor(customers_df, num_rows="dynamic", key="editor_master_cust", height=600, hide_index=True)
-            if st.button("Save Cust"): save_data_overwrite("crm_customers", ed_k, "short_name"); st.success("OK")
+            if st.button("Save Cust"): save_data("crm_customers", ed_k, unique_cols=['short_name']); st.success("OK")
 
         with c2:
             st.write("Suppliers")
@@ -751,11 +731,11 @@ with t6:
                     for nk, db in MAP_MASTER.items():
                         if nk in hn: d[db] = safe_str(r[hn[nk]])
                     if d.get('short_name'): rows.append(d)
-                save_data_overwrite("crm_suppliers", pd.DataFrame(rows), "short_name")
+                save_data("crm_suppliers", pd.DataFrame(rows), unique_cols=['short_name'])
                 st.success("Imported"); st.rerun()
             
             ed_s = st.data_editor(suppliers_df, num_rows="dynamic", key="editor_master_supp", height=600, hide_index=True)
-            if st.button("Save Supp"): save_data_overwrite("crm_suppliers", ed_s, "short_name"); st.success("OK")
+            if st.button("Save Supp"): save_data("crm_suppliers", ed_s, unique_cols=['short_name']); st.success("OK")
         
         st.divider()
         st.subheader("2. TEMPLATE BÁO GIÁ (CHO TAB 3)")
