@@ -25,7 +25,7 @@ except ImportError:
 # =============================================================================
 # CẤU HÌNH & VERSION
 # =============================================================================
-APP_VERSION = "V4875 - FINAL PERFECT (5-KEY LOGIC + OVERWRITE)"
+APP_VERSION = "V4876 - FINAL STABLE (FIX DUPLICATE KEY 23505)"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="🏢")
 
 # --- CSS ---
@@ -158,8 +158,8 @@ MAP_PURCHASE = {
     "exchangerate": "exchange_rate", "buyingpricevnd": "buying_price_vnd",
     "totalbuyingpricevnd": "total_buying_price_vnd", "leadtime": "leadtime",
     "supplier": "supplier_name", 
-    "type": "type",   # Cột N
-    "nuoc": "nuoc"    # Cột O
+    "type": "type",
+    "nuoc": "nuoc"
 }
 MAP_MASTER = {
     "shortname": "short_name", "engname": "eng_name", "vnname": "vn_name",
@@ -183,7 +183,7 @@ def load_data(table):
 
 def save_data_overwrite(table, df, match_col):
     """
-    CƠ CHẾ LƯU: XÓA CŨ -> GHI MỚI (OVERWRITE)
+    CƠ CHẾ LƯU: XÓA CŨ -> GHI MỚI
     """
     if df.empty: return
     try:
@@ -220,13 +220,13 @@ def save_data_overwrite(table, df, match_col):
                 clean_recs.append(clean)
                 if match_col in clean and clean[match_col]: codes_to_del.append(clean[match_col])
         
-        # 1. XÓA CŨ (Xóa tất cả dòng có item_code trùng với file import)
+        # 1. Xóa các dòng cũ có mã tương ứng trong DB
         if codes_to_del:
             chunk_size = 500
             for i in range(0, len(codes_to_del), chunk_size):
                 supabase.table(table).delete().in_(match_col, codes_to_del[i:i+chunk_size]).execute()
         
-        # 2. GHI MỚI (Insert toàn bộ dòng đã được lọc sạch sẽ)
+        # 2. Chèn dữ liệu mới
         if clean_recs:
             chunk_size = 500
             for i in range(0, len(clean_recs), chunk_size):
@@ -274,7 +274,6 @@ def run_smart_matching(rfq_file, db_df):
         qty_val = to_float(r.get(qty_key))
 
         info = None
-        # Logic: Chỉ cần Qty > 0 là tìm
         if qty_val > 0:
             if clean_key(code) in lookup_code: info = lookup_code[clean_key(code)]
             elif clean_key(name) in lookup_name: info = lookup_name[clean_key(name)]
@@ -309,7 +308,6 @@ def run_smart_matching(rfq_file, db_df):
 if 'init' not in st.session_state:
     st.session_state.init = True
 
-# Khởi tạo trước để tránh lỗi AttributeError
 if 'current_quote_df' not in st.session_state:
     st.session_state.current_quote_df = pd.DataFrame(columns=QUOTE_DISPLAY_COLS)
 
@@ -327,7 +325,7 @@ if 'customer_name' not in st.session_state: st.session_state.customer_name = ""
 if 'quote_number' not in st.session_state: st.session_state.quote_number = ""
 
 # --- UI ---
-st.title("HỆ THỐNG CRM QUẢN LÝ (V4875)")
+st.title("HỆ THỐNG CRM QUẢN LÝ (V4876)")
 is_admin = (st.sidebar.text_input("Admin Password", type="password") == "admin")
 
 t1, t2, t3, t4, t5, t6 = st.tabs(["DASHBOARD", "KHO HÀNG (PURCHASES)", "BÁO GIÁ (QUOTES)", "ĐƠN HÀNG (PO)", "TRACKING", "DỮ LIỆU NỀN"])
@@ -396,22 +394,20 @@ with t2:
                     }
                     if item["item_code"] or item["item_name"]: rows.append(item)
                 
-                # --- LOGIC LỌC TRÙNG 5 TRƯỜNG (New Requirement) ---
+                # --- LOGIC DEDUPLICATE THEO 3 TRƯỜNG DB (FIX ERROR 23505) ---
                 df_rows = pd.DataFrame(rows)
                 if not df_rows.empty:
-                    # Logic: Giữ lại tất cả các dòng KHÁC nhau về (Code, Name, Specs, Price, NUOC)
-                    # Nếu trùng cả 5 trường -> Giữ dòng cuối (coi là update)
-                    df_unique = df_rows.drop_duplicates(subset=['item_code', 'item_name', 'specs', 'buying_price_rmb', 'nuoc'], keep='last')
+                    # Lọc trùng lặp dựa trên 3 khóa unique của DB (Item Code + Price + NUOC)
+                    # Giữ lại dòng cuối cùng
+                    df_unique = df_rows.drop_duplicates(subset=['item_code', 'buying_price_rmb', 'nuoc'], keep='last')
                     
                     # Chuyển lại thành list dict
                     clean_rows = df_unique.to_dict('records')
                     
-                    # Gọi hàm save (Xóa cũ - Ghi mới theo item_code)
-                    # Hàm save_data_overwrite bên trên sẽ xóa toàn bộ item_code trùng, sau đó insert danh sách clean_rows này vào.
-                    # -> Đảm bảo DB chứa đúng danh sách đã lọc (bao gồm cả biến thể giá/nuoc)
+                    # Lưu (Xóa cũ - Ghi mới)
                     save_data_overwrite("crm_purchases", pd.DataFrame(clean_rows), match_col='item_code')
                     
-                    st.success(f"✅ Đã import {len(clean_rows)} dòng (Đã lọc trùng lặp 5 tiêu chí)!"); time.sleep(1); st.rerun()
+                    st.success(f"✅ Đã import {len(clean_rows)} mã hàng thành công! (Đã tự động lọc trùng khớp với Database)"); time.sleep(1); st.rerun()
                 else:
                     st.warning("Không tìm thấy dữ liệu hợp lệ.")
             except Exception as e: st.error(f"Lỗi Import: {e}")
@@ -587,7 +583,7 @@ with t3:
             
             with col_ex2:
                 if st.session_state.quote_template:
-                    if st.button("📤 EXPORT EXCEL (THEO TEMPLATE AAA)"):
+                    if st.button("📤 EXPORT EXCEL (THEO TEMPLATE)"):
                         try:
                             output = io.BytesIO()
                             wb = load_workbook(io.BytesIO(st.session_state.quote_template.getvalue()))
