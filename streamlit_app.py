@@ -17,16 +17,16 @@ try:
     from googleapiclient.discovery import build
     from googleapiclient.http import MediaIoBaseUpload
 except ImportError:
-    st.error("⚠️ Cài đặt: pip install pandas openpyxl supabase google-api-python-client google-auth-oauthlib")
+    st.error("⚠️ Cài đặt thư viện: pip install pandas openpyxl supabase google-api-python-client google-auth-oauthlib")
     st.stop()
 
 # =============================================================================
 # CẤU HÌNH & VERSION
 # =============================================================================
-APP_VERSION = "V4828 - AUTO CALCULATION & LINKED DATA"
+APP_VERSION = "V4829 - AUTO CALC & LINKED DATA (FINAL)"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="🧮")
 
-# --- CSS ---
+# --- CSS GIAO DIỆN ---
 st.markdown("""
     <style>
     button[data-baseweb="tab"] div p { font-size: 20px !important; font-weight: 700 !important; }
@@ -37,7 +37,6 @@ st.markdown("""
     .bg-ncc { background: linear-gradient(135deg, #667eea, #764ba2); }
     
     [data-testid="stDataFrame"] > div { height: 800px !important; }
-    /* Ẩn cột index bên trái */
     [data-testid="stDataFrame"] table thead th:first-child { display: none; }
     [data-testid="stDataFrame"] table tbody td:first-child { display: none; }
     </style>""", unsafe_allow_html=True)
@@ -54,7 +53,7 @@ except Exception as e:
     st.error(f"⚠️ Lỗi Config: {e}")
     st.stop()
 
-# --- GOOGLE DRIVE (THUMBNAIL LINK) ---
+# --- XỬ LÝ GOOGLE DRIVE ---
 def get_drive_service():
     try:
         creds = Credentials(None, refresh_token=OAUTH_INFO["refresh_token"], 
@@ -81,7 +80,7 @@ def upload_to_drive(file_obj, sub_folder, file_name):
             srv.files().update(fileId=file_id, media_body=media, fields='id').execute()
         else:
             file_id = srv.files().create(body={'name': file_name, 'parents': [folder_id]}, media_body=media, fields='id').execute()['id']
-        
+            
         try: srv.permissions().create(fileId=file_id, body={'role': 'reader', 'type': 'anyone'}).execute()
         except: pass
         
@@ -106,7 +105,7 @@ def parse_formula(formula, buying, ap):
     try: return float(eval(re.sub(r'[^0-9.+\-*/()]', '', expr)))
     except: return 0.0
 
-# --- SMART MAPPING ---
+# --- MAPPING ---
 def normalize_header(h): return re.sub(r'[^a-zA-Z0-9]', '', str(h).lower())
 
 MAP_PURCHASE = {
@@ -123,7 +122,7 @@ MAP_MASTER = {
     "destination": "destination", "paymentterm": "payment_term"
 }
 
-# --- DB HANDLERS (DELETE -> INSERT STRATEGY) ---
+# --- DATABASE HANDLERS ---
 @st.cache_data(ttl=5) 
 def load_data(table):
     try:
@@ -139,9 +138,6 @@ def load_data(table):
     except: return pd.DataFrame()
 
 def save_data_overwrite(table, df, match_col):
-    """
-    Xóa dòng cũ có cùng mã -> Thêm dòng mới (Tránh lỗi trùng lặp tuyệt đối)
-    """
     if df.empty: return
     try:
         VALID_COLS = {
@@ -190,7 +186,7 @@ if 'init' not in st.session_state:
     for k in ["end","buy","tax","vat","pay","mgmt","trans"]: st.session_state[f"pct_{k}"] = "0"
 
 # --- UI ---
-st.title("HỆ THỐNG CRM QUẢN LÝ (V4828)")
+st.title("HỆ THỐNG CRM QUẢN LÝ (V4829)")
 is_admin = (st.sidebar.text_input("Admin Password", type="password") == "admin")
 
 t1, t2, t3, t4, t5, t6 = st.tabs(["DASHBOARD", "KHO HÀNG (PURCHASES)", "BÁO GIÁ (QUOTES)", "ĐƠN HÀNG (PO)", "TRACKING", "DỮ LIỆU NỀN"])
@@ -232,7 +228,7 @@ with t1:
         with c6: st.markdown(f"<div class='card-3d bg-del'><div>ĐÃ GIAO</div><h3>{len(track[(track['order_type']=='KH') & (track['status']=='Đã giao hàng')]) if not track.empty else 0}</h3></div>", unsafe_allow_html=True)
         with c7: st.markdown(f"<div class='card-3d bg-pend'><div>CHỜ GIAO</div><h3>{len(db_cust['po_number'].unique()) - len(track[(track['order_type']=='KH') & (track['status']=='Đã giao hàng')]) if not db_cust.empty else 0}</h3></div>", unsafe_allow_html=True)
 
-# --- TAB 2: PURCHASES (AUTO CALC) ---
+# --- TAB 2: PURCHASES (AUTO CALC + LINKED) ---
 with t2:
     purchases_df = load_data("crm_purchases")
     c1, c2 = st.columns([1, 3])
@@ -255,7 +251,7 @@ with t2:
                 
                 for i, r in df.iterrows():
                     d = {}
-                    # 1. Map dữ liệu
+                    # 1. Map dữ liệu thô
                     for nk, db in MAP_PURCHASE.items():
                         if nk in hn: d[db] = safe_str(r[hn[nk]])
                     
@@ -275,20 +271,20 @@ with t2:
                     d['_clean_name'] = clean_lookup_key(d.get('item_name'))
                     d['_clean_specs'] = clean_lookup_key(d.get('specs'))
                     
-                    # 3. TỰ ĐỘNG TÍNH TOÁN (AUTO CALC)
-                    # Lấy giá trị thô
+                    # 3. TỰ ĐỘNG TÍNH TOÁN (AUTO CALC LOGIC)
                     qty = to_float(d.get('qty', 0))
                     price_rmb = to_float(d.get('buying_price_rmb', 0))
                     rate = to_float(d.get('exchange_rate', 0))
                     
-                    # Nếu Rate chưa có, mặc định hoặc giữ nguyên? (Giả sử 0 nếu chưa có)
+                    # Mặc định tỷ giá nếu thiếu
+                    if rate == 0: rate = 4000 
                     
-                    # Tính toán
+                    # Tính toán lại
                     total_rmb = qty * price_rmb
                     price_vnd = price_rmb * rate
                     total_vnd = total_rmb * rate
                     
-                    # Gán ngược lại
+                    # Cập nhật ngược lại vào dict
                     d['qty'] = fmt_num(qty)
                     d['buying_price_rmb'] = fmt_num(price_rmb)
                     d['total_buying_price_rmb'] = fmt_num(total_rmb)
@@ -301,7 +297,7 @@ with t2:
                 
                 # Lưu (Ghi đè)
                 save_data_overwrite("crm_purchases", pd.DataFrame(rows), match_col='item_code')
-                st.success(f"✅ Đã import và tính toán {len(rows)} mã hàng!"); time.sleep(1); st.rerun()
+                st.success(f"✅ Đã import và tính toán lại {len(rows)} mã hàng!"); time.sleep(1); st.rerun()
             except Exception as e: st.error(f"Lỗi Import: {e}")
             
         st.divider()
