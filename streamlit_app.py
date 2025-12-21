@@ -8,7 +8,7 @@ import io
 import time
 import unicodedata
 import mimetypes
-import numpy as np # Thêm numpy để xử lý data an toàn hơn
+import numpy as np
 
 # --- THƯ VIỆN KẾT NỐI CLOUD ---
 try:
@@ -18,14 +18,14 @@ try:
     from googleapiclient.discovery import build
     from googleapiclient.http import MediaIoBaseUpload
 except ImportError:
-    st.error("⚠️ Cài đặt thư viện: pip install pandas openpyxl supabase google-api-python-client google-auth-oauthlib numpy")
+    st.error("⚠️ Cài đặt: pip install pandas openpyxl supabase google-api-python-client google-auth-oauthlib numpy")
     st.stop()
 
 # =============================================================================
 # CẤU HÌNH & VERSION
 # =============================================================================
-APP_VERSION = "V4830 - FIXED AMBIGUOUS & DATA DISPLAY"
-st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="🛡️")
+APP_VERSION = "V4831 - FIXED AMBIGUOUS & DATA LINKING"
+st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="🛠️")
 
 # --- CSS ---
 st.markdown("""
@@ -38,7 +38,6 @@ st.markdown("""
     .bg-ncc { background: linear-gradient(135deg, #667eea, #764ba2); }
     
     [data-testid="stDataFrame"] > div { height: 800px !important; }
-    /* Ẩn cột index bên trái */
     [data-testid="stDataFrame"] table thead th:first-child { display: none; }
     [data-testid="stDataFrame"] table tbody td:first-child { display: none; }
     </style>""", unsafe_allow_html=True)
@@ -89,18 +88,15 @@ def upload_to_drive(file_obj, sub_folder, file_name):
         return f"https://drive.google.com/thumbnail?id={file_id}&sz=w200"
     except: return ""
 
-# --- DATA HELPERS (SỬA LỖI AMBIGUOUS) ---
-def safe_get(val):
-    """Hàm an toàn để lấy giá trị vô hướng (scalar) từ Series/List"""
-    if isinstance(val, (pd.Series, np.ndarray, list)):
-        if len(val) > 0:
-            return val[0] if isinstance(val, list) else val.iloc[0] if hasattr(val, 'iloc') else val[0]
-        return None
-    return val
-
-def safe_str(val): 
-    val = safe_get(val)
+# --- DATA HELPERS (FIXED AMBIGUOUS ERROR) ---
+def safe_str(val):
+    """Chuyển đổi an toàn sang string, xử lý cả Series/List"""
     if val is None: return ""
+    # Nếu là Series/List/Array, lấy phần tử đầu tiên
+    if isinstance(val, (pd.Series, np.ndarray, list)):
+        if len(val) == 0: return ""
+        val = val[0] if isinstance(val, list) else (val.iloc[0] if hasattr(val, 'iloc') else val.flat[0])
+    
     s = str(val).strip()
     if s.lower() in ['nan', 'none', 'null', 'nat', '']: return ""
     return s
@@ -108,8 +104,15 @@ def safe_str(val):
 def safe_filename(s): return re.sub(r'[^\w\-_]', '_', unicodedata.normalize('NFKD', safe_str(s)).encode('ascii', 'ignore').decode('utf-8')).strip('_')
 
 def to_float(val):
-    val = safe_get(val)
+    """Chuyển đổi an toàn sang float, KHÔNG BAO GIỜ LỖI AMBIGUOUS"""
     if val is None: return 0.0
+    
+    # Xử lý nếu val là Series/List/Array
+    if isinstance(val, (pd.Series, np.ndarray, list)):
+        if len(val) == 0: return 0.0
+        # Lấy phần tử đầu tiên
+        val = val[0] if isinstance(val, list) else (val.iloc[0] if hasattr(val, 'iloc') else val.flat[0])
+
     s = str(val).replace(",", "").replace("¥", "").replace("$", "").replace("RMB", "").replace("VND", "").replace(" ", "").replace("\n","")
     if not s: return 0.0
     try: 
@@ -119,7 +122,8 @@ def to_float(val):
     except: return 0.0
 
 def fmt_num(x): return "{:,.0f}".format(float(x)) if x is not None else "0"
-def clean_lookup_key(s): return re.sub(r'[^a-zA-Z0-9]', '', str(s)).lower()
+def clean_lookup_key(s): return re.sub(r'[^a-zA-Z0-9]', '', safe_str(s)).lower()
+
 def parse_formula(formula, buying, ap):
     s = str(formula).strip().upper().replace(",", "")
     if not s.startswith("="): return 0.0
@@ -160,7 +164,6 @@ def load_data(table):
     except: return pd.DataFrame()
 
 def save_data_overwrite(table, df, match_col):
-    """Xóa cũ -> Thêm mới để tránh lỗi"""
     if df.empty: return
     try:
         VALID_COLS = {
@@ -180,13 +183,12 @@ def save_data_overwrite(table, df, match_col):
         codes_to_del = []
         
         for r in recs:
-            clean = {k: str(safe_get(v)) if v is not None and str(safe_get(v))!='nan' else None for k,v in r.items() if k in valid}
+            clean = {k: str(safe_str(v)) if v is not None and str(safe_str(v))!='nan' else None for k,v in r.items() if k in valid}
             if clean: 
                 clean_recs.append(clean)
                 if match_col in clean and clean[match_col]: codes_to_del.append(clean[match_col])
         
         if codes_to_del:
-            # Xóa sạch các mã trùng
             chunk_size = 200
             for i in range(0, len(codes_to_del), chunk_size):
                 supabase.table(table).delete().in_(match_col, codes_to_del[i:i+chunk_size]).execute()
@@ -208,7 +210,7 @@ if 'init' not in st.session_state:
     for k in ["end","buy","tax","vat","pay","mgmt","trans"]: st.session_state[f"pct_{k}"] = "0"
 
 # --- UI ---
-st.title("HỆ THỐNG CRM QUẢN LÝ (V4830)")
+st.title("HỆ THỐNG CRM QUẢN LÝ (V4831)")
 is_admin = (st.sidebar.text_input("Admin Password", type="password") == "admin")
 
 t1, t2, t3, t4, t5, t6 = st.tabs(["DASHBOARD", "KHO HÀNG (PURCHASES)", "BÁO GIÁ (QUOTES)", "ĐƠN HÀNG (PO)", "TRACKING", "DỮ LIỆU NỀN"])
@@ -250,7 +252,7 @@ with t1:
         with c6: st.markdown(f"<div class='card-3d bg-del'><div>ĐÃ GIAO</div><h3>{len(track[(track['order_type']=='KH') & (track['status']=='Đã giao hàng')]) if not track.empty else 0}</h3></div>", unsafe_allow_html=True)
         with c7: st.markdown(f"<div class='card-3d bg-pend'><div>CHỜ GIAO</div><h3>{len(db_cust['po_number'].unique()) - len(track[(track['order_type']=='KH') & (track['status']=='Đã giao hàng')]) if not db_cust.empty else 0}</h3></div>", unsafe_allow_html=True)
 
-# --- TAB 2: PURCHASES (AUTO CALC + LINKED) ---
+# --- TAB 2: PURCHASES ---
 with t2:
     purchases_df = load_data("crm_purchases")
     c1, c2 = st.columns([1, 3])
@@ -273,11 +275,9 @@ with t2:
                 
                 for i, r in df.iterrows():
                     d = {}
-                    # 1. Map dữ liệu
+                    # 1. Map dữ liệu (Safe String)
                     for nk, db in MAP_PURCHASE.items():
-                        if nk in hn: 
-                            val = r[hn[nk]]
-                            d[db] = safe_str(val) # Sử dụng safe_str phiên bản mới
+                        if nk in hn: d[db] = safe_str(r[hn[nk]])
                     
                     if not d.get('item_code'): continue
                     
@@ -295,12 +295,12 @@ with t2:
                     d['_clean_name'] = clean_lookup_key(d.get('item_name'))
                     d['_clean_specs'] = clean_lookup_key(d.get('specs'))
                     
-                    # 3. TỰ ĐỘNG TÍNH TOÁN (AUTO CALC LOGIC)
+                    # 3. AUTO CALC (FIXED)
                     qty = to_float(d.get('qty'))
                     price_rmb = to_float(d.get('buying_price_rmb'))
                     rate = to_float(d.get('exchange_rate'))
                     
-                    if rate == 0: rate = 4000 
+                    if rate == 0: rate = 4000 # Mặc định nếu thiếu
                     
                     total_rmb = qty * price_rmb
                     price_vnd = price_rmb * rate
@@ -317,7 +317,7 @@ with t2:
                     bar.progress((i+1)/len(df))
                 
                 save_data_overwrite("crm_purchases", pd.DataFrame(rows), match_col='item_code')
-                st.success(f"✅ Đã import và tính toán lại {len(rows)} mã hàng!"); time.sleep(1); st.rerun()
+                st.success(f"✅ Đã import {len(rows)} mã hàng!"); time.sleep(1); st.rerun()
             except Exception as e: st.error(f"Lỗi Import: {e}")
             
         st.divider()
@@ -349,7 +349,7 @@ with t2:
             hide_index=True
         )
 
-# --- TAB 3 ---
+# --- TAB 3: QUOTES ---
 with t3:
     customers_df = load_data("crm_customers")
     c1, c2 = st.columns([3, 1])
@@ -368,28 +368,46 @@ with t3:
     up_rfq = st.file_uploader("Import RFQ", type=["xlsx"], key="up_rfq")
     if up_rfq and st.button("Load RFQ"):
         try:
+            # TẠO MAP TRA CỨU
             pmap = {}
             if not purchases_df.empty:
                 for _, r in purchases_df.iterrows():
-                    pmap[r.get('_clean_code','')] = r
-                    pmap[r.get('_clean_name','')] = r
+                    pmap[safe_str(r.get('_clean_code'))] = r
+                    pmap[safe_str(r.get('_clean_name'))] = r
             
             rfq = pd.read_excel(up_rfq, header=None, dtype=str).fillna("")
             new_rows = []
             for i, r in rfq.iloc[1:].iterrows():
                 c_raw = safe_str(r.iloc[1]); n_raw = safe_str(r.iloc[2])
                 if not c_raw and not n_raw: continue
-                target = pmap.get(clean_lookup_key(c_raw)) or pmap.get(clean_lookup_key(n_raw))
+                
+                # Tìm trong DB
+                clean_c = clean_lookup_key(c_raw)
+                clean_n = clean_lookup_key(n_raw)
+                target = pmap.get(clean_c) or pmap.get(clean_n)
+                
                 item = {
                     "item_code": c_raw, "item_name": n_raw, "specs": safe_str(r.iloc[3]), 
-                    "qty": fmt_num(to_float(r.iloc[4])), "buying_price_vnd": "0", "buying_price_rmb": "0", "exchange_rate": "0",
+                    "qty": fmt_num(to_float(r.iloc[4])), 
+                    "buying_price_vnd": "0", "buying_price_rmb": "0", "exchange_rate": "0",
                     "unit_price": "0", "ap_price": "0", "transportation": "0", "supplier_name": "", "image_path": "", "leadtime": ""
                 }
+                
                 if target is not None:
+                    # Lấy data từ DB, ép kiểu số để tránh lỗi
+                    db_rmb = to_float(target.get("buying_price_rmb"))
+                    db_rate = to_float(target.get("exchange_rate"))
+                    if db_rate == 0: db_rate = 4000
+                    
+                    db_vnd = db_rmb * db_rate # Tự tính lại VND để chắc chắn
+                    
                     item.update({
-                        "buying_price_vnd": target["buying_price_vnd"], "buying_price_rmb": target["buying_price_rmb"],
-                        "exchange_rate": target["exchange_rate"], "supplier_name": target["supplier_name"],
-                        "image_path": target["image_path"], "leadtime": target["leadtime"]
+                        "buying_price_rmb": fmt_num(db_rmb),
+                        "exchange_rate": fmt_num(db_rate),
+                        "buying_price_vnd": fmt_num(db_vnd),
+                        "supplier_name": safe_str(target.get("supplier_name")),
+                        "image_path": safe_str(target.get("image_path")),
+                        "leadtime": safe_str(target.get("leadtime"))
                     })
                 new_rows.append(item)
             st.session_state.quote_df = pd.DataFrame(new_rows)
@@ -421,10 +439,11 @@ with t3:
     
     final = edited.copy()
     for i, r in final.iterrows():
-        q = to_float(r.get('qty',0)); buy = to_float(r.get('buying_price_vnd',0))
-        unit = to_float(r.get('unit_price',0)); ap = to_float(r.get('ap_price',0)); trans = to_float(pcts['trans'])
+        # TÍNH TOÁN REAL-TIME CHO BÁO GIÁ
+        qty = to_float(r.get('qty')); buy_vnd = to_float(r.get('buying_price_vnd'))
+        unit = to_float(r.get('unit_price')); ap = to_float(r.get('ap_price')); trans = to_float(pcts['trans'])
         
-        t_buy = q * buy; t_sell = q * unit; ap_tot = q * ap; gap = t_sell - ap_tot
+        t_buy = qty * buy_vnd; t_sell = qty * unit; ap_tot = qty * ap; gap = t_sell - ap_tot
         v_end = to_float(pcts['end'])/100 * ap_tot
         v_buy = to_float(pcts['buy'])/100 * t_sell
         v_tax = to_float(pcts['tax'])/100 * t_buy
@@ -432,7 +451,7 @@ with t3:
         v_pay = to_float(pcts['pay'])/100 * gap
         v_mgmt = to_float(pcts['mgmt'])/100 * t_sell
         
-        ops = (gap * 0.6) + v_end + v_buy + v_tax + v_vat + (trans * q) + v_mgmt
+        ops = (gap * 0.6) + v_end + v_buy + v_tax + v_vat + (trans * qty) + v_mgmt
         prof = t_sell - (t_buy + ops) + v_pay
         
         final.at[i, "total_price_vnd"] = fmt_num(t_sell); final.at[i, "total_buying_price_vnd"] = fmt_num(t_buy)
