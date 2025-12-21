@@ -12,10 +12,10 @@ import numpy as np
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO
 # =============================================================================
-APP_VERSION = "V5500 - FULL FEATURE (FIXED IMAGES & TABS)"
+APP_VERSION = "V5500 - FINAL REQUEST"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
-# CSS GIAO DIỆN
+# CSS UI
 st.markdown("""
     <style>
     button[data-baseweb="tab"] div p { font-size: 18px !important; font-weight: 700 !important; }
@@ -24,12 +24,9 @@ st.markdown("""
     .bg-cost { background: linear-gradient(135deg, #ff5f6d, #ffc371); }
     .bg-profit { background: linear-gradient(135deg, #f83600, #f9d423); }
     [data-testid="stDataFrame"] > div { max-height: 750px; }
-    
-    /* Highlight Table */
-    .highlight-low { background-color: #ffcccc !important; color: red !important; font-weight: bold; }
     </style>""", unsafe_allow_html=True)
 
-# THƯ VIỆN
+# LIBRARIES
 try:
     from supabase import create_client, Client
     from google.oauth2.credentials import Credentials
@@ -38,10 +35,10 @@ try:
     from openpyxl import load_workbook
     from openpyxl.styles import Border, Side
 except ImportError:
-    st.error("⚠️ Thiếu thư viện. Cần: streamlit, pandas, supabase, google-api-python-client, google-auth-oauthlib, openpyxl")
+    st.error("⚠️ Thiếu thư viện requirements.txt: streamlit, pandas, supabase, google-api-python-client, google-auth-oauthlib, openpyxl")
     st.stop()
 
-# KẾT NỐI SERVER
+# CONNECT SERVER
 try:
     SUPABASE_URL = st.secrets["supabase"]["url"]
     SUPABASE_KEY = st.secrets["supabase"]["key"]
@@ -66,7 +63,7 @@ def get_drive_service():
 
 def upload_to_drive(file_obj, sub_folder, file_name):
     srv = get_drive_service()
-    if not srv: return ""
+    if not srv: return "", ""
     try:
         q_f = f"'{ROOT_FOLDER_ID}' in parents and name='{sub_folder}' and trashed=false"
         folders = srv.files().list(q=q_f, fields="files(id)").execute().get('files', [])
@@ -78,9 +75,9 @@ def upload_to_drive(file_obj, sub_folder, file_name):
         media = MediaIoBaseUpload(file_obj, mimetype=mimetypes.guess_type(file_name)[0] or 'application/octet-stream', resumable=True)
         file_meta = {'name': file_name, 'parents': [folder_id]}
         
-        # Check exists to overwrite on Drive (optional, but good for template)
-        q_exist = f"'{folder_id}' in parents and name='{file_name}' and trashed=false"
-        exists = srv.files().list(q=q_exist, fields="files(id)").execute().get('files', [])
+        # Check overwrite
+        q_ex = f"'{folder_id}' in parents and name='{file_name}' and trashed=false"
+        exists = srv.files().list(q=q_ex, fields="files(id)").execute().get('files', [])
         
         if exists:
             file_id = exists[0]['id']
@@ -92,7 +89,7 @@ def upload_to_drive(file_obj, sub_folder, file_name):
         except: pass
         
         return f"https://drive.google.com/thumbnail?id={file_id}&sz=w200", file_id
-    except Exception as e: return "", ""
+    except: return "", ""
 
 def download_from_drive(file_id):
     srv = get_drive_service()
@@ -102,8 +99,7 @@ def download_from_drive(file_id):
         fh = io.BytesIO()
         downloader = MediaIoBaseDownload(fh, request)
         done = False
-        while done is False:
-            status, done = downloader.next_chunk()
+        while done is False: status, done = downloader.next_chunk()
         return fh
     except: return None
 
@@ -125,15 +121,22 @@ def fmt_num(x): return "{:,.0f}".format(x) if x else "0"
 def clean_key(s): return re.sub(r'[^a-zA-Z0-9]', '', safe_str(s)).lower()
 def normalize_header(h): return re.sub(r'[^a-zA-Z0-9]', '', str(h).lower())
 
-def load_data(table):
+def load_data(table, order_by="id"):
     try:
-        res = supabase.table(table).select("*").execute()
+        # Nếu là purchases thì order theo row_order để giữ thứ tự Excel
+        query = supabase.table(table).select("*")
+        if table == "crm_purchases":
+            query = query.order("row_order", desc=False)
+        else:
+            query = query.order(order_by, desc=True)
+            
+        res = query.execute()
         df = pd.DataFrame(res.data)
         if not df.empty and 'id' in df.columns: df = df.drop(columns=['id'])
         return df
     except: return pd.DataFrame()
 
-# MAPPING CONFIG
+# MAPPING
 MAP_PURCHASE = {
     "item_code": ["Item code", "Mã hàng", "Code"], "item_name": ["Item name", "Tên hàng", "Name"],
     "specs": ["Specs", "Quy cách"], "qty": ["Q'ty", "Qty"],
@@ -141,7 +144,6 @@ MAP_PURCHASE = {
     "buying_price_vnd": ["Buying price (VND)", "Giá VND"], "leadtime": ["Leadtime"],
     "supplier_name": ["Supplier"], "image_path": ["image_path"], "type": ["Type"], "nuoc": ["NUOC"]
 }
-
 MAP_MASTER = {
     "short_name": ["Tên tắt", "Short Name"], "full_name": ["Tên đầy đủ", "Full Name"],
     "address": ["Địa chỉ", "Address"], "contact_person": ["Người liên hệ", "Contact"],
@@ -166,26 +168,28 @@ with t1:
     c2.markdown(f"<div class='card-3d bg-cost'><h3>CHI PHÍ NCC</h3><h1>{fmt_num(cost)}</h1></div>", unsafe_allow_html=True)
     c3.markdown(f"<div class='card-3d bg-profit'><h3>LỢI NHUẬN GỘP</h3><h1>{fmt_num(profit)}</h1></div>", unsafe_allow_html=True)
 
-# --- TAB 2: KHO HÀNG (CẢI TIẾN) ---
+# --- TAB 2: KHO HÀNG (YÊU CẦU 1) ---
 with t2:
     st.subheader("QUẢN LÝ KHO HÀNG")
     c_imp, c_view = st.columns([1, 2])
     
     with c_imp:
-        st.write("🛠️ **Admin Tools**")
-        admin_pass = st.text_input("Mật khẩu Admin", type="password")
-        if st.button("⚠️ RESET DATABASE KHO HÀNG"):
-            if admin_pass == "admin":
-                supabase.table("crm_purchases").delete().neq("id", 0).execute()
-                st.success("Đã xóa sạch kho hàng!"); time.sleep(1); st.rerun()
-            else: st.error("Sai mật khẩu!")
-            
-        st.divider()
-        st.write("📥 **Import / Ghi đè**")
-        up_file = st.file_uploader("Upload File (xlsx)", type=["xlsx"])
+        # NÚT RESET DATABASE (ADMIN)
+        with st.expander("🛠️ Admin Reset Database"):
+            adm_pass = st.text_input("Admin Password", type="password")
+            if st.button("⚠️ XÓA SẠCH KHO HÀNG"):
+                if adm_pass == "admin":
+                    supabase.table("crm_purchases").delete().neq("id", 0).execute()
+                    st.success("Đã xóa sạch!"); time.sleep(1); st.rerun()
+                else: st.error("Sai mật khẩu!")
         
-        if up_file and st.button("🚀 Import & Update"):
+        st.divider()
+        st.write("📥 **Import / Ghi đè (Update)**")
+        up_file = st.file_uploader("Upload File Excel", type=["xlsx"])
+        
+        if up_file and st.button("🚀 Import"):
             try:
+                # 1. Xử lý ảnh
                 wb = load_workbook(up_file, data_only=False); ws = wb.active
                 img_map = {}
                 for image in getattr(ws, '_images', []):
@@ -195,15 +199,16 @@ with t2:
                     link, _ = upload_to_drive(buf, "CRM_PRODUCT_IMAGES", fname)
                     img_map[row] = link
                 
+                # 2. Đọc Data
                 df = pd.read_excel(up_file, dtype=str).fillna("")
                 hn = {normalize_header(c): c for c in df.columns}
                 
                 records = []
-                codes_to_delete = [] # Danh sách mã để xóa (Ghi đè)
+                codes_to_del = [] # Danh sách mã để xóa cũ
                 
                 for i, r in df.iterrows():
                     d = {}
-                    # Mapping
+                    # Mapping cột
                     for db_col, list_ex in MAP_PURCHASE.items():
                         val = ""
                         for kw in list_ex:
@@ -215,38 +220,42 @@ with t2:
                     # Lấy ảnh
                     if not d.get('image_path'): d['image_path'] = img_map.get(i+2, "")
                     
-                    # Logic tính toán Total Buying Price
-                    qty = to_float(d.get('qty', 0))
-                    price_rmb = to_float(d.get('buying_price_rmb', 0))
-                    price_vnd = to_float(d.get('buying_price_vnd', 0))
+                    # Lưu thứ tự dòng (1, 2, 3...)
+                    d['row_order'] = i + 1
                     
-                    d['total_buying_price_rmb'] = fmt_num(price_rmb * qty)
-                    d['total_buying_price_vnd'] = fmt_num(price_vnd * qty)
+                    # TÍNH TOÁN NGAY KHI IMPORT (Requirements)
+                    qty = to_float(d.get('qty', 0))
+                    p_rmb = to_float(d.get('buying_price_rmb', 0))
+                    p_vnd = to_float(d.get('buying_price_vnd', 0))
+                    
+                    d['total_buying_price_rmb'] = p_rmb * qty
+                    d['total_buying_price_vnd'] = p_vnd * qty
                     
                     if d.get('item_code'):
                         records.append(d)
-                        codes_to_delete.append(d['item_code'])
+                        codes_to_del.append(d['item_code'])
                 
-                # THỰC HIỆN GHI ĐÈ (DELETE -> INSERT)
-                if codes_to_delete:
-                    # Chia nhỏ batch xóa để tránh lỗi URL quá dài
-                    chunk_del = 50
-                    for k in range(0, len(codes_to_delete), chunk_del):
-                        batch = codes_to_delete[k:k+chunk_del]
+                # LOGIC GHI ĐÈ: Xóa mã cũ -> Insert mã mới
+                if codes_to_del:
+                    # Chia batch xóa
+                    chunk = 50
+                    for k in range(0, len(codes_to_del), chunk):
+                        batch = codes_to_del[k:k+chunk]
                         supabase.table("crm_purchases").delete().in_("item_code", batch).execute()
                     
-                    # Insert
+                    # Insert mới (giữ row_order)
                     chunk_ins = 100
                     for k in range(0, len(records), chunk_ins):
                         supabase.table("crm_purchases").insert(records[k:k+chunk_ins]).execute()
                         
-                    st.success(f"Đã cập nhật {len(records)} items (Ghi đè trùng lặp)!")
+                    st.success(f"Đã cập nhật {len(records)} items (Ghi đè)!")
                     st.cache_data.clear(); time.sleep(1); st.rerun()
                     
             except Exception as e: st.error(f"Lỗi: {e}")
 
     with c_view:
-        df_pur = load_data("crm_purchases")
+        # Load theo thứ tự row_order (Giữ nguyên thứ tự Excel)
+        df_pur = load_data("crm_purchases", order_by="row_order")
         search = st.text_input("Tìm kiếm...", key="search_pur")
         if not df_pur.empty:
             if search:
@@ -254,16 +263,16 @@ with t2:
                 df_pur = df_pur[mask]
             st.dataframe(df_pur, column_config={"image_path": st.column_config.ImageColumn("Ảnh")}, use_container_width=True, height=600)
 
-# --- TAB 3: BÁO GIÁ (CẢI TIẾN) ---
+# --- TAB 3: BÁO GIÁ (YÊU CẦU 2) ---
 with t3:
     if 'quote_df' not in st.session_state: st.session_state.quote_df = pd.DataFrame()
     st.subheader("TÍNH TOÁN & LÀM BÁO GIÁ")
     
-    # 1. Thông tin báo giá
-    c_info1, c_info2, c_btn = st.columns([2, 2, 1])
-    cust_name = c_info1.text_input("Tên Khách Hàng", key="q_cust")
-    quote_no = c_info2.text_input("Số Báo Giá", key="q_no")
-    if c_btn.button("🔄 Reset"): st.session_state.quote_df = pd.DataFrame(); st.rerun()
+    # Input Khách hàng & Số BG
+    c1, c2, c3 = st.columns([2, 2, 1])
+    cust_name = c1.text_input("Tên Khách Hàng", key="q_cust")
+    quote_no = c2.text_input("Số Báo Giá", key="q_no")
+    if c3.button("🔄 Reset"): st.session_state.quote_df = pd.DataFrame(); st.rerun()
 
     # Tham số
     with st.expander("Cấu hình chi phí (%)", expanded=False):
@@ -275,10 +284,10 @@ with t3:
             st.session_state[f"pct_{k}"] = val
             params[k] = to_float(val)
 
-    # 2. Matching
-    c1, c2 = st.columns([1, 2])
-    rfq = c1.file_uploader("Upload RFQ (xlsx)", type=["xlsx"])
-    if rfq and c2.button("🔍 Matching Giá Vốn"):
+    # Matching RFQ
+    cf1, cf2 = st.columns([1, 2])
+    rfq = cf1.file_uploader("Upload RFQ (xlsx)", type=["xlsx"])
+    if rfq and cf2.button("🔍 Matching"):
         db = load_data("crm_purchases")
         if db.empty: st.error("Kho rỗng!")
         else:
@@ -288,25 +297,29 @@ with t3:
             hn = {normalize_header(c): c for c in df_rfq.columns}
             for i, r in df_rfq.iterrows():
                 code = safe_str(r.get(hn.get(normalize_header("itemcode")) or hn.get(normalize_header("mã"))))
-                qty = to_float(r.get(hn.get(normalize_header("qty"))))
+                qty = to_float(r.get(hn.get(normalize_header("qty")))) # Qty lấy từ RFQ
                 match = lookup.get(clean_key(code))
                 
-                # Logic lấy giá vốn
+                buy_rmb = to_float(match.get('buying_price_rmb')) if match else 0
                 buy_vnd = to_float(match.get('buying_price_vnd')) if match else 0
                 
                 item = {
                     "Item code": code, "Q'ty": fmt_num(qty),
+                    "Buying price (RMB)": fmt_num(buy_rmb),
+                    "Total buying price (RMB)": fmt_num(buy_rmb * qty), # Tính lại theo Qty RFQ
                     "Buying price (VND)": fmt_num(buy_vnd),
-                    "Total buying price (VND)": fmt_num(buy_vnd * qty),
+                    "Total buying price (VND)": fmt_num(buy_vnd * qty), # Tính lại theo Qty RFQ
                     "Supplier": match.get('supplier_name') if match else "",
                     "Image": match.get('image_path') if match else "",
-                    "AP price (VND)": "0", "AP total price": "0",
-                    "Unit price (VND)": "0", "Total price (VND)": "0", "Profit (%)": "0%"
+                    "Leadtime": match.get('leadtime') if match else "",
+                    "AP price (VND)": "0", "AP Total Price": "0",
+                    "Unit price (VND)": "0", "Total price (VND)": "0", 
+                    "Profit (VND)": "0", "Profit (%)": "0%"
                 }
                 res.append(item)
             st.session_state.quote_df = pd.DataFrame(res)
 
-    # 3. Tính toán & Review
+    # Calculation & Editor
     if not st.session_state.quote_df.empty:
         f1, f2 = st.columns(2)
         ap_f = f1.text_input("Formula AP (vd: =BUY*1.1)")
@@ -314,9 +327,8 @@ with t3:
         
         df = st.session_state.quote_df.copy()
         
-        # Biến đánh dấu có item nào lỗ không
-        low_profit_indices = []
-
+        # Loop tính toán
+        low_profit_idx = []
         for i, r in df.iterrows():
             buy = to_float(r["Buying price (VND)"]); qty = to_float(r["Q'ty"])
             ap = to_float(r.get("AP price (VND)", 0))
@@ -329,17 +341,17 @@ with t3:
                 unit = eval(unit_f[1:].replace("BUY", str(buy)).replace("AP", str(ap)))
                 df.at[i, "Unit price (VND)"] = fmt_num(unit)
             
-            # Recalculate Unit & Total if user edited manual
+            # Re-read values after formula
             unit = to_float(df.at[i, "Unit price (VND)"])
             ap = to_float(df.at[i, "AP price (VND)"])
             
-            # FIX: Tính toán Total Sell & AP Total
-            total_sell = unit * qty
+            # FIX: Tính toán Total
             ap_total = ap * qty
+            total_sell = unit * qty
+            df.at[i, "AP Total Price"] = fmt_num(ap_total)
             df.at[i, "Total price (VND)"] = fmt_num(total_sell)
-            df.at[i, "AP total price"] = fmt_num(ap_total)
             
-            # Profit Calc
+            # Profit
             total_buy = buy * qty
             gap = total_sell - ap_total
             cost_ops = (gap*0.6 if gap>0 else 0) + (ap_total * params['end']/100) + \
@@ -353,52 +365,42 @@ with t3:
             df.at[i, "Profit (VND)"] = fmt_num(profit)
             df.at[i, "Profit (%)"] = f"{pct:.1f}%"
             
-            if pct < 10: low_profit_indices.append(i)
+            if pct < 10: low_profit_idx.append(i)
 
         st.session_state.quote_df = df
         
-        # 4. Review & Highlight
-        st.write("🔎 **REVIEW BÁO GIÁ**")
-        
-        # Hàm tô màu
-        def highlight_row(row):
+        # Review & Highlight
+        st.write("🔎 **REVIEW (Highlight < 10%)**")
+        def highlight_low(row):
             try:
-                p = float(row["Profit (%)"].replace("%",""))
-                return ['background-color: #ffcccc; color: red'] * len(row) if p < 10 else [''] * len(row)
+                val = float(row["Profit (%)"].replace("%",""))
+                return ['background-color: #ffcccc; color: red'] * len(row) if val < 10 else [''] * len(row)
             except: return [''] * len(row)
 
         st.dataframe(
-            st.session_state.quote_df.style.apply(highlight_row, axis=1),
+            st.session_state.quote_df.style.apply(highlight_low, axis=1),
             column_config={"Image": st.column_config.ImageColumn("Ảnh")},
             use_container_width=True, height=500
         )
-        
-        if low_profit_indices:
-            st.error(f"⚠️ CẢNH BÁO: Có {len(low_profit_indices)} sản phẩm lợi nhuận dưới 10%!")
+        if low_profit_idx: st.error(f"⚠️ Có {len(low_profit_idx)} sản phẩm lợi nhuận < 10%")
 
-        # 5. Export Excel (Sử dụng Template)
-        c_save, c_exp = st.columns(2)
-        
-        with c_exp:
-            # Lấy danh sách template
+        # Export & Save
+        c_sv, c_ex = st.columns(2)
+        with c_ex:
+            # Chọn Template từ Master Data
             tmps = load_data("crm_templates")
-            tmp_opt = tmps['template_name'].tolist() if not tmps.empty else []
-            sel_tmp = st.selectbox("Chọn Template xuất file", tmp_opt)
+            t_list = tmps['template_name'].tolist() if not tmps.empty else []
+            sel_t = st.selectbox("Chọn Template Export", t_list)
             
-            if st.button("📤 Export Excel Báo Giá"):
-                if not sel_tmp: st.error("Chưa có Template! Vui lòng upload ở tab Master Data.")
+            if st.button("📤 Export Excel"):
+                if not sel_t: st.error("Chưa có Template (Vào Master Data để upload)")
                 else:
-                    # Lấy file ID từ DB
-                    fid = tmps[tmps['template_name'] == sel_tmp].iloc[0]['file_id']
+                    fid = tmps[tmps['template_name'] == sel_t].iloc[0]['file_id']
                     bio = download_from_drive(fid)
-                    
                     if bio:
                         try:
                             wb = load_workbook(bio); ws = wb.active
-                            # Logic điền file (Giả sử template bắt đầu từ dòng 10)
-                            start_row = 12
-                            
-                            # Điền thông tin chung
+                            # Fill data (Giả sử template bắt đầu row 12)
                             ws['B5'] = cust_name; ws['G5'] = quote_no
                             ws['G6'] = datetime.now().strftime("%d/%m/%Y")
                             
@@ -406,166 +408,116 @@ with t3:
                             border = Border(top=thin, left=thin, right=thin, bottom=thin)
                             
                             for idx, r in st.session_state.quote_df.iterrows():
-                                r_idx = start_row + idx
-                                ws.cell(row=r_idx, column=1, value=idx+1).border = border # No
-                                ws.cell(row=r_idx, column=2, value=r["Item code"]).border = border
-                                ws.cell(row=r_idx, column=3, value=r.get("Item name", "")).border = border
-                                ws.cell(row=r_idx, column=4, value=r.get("Specs", "")).border = border
-                                ws.cell(row=r_idx, column=5, value=to_float(r["Q'ty"])).border = border
-                                ws.cell(row=r_idx, column=6, value=to_float(r["Unit price (VND)"])).border = border
-                                ws.cell(row=r_idx, column=7, value=to_float(r["Total price (VND)"])).border = border
-                                ws.cell(row=r_idx, column=8, value=r.get("Leadtime","")).border = border
+                                ri = 12 + idx
+                                ws.cell(row=ri, column=1, value=idx+1).border = border
+                                ws.cell(row=ri, column=2, value=r["Item code"]).border = border
+                                ws.cell(row=ri, column=3, value=r.get("Item name")).border = border
+                                ws.cell(row=ri, column=4, value=r.get("Specs")).border = border
+                                ws.cell(row=ri, column=5, value=to_float(r["Q'ty"])).border = border
+                                ws.cell(row=ri, column=6, value=to_float(r["Unit price (VND)"])).border = border
+                                ws.cell(row=ri, column=7, value=to_float(r["Total price (VND)"])).border = border
+                                ws.cell(row=ri, column=8, value=r.get("Leadtime")).border = border
                             
-                            out = io.BytesIO()
-                            wb.save(out)
-                            st.download_button("⬇️ Tải file Excel", out.getvalue(), f"Quote_{quote_no}.xlsx")
-                        except Exception as e: st.error(f"Lỗi fill template: {e}")
-                    else: st.error("Không tải được file template từ Drive")
+                            out = io.BytesIO(); wb.save(out)
+                            st.download_button("⬇️ Tải File", out.getvalue(), f"Quote_{quote_no}.xlsx")
+                        except Exception as e: st.error(f"Lỗi Template: {e}")
 
-        with c_save:
-            if st.button("💾 Lưu vào Lịch sử"):
-                if not cust_name: st.error("Thiếu tên khách hàng!")
-                else:
+        with c_sv:
+            if st.button("💾 Lưu Lịch sử"):
+                if cust_name:
                     recs = []
                     for r in st.session_state.quote_df.to_dict('records'):
                         recs.append({
-                            "history_id": f"{cust_name}_{int(time.time())}", 
-                            "date": datetime.now().strftime("%Y-%m-%d"),
+                            "history_id": f"{cust_name}_{int(time.time())}", "date": datetime.now().strftime("%Y-%m-%d"),
                             "quote_no": quote_no, "customer": cust_name,
                             "item_code": r["Item code"], "qty": to_float(r["Q'ty"]),
                             "unit_price": to_float(r["Unit price (VND)"]),
                             "total_price_vnd": to_float(r["Total price (VND)"]),
                             "profit_vnd": to_float(r["Profit (VND)"])
                         })
-                    supabase.table("crm_shared_history").insert(recs).execute()
-                    st.success("Đã lưu!")
+                    supabase.table("crm_shared_history").insert(recs).execute(); st.success("Saved!")
+                else: st.error("Nhập tên KH!")
 
-# --- TAB 4: PO (LOGIC V4800) ---
+# --- TAB 4: PO & TRACKING (YÊU CẦU 4 - LOGIC V4800) ---
 with t4:
     c_ncc, c_kh = st.columns(2)
-    
-    # 1. PO NCC
+    # PO NCC
     with c_ncc:
         st.subheader("PO NHÀ CUNG CẤP")
         po_s_no = st.text_input("Số PO NCC"); 
         supps = load_data("crm_suppliers")
         s_name = st.selectbox("Chọn NCC", [""] + supps['short_name'].tolist() if not supps.empty else [])
-        
-        up_s = st.file_uploader("Upload PO NCC (xlsx)", key="ups")
+        up_s = st.file_uploader("Upload PO NCC", key="ups")
         if up_s:
             dfs = pd.read_excel(up_s, dtype=str).fillna("")
-            st.dataframe(dfs, height=200)
             if st.button("Lưu PO NCC"):
                 recs = []
                 for i, r in dfs.iterrows():
-                    recs.append({
-                        "po_number": po_s_no, "supplier": s_name, "order_date": datetime.now().strftime("%d/%m/%Y"),
-                        "item_code": safe_str(r.iloc[1]), "qty": to_float(r.iloc[4]), "total_vnd": to_float(r.iloc[6])
-                    })
+                    recs.append({"po_number": po_s_no, "supplier": s_name, "order_date": datetime.now().strftime("%d/%m/%Y"), "item_code": safe_str(r.iloc[1]), "qty": to_float(r.iloc[4]), "total_vnd": to_float(r.iloc[6])})
                 supabase.table("db_supplier_orders").insert(recs).execute()
-                supabase.table("crm_tracking").insert([{
-                    "po_no": po_s_no, "partner": s_name, "status": "Ordered", "order_type": "NCC", "last_update": datetime.now().strftime("%d/%m/%Y")
-                }]).execute()
-                st.success("Đã lưu PO NCC")
-
-    # 2. PO KHÁCH
+                supabase.table("crm_tracking").insert([{"po_no": po_s_no, "partner": s_name, "status": "Ordered", "order_type": "NCC", "last_update": datetime.now().strftime("%d/%m/%Y")}]).execute()
+                st.success("OK")
+    # PO KH
     with c_kh:
         st.subheader("PO KHÁCH HÀNG")
-        po_c_no = st.text_input("Số PO Khách")
+        po_c_no = st.text_input("Số PO Khách"); 
         custs = load_data("crm_customers")
         c_name = st.selectbox("Chọn Khách", [""] + custs['short_name'].tolist() if not custs.empty else [])
-        
-        up_c = st.file_uploader("Upload PO Khách (xlsx)", key="upc")
+        up_c = st.file_uploader("Upload PO KH", key="upc")
         if up_c:
             dfc = pd.read_excel(up_c, dtype=str).fillna("")
-            st.dataframe(dfc, height=200)
-            if st.button("Lưu PO Khách"):
+            if st.button("Lưu PO KH"):
                 recs = []
                 for i, r in dfc.iterrows():
-                    recs.append({
-                        "po_number": po_c_no, "customer": c_name, "order_date": datetime.now().strftime("%d/%m/%Y"),
-                        "item_code": safe_str(r.iloc[1]), "qty": to_float(r.iloc[4]), "total_price": to_float(r.iloc[6])
-                    })
+                    recs.append({"po_number": po_c_no, "customer": c_name, "order_date": datetime.now().strftime("%d/%m/%Y"), "item_code": safe_str(r.iloc[1]), "qty": to_float(r.iloc[4]), "total_price": to_float(r.iloc[6])})
                 supabase.table("db_customer_orders").insert(recs).execute()
-                supabase.table("crm_tracking").insert([{
-                    "po_no": po_c_no, "partner": c_name, "status": "Waiting", "order_type": "KH", "last_update": datetime.now().strftime("%d/%m/%Y")
-                }]).execute()
-                st.success("Đã lưu PO Khách")
+                supabase.table("crm_tracking").insert([{"po_no": po_c_no, "partner": c_name, "status": "Waiting", "order_type": "KH", "last_update": datetime.now().strftime("%d/%m/%Y")}]).execute()
+                st.success("OK")
 
-# --- TAB 5: TRACKING (LOGIC V4800) ---
+# --- TAB 5: TRACKING ---
 with t5:
-    st.subheader("THEO DÕI ĐƠN HÀNG")
+    st.subheader("TRACKING")
     df_track = load_data("crm_tracking")
-    
     if not df_track.empty:
-        # Upload ảnh proof
-        c_p1, c_p2 = st.columns(2)
-        po_sel = c_p1.selectbox("Chọn PO để up ảnh", df_track['po_no'].unique())
-        img_p = c_p2.file_uploader("Upload ảnh Proof", type=['png','jpg'])
-        
-        if c_p2.button("Update Ảnh Proof"):
-            if img_p:
-                link, _ = upload_to_drive(img_p, "CRM_PROOF", f"PRF_{po_sel}.png")
-                supabase.table("crm_tracking").update({"proof_image": link}).eq("po_no", po_sel).execute()
-                st.success("Đã up ảnh")
-        
-        # Editor Status
-        edited_track = st.data_editor(
-            df_track, 
-            column_config={
-                "status": st.column_config.SelectboxColumn("Trạng thái", options=["Ordered", "Waiting", "Delivered", "Paid"]),
-                "proof_image": st.column_config.ImageColumn("Bằng chứng")
-            },
-            use_container_width=True,
-            key="track_edit"
-        )
-        # Lưu thay đổi status (Demo đơn giản: update dòng đầu tiên thay đổi)
-        if st.button("Lưu thay đổi Tracking"):
-             st.info("Chức năng đang cập nhật logic bulk update...")
-
-# --- TAB 6: MASTER DATA (3 PHẦN) ---
-with t6:
-    tab_c, tab_s, tab_t = st.tabs(["KHÁCH HÀNG", "NHÀ CUNG CẤP", "TEMPLATE BÁO GIÁ"])
-    
-    # 1. KHÁCH HÀNG
-    with tab_c:
-        df_k = load_data("crm_customers")
-        st.data_editor(df_k, use_container_width=True, num_rows="dynamic")
-        
-        up_k = st.file_uploader("Import List KH", key="uk")
-        if up_k and st.button("Import KH"):
-            df = pd.read_excel(up_k, dtype=str).fillna("")
-            insert_data_bulk("crm_customers", df, MAP_MASTER)
-            st.rerun()
-
-    # 2. NCC
-    with tab_s:
-        df_s = load_data("crm_suppliers")
-        st.data_editor(df_s, use_container_width=True, num_rows="dynamic")
-        
-        up_s = st.file_uploader("Import List NCC", key="us")
-        if up_s and st.button("Import NCC"):
-            df = pd.read_excel(up_s, dtype=str).fillna("")
-            insert_data_bulk("crm_suppliers", df, MAP_MASTER)
-            st.rerun()
+        c1, c2 = st.columns(2)
+        po = c1.selectbox("Chọn PO", df_track['po_no'].unique())
+        img = c2.file_uploader("Proof Image", type=['png','jpg'])
+        if c2.button("Update Proof"):
+            lnk, _ = upload_to_drive(img, "CRM_PROOF", f"PRF_{po}.png")
+            supabase.table("crm_tracking").update({"proof_image": lnk}).eq("po_no", po).execute(); st.success("OK")
             
-    # 3. TEMPLATE
-    with tab_t:
-        st.write("Quản lý File Template Excel dùng để xuất báo giá")
-        up_tmp = st.file_uploader("Upload Template Mới (.xlsx)", type=["xlsx"])
-        tmp_name = st.text_input("Đặt tên Template (vd: Template Chuẩn 2025)")
-        
-        if up_tmp and tmp_name and st.button("Lưu Template"):
-            # Upload lên Drive
-            link, file_id = upload_to_drive(up_tmp, "CRM_TEMPLATES", f"TMP_{tmp_name}.xlsx")
-            if file_id:
-                # Lưu thông tin vào DB
-                supabase.table("crm_templates").insert([{
-                    "template_name": tmp_name,
-                    "file_id": file_id,
-                    "last_updated": datetime.now().strftime("%d/%m/%Y")
-                }]).execute()
-                st.success("Đã lưu Template!")
-                st.rerun()
-        
+        st.data_editor(df_track, column_config={"proof_image": st.column_config.ImageColumn("Proof"), "status": st.column_config.SelectboxColumn("Status", options=["Ordered", "Waiting", "Delivered"])}, key="ed_tr")
+
+# --- TAB 6: MASTER DATA (YÊU CẦU 3) ---
+with t6:
+    tc, ts, tt = st.tabs(["KHÁCH HÀNG", "NHÀ CUNG CẤP", "TEMPLATE"])
+    # CUSTOMER
+    with tc:
+        df = load_data("crm_customers"); st.data_editor(df, num_rows="dynamic", use_container_width=True)
+        up = st.file_uploader("Import List KH", key="uck")
+        if up and st.button("Import KH"):
+            d = pd.read_excel(up, dtype=str).fillna("")
+            # Mapping manual
+            recs = []
+            for i,r in d.iterrows(): recs.append({"short_name": safe_str(r.iloc[0]), "full_name": safe_str(r.iloc[1]), "address": safe_str(r.iloc[2])})
+            supabase.table("crm_customers").insert(recs).execute(); st.rerun()
+            
+    # SUPPLIER
+    with ts:
+        df = load_data("crm_suppliers"); st.data_editor(df, num_rows="dynamic", use_container_width=True)
+        up = st.file_uploader("Import List NCC", key="usn")
+        if up and st.button("Import NCC"):
+            d = pd.read_excel(up, dtype=str).fillna("")
+            recs = []
+            for i,r in d.iterrows(): recs.append({"short_name": safe_str(r.iloc[0]), "full_name": safe_str(r.iloc[1]), "address": safe_str(r.iloc[2])})
+            supabase.table("crm_suppliers").insert(recs).execute(); st.rerun()
+            
+    # TEMPLATE
+    with tt:
+        st.write("Upload Template Excel cho chức năng Export Báo giá")
+        up_t = st.file_uploader("File Template (.xlsx)", type=["xlsx"])
+        t_name = st.text_input("Tên Template")
+        if up_t and t_name and st.button("Lưu Template"):
+            lnk, fid = upload_to_drive(up_t, "CRM_TEMPLATES", f"TMP_{t_name}.xlsx")
+            if fid: supabase.table("crm_templates").insert([{"template_name": t_name, "file_id": fid, "last_updated": datetime.now().strftime("%d/%m/%Y")}]).execute(); st.success("OK"); st.rerun()
         st.dataframe(load_data("crm_templates"))
