@@ -17,6 +17,7 @@ try:
     from google.oauth2.credentials import Credentials
     from googleapiclient.discovery import build
     from googleapiclient.http import MediaIoBaseUpload
+    from openpyxl.styles import Border, Side, Alignment, Font # Thêm thư viện style
 except ImportError:
     st.error("⚠️ Cài đặt: pip install pandas openpyxl supabase google-api-python-client google-auth-oauthlib numpy")
     st.stop()
@@ -24,7 +25,7 @@ except ImportError:
 # =============================================================================
 # CẤU HÌNH & VERSION
 # =============================================================================
-APP_VERSION = "V4848 - FULL FEATURES + TEMPLATE EXPORT + PROFIT ALERT"
+APP_VERSION = "V4849 - FINAL STABLE (FIX INIT ERROR)"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="📈")
 
 # --- CSS ---
@@ -255,13 +256,11 @@ def run_simple_matching(rfq_file, db_df):
             "Exchange rate": fmt_num(rate),
             "Buying price (VND)": fmt_num(rmb * rate),
             "Total buying price (VND)": fmt_num(rmb * qty_val * rate),
-            
             "AP price (VND)": "0", "AP total price (VND)": "0",
             "Unit price (VND)": "0", "Total price (VND)": "0",
             "GAP": "0", "End user": "0", "Buyer": "0", "Import tax": "0", "VAT": "0",
             "Transportation": "0", "Management fee": "0", "Payback": "0",
             "Profit (VND)": "0", "Profit (%)": "0%",
-            
             "Leadtime": info['lead'], "Supplier": info['supp'], "Images": info['img'],
             "Type": info['type'], "N/U/O/C": info['nuoc']
         }
@@ -269,20 +268,29 @@ def run_simple_matching(rfq_file, db_df):
         
     return pd.DataFrame(results)
 
-# --- INIT STATE ---
+# --- INIT STATE (ROBUST) ---
+# Kiểm tra từng key để đảm bảo không lỗi Attribute khi update code
 if 'init' not in st.session_state:
     st.session_state.init = True
+
+if 'quote_result' not in st.session_state:
     st.session_state.quote_result = pd.DataFrame()
+
+if 'temp_supp' not in st.session_state:
     st.session_state.temp_supp = pd.DataFrame(columns=["item_code", "item_name", "specs", "qty", "price_rmb", "total_rmb", "supplier"])
+
+if 'temp_cust' not in st.session_state:
     st.session_state.temp_cust = pd.DataFrame(columns=["item_code", "item_name", "specs", "qty", "unit_price", "total_price", "customer"])
-    # Biến lưu template
+
+# KHỞI TẠO BIẾN TEMPLATE (FIX LỖI)
+if 'quote_template' not in st.session_state:
     st.session_state.quote_template = None
 
 for k in ["end","buy","tax","vat","pay","mgmt","trans"]: 
     if f"pct_{k}" not in st.session_state: st.session_state[f"pct_{k}"] = "0"
 
 # --- UI ---
-st.title("HỆ THỐNG CRM QUẢN LÝ (V4848)")
+st.title("HỆ THỐNG CRM QUẢN LÝ (V4849)")
 is_admin = (st.sidebar.text_input("Admin Password", type="password") == "admin")
 
 t1, t2, t3, t4, t5, t6 = st.tabs(["DASHBOARD", "KHO HÀNG (PURCHASES)", "BÁO GIÁ (QUOTES)", "ĐƠN HÀNG (PO)", "TRACKING", "DỮ LIỆU NỀN"])
@@ -482,10 +490,7 @@ with t3:
             st.session_state.quote_result = df
             st.success("Đã tính toán xong!")
 
-        # --- HIỂN THỊ KẾT QUẢ VÀ CẢNH BÁO ---
-        st.subheader("BẢNG BÁO GIÁ")
-        
-        # Bảng chỉnh sửa
+        # --- BẢNG DỮ LIỆU ---
         edited_quote = st.data_editor(
             st.session_state.quote_result,
             column_config={
@@ -506,80 +511,52 @@ with t3:
         if not edited_quote.equals(st.session_state.quote_result):
             st.session_state.quote_result = edited_quote
 
-        # --- REVIEW & CẢNH BÁO LỢI NHUẬN ---
+        # --- CẢNH BÁO LỢI NHUẬN < 10% ---
         st.subheader("⚠️ REVIEW LỢI NHUẬN (<10%)")
         df_review = st.session_state.quote_result.copy()
+        df_low = df_review[df_review["Profit (%)"].apply(lambda x: to_float(str(x).replace('%','')) < 10)]
         
-        def highlight_low_profit(s):
-            try:
-                # Lấy số % (xóa ký tự %)
-                val = float(str(s).replace('%', ''))
-                return ['background-color: #ffcccc'] * len(s) if val < 10 else [''] * len(s)
-            except:
-                return [''] * len(s)
-
-        # Lọc các dòng có Profit % < 10% để hiển thị riêng
-        df_low_profit = df_review[df_review["Profit (%)"].apply(lambda x: to_float(str(x).replace('%','')) < 10)]
-        
-        if not df_low_profit.empty:
-            st.error(f"Cảnh báo: Có {len(df_low_profit)} mặt hàng lợi nhuận dưới 10%!")
-            st.dataframe(df_low_profit[QUOTE_DISPLAY_COLS], use_container_width=True)
+        if not df_low.empty:
+            st.error(f"Cảnh báo: Có {len(df_low)} mặt hàng lợi nhuận dưới 10%!")
+            st.dataframe(df_low[QUOTE_DISPLAY_COLS], use_container_width=True)
         else:
-            st.success("Tuyệt vời! Tất cả mặt hàng đều có lợi nhuận > 10%.")
+            st.success("Tất cả mặt hàng đều đạt lợi nhuận > 10%.")
 
-        # --- EXPORT EXCEL ---
+        # --- XUẤT EXCEL THEO TEMPLATE ---
         st.write("---")
-        st.subheader("XUẤT BÁO GIÁ")
         col_ex1, col_ex2 = st.columns(2)
-        
         with col_ex1:
             csv = edited_quote.to_csv(index=False).encode('utf-8-sig')
-            st.download_button("📥 Tải CSV (Dữ liệu thô)", csv, "RFQ_Result.csv", "text/csv")
+            st.download_button("📥 Tải CSV (Thô)", csv, "RFQ_Result.csv", "text/csv")
         
         with col_ex2:
             if st.session_state.quote_template:
-                # Logic xuất Excel theo Template
                 if st.button("📤 Export Excel (Theo Template)"):
                     try:
                         output = io.BytesIO()
-                        # Load template từ session state
                         wb = load_workbook(io.BytesIO(st.session_state.quote_template.getvalue()))
                         ws = wb.active
+                        start_row = 15 # Dòng bắt đầu điền (tùy chỉnh)
                         
-                        # Điền dữ liệu bắt đầu từ dòng 15 (Giả định, có thể chỉnh)
-                        start_row = 15 
-                        
-                        # Style cho dữ liệu
-                        from openpyxl.styles import Border, Side, Alignment, Font
                         thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
                         
                         for i, r in edited_quote.iterrows():
-                            # Điền các cột A->O (tương ứng 1->15)
-                            # Cột 1: No
+                            # Map cột vào Excel (Ví dụ)
                             ws.cell(row=start_row+i, column=1, value=r.get("No"))
-                            # Cột 2: Item Code
                             ws.cell(row=start_row+i, column=2, value=r.get("Item code"))
-                            # Cột 3: Name
                             ws.cell(row=start_row+i, column=3, value=r.get("Item name"))
-                            # Cột 4: Specs
                             ws.cell(row=start_row+i, column=4, value=r.get("Specs"))
-                            # Cột 5: Qty
                             ws.cell(row=start_row+i, column=5, value=to_float(r.get("Q'ty")))
-                            # Cột 6-15... Điền tiếp tùy theo template của bạn
-                            # Ví dụ: Unit Price (VND) vào cột 10
                             ws.cell(row=start_row+i, column=10, value=to_float(r.get("Unit price (VND)")))
-                            # Total Price vào cột 11
                             ws.cell(row=start_row+i, column=11, value=to_float(r.get("Total price (VND)")))
                             
-                            # Kẻ bảng
-                            for c in range(1, 16):
-                                ws.cell(row=start_row+i, column=c).border = thin_border
+                            for c in range(1, 15): ws.cell(row=start_row+i, column=c).border = thin_border
 
                         wb.save(output)
-                        st.download_button("📥 Tải file Excel Báo Giá", output.getvalue(), "Bao_Gia_Khach_Hang.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                        st.download_button("📥 Tải File Báo Giá", output.getvalue(), "Bao_Gia.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
                     except Exception as e: st.error(f"Lỗi xuất Excel: {e}")
             else:
-                st.warning("Chưa có Template. Vui lòng vào Tab 6 (Dữ liệu nền) để upload Template Báo Giá.")
+                st.warning("Chưa có Template (Upload tại Tab 6).")
 
         if st.button("💾 Lưu vào Lịch sử"):
             to_save = edited_quote.copy()
