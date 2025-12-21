@@ -23,10 +23,10 @@ except ImportError:
 # =============================================================================
 # CẤU HÌNH & VERSION
 # =============================================================================
-APP_VERSION = "V4829 - AUTO CALC & LINKED DATA (FINAL)"
-st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="🧮")
+APP_VERSION = "V4830 - FIXED AMBIGUOUS ERROR & AUTO CALC"
+st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="✅")
 
-# --- CSS GIAO DIỆN ---
+# --- CSS ---
 st.markdown("""
     <style>
     button[data-baseweb="tab"] div p { font-size: 20px !important; font-weight: 700 !important; }
@@ -80,23 +80,34 @@ def upload_to_drive(file_obj, sub_folder, file_name):
             srv.files().update(fileId=file_id, media_body=media, fields='id').execute()
         else:
             file_id = srv.files().create(body={'name': file_name, 'parents': [folder_id]}, media_body=media, fields='id').execute()['id']
-            
+        
         try: srv.permissions().create(fileId=file_id, body={'role': 'reader', 'type': 'anyone'}).execute()
         except: pass
         
-        # Link Thumbnail xem trực tiếp
+        # FIX ẢNH: Link Thumbnail
         return f"https://drive.google.com/thumbnail?id={file_id}&sz=w200"
     except: return ""
 
-# --- DATA HELPERS ---
-def safe_str(val): return str(val).strip() if val is not None and str(val).lower() not in ['nan', 'none', 'null', 'nat', ''] else ""
+# --- DATA HELPERS (FIXED AMBIGUOUS ERROR) ---
+def safe_str(val): 
+    if val is None: return ""
+    s = str(val).strip()
+    if s.lower() in ['nan', 'none', 'null', 'nat', '']: return ""
+    return s
+
 def safe_filename(s): return re.sub(r'[^\w\-_]', '_', unicodedata.normalize('NFKD', safe_str(s)).encode('ascii', 'ignore').decode('utf-8')).strip('_')
+
 def to_float(val):
-    if not val: return 0.0
+    if val is None: return 0.0
     s = str(val).replace(",", "").replace("¥", "").replace("$", "").replace("RMB", "").replace("VND", "").replace(" ", "").replace("\n","")
-    try: return max([float(n) for n in re.findall(r"[-+]?\d*\.\d+|\d+", s)])
+    if not s: return 0.0 # Check string rỗng an toàn
+    try: 
+        nums = re.findall(r"[-+]?\d*\.\d+|\d+", s)
+        if not nums: return 0.0
+        return max([float(n) for n in nums])
     except: return 0.0
-def fmt_num(x): return "{:,.0f}".format(float(x)) if x else "0"
+
+def fmt_num(x): return "{:,.0f}".format(float(x)) if x is not None else "0"
 def clean_lookup_key(s): return re.sub(r'[^a-zA-Z0-9]', '', str(s)).lower()
 def parse_formula(formula, buying, ap):
     s = str(formula).strip().upper().replace(",", "")
@@ -122,7 +133,7 @@ MAP_MASTER = {
     "destination": "destination", "paymentterm": "payment_term"
 }
 
-# --- DATABASE HANDLERS ---
+# --- DB HANDLERS ---
 @st.cache_data(ttl=5) 
 def load_data(table):
     try:
@@ -138,6 +149,9 @@ def load_data(table):
     except: return pd.DataFrame()
 
 def save_data_overwrite(table, df, match_col):
+    """
+    Xóa dòng cũ có cùng mã -> Thêm dòng mới (Safe & Clean)
+    """
     if df.empty: return
     try:
         VALID_COLS = {
@@ -162,13 +176,11 @@ def save_data_overwrite(table, df, match_col):
                 clean_recs.append(clean)
                 if match_col in clean: codes_to_del.append(clean[match_col])
         
-        # 1. DELETE
         if codes_to_del:
             chunk_size = 500
             for i in range(0, len(codes_to_del), chunk_size):
                 supabase.table(table).delete().in_(match_col, codes_to_del[i:i+chunk_size]).execute()
         
-        # 2. INSERT
         if clean_recs:
             chunk_size = 500
             for i in range(0, len(clean_recs), chunk_size):
@@ -186,7 +198,7 @@ if 'init' not in st.session_state:
     for k in ["end","buy","tax","vat","pay","mgmt","trans"]: st.session_state[f"pct_{k}"] = "0"
 
 # --- UI ---
-st.title("HỆ THỐNG CRM QUẢN LÝ (V4829)")
+st.title("HỆ THỐNG CRM QUẢN LÝ (V4830)")
 is_admin = (st.sidebar.text_input("Admin Password", type="password") == "admin")
 
 t1, t2, t3, t4, t5, t6 = st.tabs(["DASHBOARD", "KHO HÀNG (PURCHASES)", "BÁO GIÁ (QUOTES)", "ĐƠN HÀNG (PO)", "TRACKING", "DỮ LIỆU NỀN"])
@@ -251,7 +263,7 @@ with t2:
                 
                 for i, r in df.iterrows():
                     d = {}
-                    # 1. Map dữ liệu thô
+                    # 1. Map dữ liệu
                     for nk, db in MAP_PURCHASE.items():
                         if nk in hn: d[db] = safe_str(r[hn[nk]])
                     
@@ -271,20 +283,17 @@ with t2:
                     d['_clean_name'] = clean_lookup_key(d.get('item_name'))
                     d['_clean_specs'] = clean_lookup_key(d.get('specs'))
                     
-                    # 3. TỰ ĐỘNG TÍNH TOÁN (AUTO CALC LOGIC)
-                    qty = to_float(d.get('qty', 0))
-                    price_rmb = to_float(d.get('buying_price_rmb', 0))
-                    rate = to_float(d.get('exchange_rate', 0))
+                    # 3. TỰ ĐỘNG TÍNH TOÁN (FIXED LOGIC)
+                    qty = to_float(d.get('qty'))
+                    price_rmb = to_float(d.get('buying_price_rmb'))
+                    rate = to_float(d.get('exchange_rate'))
                     
-                    # Mặc định tỷ giá nếu thiếu
                     if rate == 0: rate = 4000 
                     
-                    # Tính toán lại
                     total_rmb = qty * price_rmb
                     price_vnd = price_rmb * rate
                     total_vnd = total_rmb * rate
                     
-                    # Cập nhật ngược lại vào dict
                     d['qty'] = fmt_num(qty)
                     d['buying_price_rmb'] = fmt_num(price_rmb)
                     d['total_buying_price_rmb'] = fmt_num(total_rmb)
@@ -295,7 +304,6 @@ with t2:
                     rows.append(d)
                     bar.progress((i+1)/len(df))
                 
-                # Lưu (Ghi đè)
                 save_data_overwrite("crm_purchases", pd.DataFrame(rows), match_col='item_code')
                 st.success(f"✅ Đã import và tính toán lại {len(rows)} mã hàng!"); time.sleep(1); st.rerun()
             except Exception as e: st.error(f"Lỗi Import: {e}")
