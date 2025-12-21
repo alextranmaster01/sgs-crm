@@ -25,7 +25,7 @@ except ImportError:
 # =============================================================================
 # CẤU HÌNH & VERSION
 # =============================================================================
-APP_VERSION = "V4857 - PERFECT HYBRID (LEGACY PO + SMART QUOTE)"
+APP_VERSION = "V4858 - FINAL COMPLETE (UI FIX + TRACKING RESTORED)"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="🏢")
 
 # --- CSS ---
@@ -38,6 +38,7 @@ st.markdown("""
     .bg-profit { background: linear-gradient(135deg, #f83600, #f9d423); }
     .bg-ncc { background: linear-gradient(135deg, #667eea, #764ba2); }
     
+    /* Fix bảng không bị chồng chéo */
     [data-testid="stDataFrame"] { margin-bottom: 20px; }
     [data-testid="stDataFrame"] > div { height: auto !important; min_height: 150px; max_height: 600px; overflow-y: auto; }
     [data-testid="stDataFrame"] table thead th:first-child { display: none; }
@@ -218,7 +219,7 @@ def save_data_overwrite(table, df, match_col):
         st.cache_data.clear()
     except Exception as e: st.error(f"❌ Lưu Lỗi: {e}")
 
-# --- LOGIC MATCHING THÔNG MINH (TAB 3) ---
+# --- LOGIC MATCHING THÔNG MINH ---
 def run_smart_matching(rfq_file, db_df):
     lookup_code = {}
     lookup_name = {}
@@ -274,11 +275,13 @@ def run_smart_matching(rfq_file, db_df):
             "Exchange rate": fmt_num(rate),
             "Buying price (VND)": fmt_num(rmb * rate),
             "Total buying price (VND)": fmt_num(rmb * qty_val * rate),
+            
             "AP price (VND)": "0", "AP total price (VND)": "0",
             "Unit price (VND)": "0", "Total price (VND)": "0",
             "GAP": "0", "End user": "0", "Buyer": "0", "Import tax": "0", "VAT": "0",
             "Transportation": "0", "Management fee": "0", "Payback": "0",
             "Profit (VND)": "0", "Profit (%)": "0%",
+            
             "Leadtime": info['lead'], "Supplier": info['supp'], "Images": info['img'],
             "Type": info['type'], "N/U/O/C": info['nuoc']
         }
@@ -306,7 +309,7 @@ for k in ["end","buy","tax","vat","pay","mgmt","trans"]:
     if f"pct_{k}" not in st.session_state: st.session_state[f"pct_{k}"] = "0"
 
 # --- UI ---
-st.title("HỆ THỐNG CRM QUẢN LÝ (V4857)")
+st.title("HỆ THỐNG CRM QUẢN LÝ (V4858)")
 is_admin = (st.sidebar.text_input("Admin Password", type="password") == "admin")
 
 t1, t2, t3, t4, t5, t6 = st.tabs(["DASHBOARD", "KHO HÀNG (PURCHASES)", "BÁO GIÁ (QUOTES)", "ĐƠN HÀNG (PO)", "TRACKING", "DỮ LIỆU NỀN"])
@@ -339,8 +342,6 @@ with t2:
             try:
                 # DÙNG LOGIC CŨ (HARDCODE ILOC) NHƯNG VẪN CLEAN HEADER
                 df = pd.read_excel(up_file, header=0, dtype=str).fillna("")
-                
-                # Fix duplicate columns
                 df = df.loc[:, ~df.columns.duplicated()]
                 
                 img_map = {}
@@ -620,7 +621,6 @@ with t4:
             recs = []
             for i, r in df.iterrows():
                 try:
-                    # Lấy trực tiếp theo cột, bỏ qua header phức tạp
                     recs.append({
                         "item_code": safe_str(r.iloc[1]), 
                         "item_name": safe_str(r.iloc[2]), 
@@ -688,6 +688,8 @@ with t5:
                 urls = [upload_to_drive(f, "CRM_PROOF_IMAGES", f"PRF_{pk}_{f.name}") for f in prf]
                 if urls: supabase.table("crm_tracking").update({"proof_image": urls[0]}).eq("po_no", pk).execute()
                 st.success("Uploaded")
+        else:
+            st.info("Chưa có dữ liệu Tracking. Hãy tạo PO ở Tab 4 trước.")
 
     with c2:
         st.subheader("Payment")
@@ -696,6 +698,8 @@ with t5:
             if st.button("Update Payment"):
                 save_data_overwrite("crm_payment", ed_p, "po_no")
                 st.success("Updated")
+        else:
+            st.info("Chưa có dữ liệu Payment. (Sẽ có khi Tracking = Delivered)")
 
 # --- TAB 6: MASTER DATA ---
 with t6:
