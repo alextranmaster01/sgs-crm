@@ -25,7 +25,7 @@ except ImportError:
 # =============================================================================
 # CẤU HÌNH & VERSION
 # =============================================================================
-APP_VERSION = "V4854 - FINAL FIX (PO IMPORT ALL ITEMS)"
+APP_VERSION = "V4855 - FINAL FIX (SMART EXCEL IMPORT)"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="🏢")
 
 # --- CSS ---
@@ -38,7 +38,6 @@ st.markdown("""
     .bg-profit { background: linear-gradient(135deg, #f83600, #f9d423); }
     .bg-ncc { background: linear-gradient(135deg, #667eea, #764ba2); }
     
-    [data-testid="stDataFrame"] { margin-bottom: 20px; }
     [data-testid="stDataFrame"] > div { height: auto !important; min_height: 150px; max_height: 600px; overflow-y: auto; }
     [data-testid="stDataFrame"] table thead th:first-child { display: none; }
     [data-testid="stDataFrame"] table tbody td:first-child { display: none; }
@@ -218,7 +217,43 @@ def save_data_overwrite(table, df, match_col):
         st.cache_data.clear()
     except Exception as e: st.error(f"❌ Lưu Lỗi: {e}")
 
-# --- LOGIC MATCHING THÔNG MINH ---
+# --- SMART EXCEL IMPORT (LÕI XỬ LÝ MỚI) ---
+def smart_read_excel(file_obj):
+    """
+    Đọc file Excel thông minh:
+    1. Quét 10 dòng đầu để tìm dòng tiêu đề thật sự (chứa 'Item code' hoặc 'Specs' hoặc 'Q'ty').
+    2. Đọc dữ liệu từ dòng đó trở xuống.
+    3. Đảm bảo không bị mất dòng nào.
+    """
+    try:
+        # Đọc thử 10 dòng đầu
+        preview = pd.read_excel(file_obj, header=None, nrows=10, dtype=str).fillna("")
+        header_row = 0
+        
+        # Tìm dòng chứa từ khóa tiêu đề
+        for i, row in preview.iterrows():
+            row_str = " ".join([str(x).lower() for x in row.values])
+            if "item code" in row_str or "specs" in row_str or "q'ty" in row_str or "qty" in row_str:
+                header_row = i
+                break
+        
+        # Đọc lại file với header chính xác
+        file_obj.seek(0)
+        df = pd.read_excel(file_obj, header=header_row, dtype=str).fillna("")
+        
+        # Xóa các cột trùng lặp
+        df = df.loc[:, ~df.columns.duplicated()]
+        
+        # Xóa các dòng trống hoàn toàn
+        df = df.dropna(how='all')
+        
+        return df
+    except:
+        # Fallback: Đọc bình thường nếu lỗi
+        file_obj.seek(0)
+        return pd.read_excel(file_obj, header=0, dtype=str).fillna("")
+
+# --- LOGIC MATCHING ---
 def run_smart_matching(rfq_file, db_df):
     lookup_code = {}
     lookup_name = {}
@@ -242,18 +277,21 @@ def run_smart_matching(rfq_file, db_df):
         if n_key: lookup_name[n_key] = data
         if s_key: lookup_specs[s_key] = data
 
-    df_rfq = pd.read_excel(rfq_file, header=0, dtype=str).fillna("")
-    df_rfq = df_rfq.loc[:, ~df_rfq.columns.duplicated()]
+    # SỬ DỤNG SMART READ
+    df_rfq = smart_read_excel(rfq_file)
     rfq_map = {normalize_header(c): c for c in df_rfq.columns}
     
     results = []
     
     for _, r in df_rfq.iterrows():
+        # Lấy dữ liệu an toàn
         no = safe_str(r.get(rfq_map.get('no')))
         code = safe_str(r.get(rfq_map.get('itemcode')))
         name = safe_str(r.get(rfq_map.get('itemname')))
         specs = safe_str(r.get(rfq_map.get('specs')))
-        qty_key = rfq_map.get('qty') or rfq_map.get('qty') or rfq_map.get('quantity')
+        
+        # Tìm cột Qty
+        qty_key = rfq_map.get('qty') or rfq_map.get('quantity') or rfq_map.get('q ty')
         qty_val = to_float(r.get(qty_key))
 
         info = None
@@ -306,7 +344,7 @@ for k in ["end","buy","tax","vat","pay","mgmt","trans"]:
     if f"pct_{k}" not in st.session_state: st.session_state[f"pct_{k}"] = "0"
 
 # --- UI ---
-st.title("HỆ THỐNG CRM QUẢN LÝ (V4854)")
+st.title("HỆ THỐNG CRM QUẢN LÝ (V4855)")
 is_admin = (st.sidebar.text_input("Admin Password", type="password") == "admin")
 
 t1, t2, t3, t4, t5, t6 = st.tabs(["DASHBOARD", "KHO HÀNG (PURCHASES)", "BÁO GIÁ (QUOTES)", "ĐƠN HÀNG (PO)", "TRACKING", "DỮ LIỆU NỀN"])
@@ -337,8 +375,8 @@ with t2:
         up_file = st.file_uploader("Chọn file Excel", type=["xlsx"], key="up_pur")
         if up_file and st.button("🚀 IMPORT & TÍNH TOÁN"):
             try:
-                df = pd.read_excel(up_file, header=0, dtype=str).fillna("")
-                df = df.loc[:, ~df.columns.duplicated()]
+                # SỬ DỤNG SMART IMPORT
+                df = smart_read_excel(up_file)
                 
                 img_map = {}
                 try:
@@ -612,10 +650,48 @@ with t4:
         po_s = st.text_input("PO NCC No")
         up_s = st.file_uploader("Upload PO NCC", type=["xlsx"], key="up_po_s")
         if up_s:
-            df = pd.read_excel(up_s, dtype=str).fillna("")
+            # SỬ DỤNG SMART IMPORT CHO PO
+            df = smart_read_excel(up_s)
+            
+            # Map cột PO
+            # Giả sử file PO NCC có cấu trúc tương tự Purchase hoặc RFQ
+            # Cần map các cột: Item Code, Name, Qty, Price
+            # Ta dùng logic tìm kiếm tiêu đề tương tự
+            
             recs = []
+            # Map header
+            hn = {normalize_header(c): c for c in df.columns}
+            
+            # Tìm tên cột
+            col_code = hn.get('itemcode') or hn.get('code') or hn.get('partno')
+            col_name = hn.get('itemname') or hn.get('name') or hn.get('description')
+            col_qty = hn.get('qty') or hn.get('quantity')
+            col_price = hn.get('buyingpricermb') or hn.get('price') or hn.get('unitprice')
+            
+            # Fallback nếu không tìm thấy tên cột, dùng iloc như cũ nhưng an toàn hơn vì đã smart_read
+            use_iloc = False
+            if not col_code: use_iloc = True
+
             for i, r in df.iterrows():
-                recs.append({"item_code": safe_str(r.iloc[1]), "item_name": safe_str(r.iloc[2]), "qty": fmt_num(to_float(r.iloc[4])), "price_rmb": fmt_num(to_float(r.iloc[5]))})
+                if use_iloc:
+                    # Fallback iloc logic (như cũ nhưng an toàn hơn vì df đã clean header)
+                    try:
+                        recs.append({
+                            "item_code": safe_str(r.iloc[1]), 
+                            "item_name": safe_str(r.iloc[2]), 
+                            "qty": fmt_num(to_float(r.iloc[4])), 
+                            "price_rmb": fmt_num(to_float(r.iloc[5]))
+                        })
+                    except: pass
+                else:
+                    # Logic dùng tên cột (Chính xác hơn)
+                    recs.append({
+                        "item_code": safe_str(r[col_code]) if col_code else "",
+                        "item_name": safe_str(r[col_name]) if col_name else "",
+                        "qty": fmt_num(to_float(r.get(col_qty))),
+                        "price_rmb": fmt_num(to_float(r.get(col_price)))
+                    })
+            
             st.session_state.temp_supp = pd.DataFrame(recs)
         
         ed_s = st.data_editor(st.session_state.temp_supp, num_rows="dynamic", use_container_width=True, key="editor_po_supp", hide_index=True)
@@ -632,10 +708,34 @@ with t4:
         po_c = st.text_input("PO Cust No")
         up_c = st.file_uploader("Upload PO Cust", type=["xlsx"], key="up_po_c")
         if up_c:
-            df = pd.read_excel(up_c, dtype=str).fillna("")
+            df = smart_read_excel(up_c)
+            # Tương tự cho PO Cust
             recs = []
+            hn = {normalize_header(c): c for c in df.columns}
+            col_code = hn.get('itemcode') or hn.get('code')
+            col_name = hn.get('itemname') or hn.get('name')
+            col_qty = hn.get('qty') or hn.get('quantity')
+            col_price = hn.get('unitprice') or hn.get('price')
+
+            use_iloc = False if col_code else True
+            
             for i, r in df.iterrows():
-                recs.append({"item_code": safe_str(r.iloc[1]), "item_name": safe_str(r.iloc[2]), "qty": fmt_num(to_float(r.iloc[4])), "unit_price": fmt_num(to_float(r.iloc[5]))})
+                if use_iloc:
+                    try:
+                        recs.append({
+                            "item_code": safe_str(r.iloc[1]), 
+                            "item_name": safe_str(r.iloc[2]), 
+                            "qty": fmt_num(to_float(r.iloc[4])), 
+                            "unit_price": fmt_num(to_float(r.iloc[5]))
+                        })
+                    except: pass
+                else:
+                    recs.append({
+                        "item_code": safe_str(r[col_code]) if col_code else "",
+                        "item_name": safe_str(r[col_name]) if col_name else "",
+                        "qty": fmt_num(to_float(r.get(col_qty))),
+                        "unit_price": fmt_num(to_float(r.get(col_price)))
+                    })
             st.session_state.temp_cust = pd.DataFrame(recs)
             
         ed_c = st.data_editor(st.session_state.temp_cust, num_rows="dynamic", use_container_width=True, key="editor_po_cust", hide_index=True)
