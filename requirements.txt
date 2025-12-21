@@ -1,8 +1,8 @@
 streamlit
 pandas
+numpy
 openpyxl
-google-api-python-client
-google-auth
 supabase
-pandas
-psycopg2-binary
+google-api-python-client
+google-auth-oauthlib
+xlsxwriter
