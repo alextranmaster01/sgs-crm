@@ -25,7 +25,7 @@ except ImportError:
 # =============================================================================
 # CẤU HÌNH & VERSION
 # =============================================================================
-APP_VERSION = "V4850 - FINAL STABLE (SMART MATCHING + CLEAN REVIEW)"
+APP_VERSION = "V4851 - FINAL FULL OPTION (RESET BUTTON + ALL TABS)"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="🏢")
 
 # --- CSS ---
@@ -136,7 +136,6 @@ QUOTE_DISPLAY_COLS = [
     "Leadtime", "Supplier", "Images", "Type", "N/U/O/C"
 ]
 
-# CÁC CỘT REVIEW (THEO YÊU CẦU MỚI)
 REVIEW_COLS = [
     "No", "Item code", "Item name", "Specs", "Q'ty",
     "Unit price (VND)", "Total price (VND)", "Profit (VND)", "Profit (%)"
@@ -220,16 +219,12 @@ def save_data_overwrite(table, df, match_col):
 
 # --- LOGIC MATCHING THÔNG MINH (SMART MATCHING) ---
 def run_smart_matching(rfq_file, db_df):
-    """
-    Logic: Tìm theo Item Code -> Nếu không có thì tìm theo Item Name -> Nếu không có thì tìm theo Specs
-    """
     # 1. Tạo 3 bộ từ điển tra cứu
     lookup_code = {}
     lookup_name = {}
     lookup_specs = {}
     
     for _, row in db_df.iterrows():
-        # Lấy dữ liệu chuẩn
         data = {
             'price_rmb': to_float(row.get('buying_price_rmb')),
             'rate': to_float(row.get('exchange_rate')),
@@ -240,7 +235,6 @@ def run_smart_matching(rfq_file, db_df):
             'nuoc': safe_str(row.get('nuoc'))
         }
         
-        # Key sạch
         c_key = clean_key(row.get('item_code'))
         n_key = clean_key(row.get('item_name'))
         s_key = clean_key(row.get('specs'))
@@ -265,20 +259,14 @@ def run_smart_matching(rfq_file, db_df):
         qty_key = rfq_map.get('qty') or rfq_map.get('qty') or rfq_map.get('quantity')
         qty_val = to_float(r.get(qty_key))
 
-        # LOGIC TÌM KIẾM THEO ƯU TIÊN
         info = None
-        
         # Ưu tiên 1: Code
-        if clean_key(code) in lookup_code: 
-            info = lookup_code[clean_key(code)]
+        if clean_key(code) in lookup_code: info = lookup_code[clean_key(code)]
         # Ưu tiên 2: Name
-        elif clean_key(name) in lookup_name:
-            info = lookup_name[clean_key(name)]
+        elif clean_key(name) in lookup_name: info = lookup_name[clean_key(name)]
         # Ưu tiên 3: Specs
-        elif clean_key(specs) in lookup_specs:
-            info = lookup_specs[clean_key(specs)]
+        elif clean_key(specs) in lookup_specs: info = lookup_specs[clean_key(specs)]
             
-        # Mặc định nếu không tìm thấy
         if not info:
             info = {'price_rmb': 0, 'rate': 0, 'lead': '', 'supp': '', 'img': '', 'type': '', 'nuoc': ''}
         
@@ -293,7 +281,7 @@ def run_smart_matching(rfq_file, db_df):
             "Buying price (VND)": fmt_num(rmb * rate),
             "Total buying price (VND)": fmt_num(rmb * qty_val * rate),
             
-            # CÁC CỘT TÍNH TOÁN (ĐỂ TRỐNG ĐỂ TÍNH SAU)
+            # CÁC CỘT TÍNH TOÁN
             "AP price (VND)": "0", "AP total price (VND)": "0",
             "Unit price (VND)": "0", "Total price (VND)": "0",
             "GAP": "0", "End user": "0", "Buyer": "0", "Import tax": "0", "VAT": "0",
@@ -307,7 +295,7 @@ def run_smart_matching(rfq_file, db_df):
         
     return pd.DataFrame(results)
 
-# --- INIT STATE (ROBUST) ---
+# --- INIT STATE ---
 if 'init' not in st.session_state:
     st.session_state.init = True
 
@@ -327,7 +315,7 @@ for k in ["end","buy","tax","vat","pay","mgmt","trans"]:
     if f"pct_{k}" not in st.session_state: st.session_state[f"pct_{k}"] = "0"
 
 # --- UI ---
-st.title("HỆ THỐNG CRM QUẢN LÝ (V4850)")
+st.title("HỆ THỐNG CRM QUẢN LÝ (V4851)")
 is_admin = (st.sidebar.text_input("Admin Password", type="password") == "admin")
 
 t1, t2, t3, t4, t5, t6 = st.tabs(["DASHBOARD", "KHO HÀNG (PURCHASES)", "BÁO GIÁ (QUOTES)", "ĐƠN HÀNG (PO)", "TRACKING", "DỮ LIỆU NỀN"])
@@ -419,6 +407,10 @@ with t2:
 
 # --- TAB 3: QUOTES ---
 with t3:
+    if st.button("🆕 TẠO BÁO GIÁ MỚI (RESET)"):
+        st.session_state.quote_result = pd.DataFrame()
+        st.rerun()
+
     st.header("1. BẢNG TÍNH GIÁ")
     
     with st.expander("CẤU HÌNH TÍNH TOÁN (%)", expanded=True):
@@ -442,7 +434,6 @@ with t3:
                 st.error("Chưa có dữ liệu trong Kho hàng.")
             else:
                 try:
-                    # GỌI HÀM MATCHING THÔNG MINH
                     st.session_state.quote_result = run_smart_matching(up_rfq, purchases_df)
                     st.success("Đã tìm thấy giá vốn!")
                 except Exception as e: st.error(f"Lỗi tính toán: {e}")
