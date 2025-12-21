@@ -18,16 +18,16 @@ try:
     from googleapiclient.discovery import build
     from googleapiclient.http import MediaIoBaseUpload
 except ImportError:
-    st.error("⚠️ Cài đặt thư viện: pip install pandas openpyxl supabase google-api-python-client google-auth-oauthlib numpy")
+    st.error("⚠️ Cài đặt: pip install pandas openpyxl supabase google-api-python-client google-auth-oauthlib numpy")
     st.stop()
 
 # =============================================================================
 # CẤU HÌNH & VERSION
 # =============================================================================
-APP_VERSION = "V4839 - FINAL FUSION (FULL OPTION + SIMPLE MATCHING)"
+APP_VERSION = "V4840 - FINAL STABLE (ROBUST INIT & MATCHING)"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="🏢")
 
-# --- CSS GIAO DIỆN ---
+# --- CSS ---
 st.markdown("""
     <style>
     button[data-baseweb="tab"] div p { font-size: 20px !important; font-weight: 700 !important; }
@@ -36,9 +36,6 @@ st.markdown("""
     .bg-cost { background: linear-gradient(135deg, #ff5f6d, #ffc371); }
     .bg-profit { background: linear-gradient(135deg, #f83600, #f9d423); }
     .bg-ncc { background: linear-gradient(135deg, #667eea, #764ba2); }
-    .bg-recv { background: linear-gradient(135deg, #43e97b, #38f9d7); }
-    .bg-del { background: linear-gradient(135deg, #4facfe, #00f2fe); }
-    .bg-pend { background: linear-gradient(135deg, #f093fb, #f5576c); }
     
     [data-testid="stDataFrame"] > div { height: 800px !important; }
     [data-testid="stDataFrame"] table thead th:first-child { display: none; }
@@ -94,7 +91,6 @@ def upload_to_drive(file_obj, sub_folder, file_name):
 # --- DATA HELPERS (SAFE SCALAR) ---
 def safe_str(val):
     if val is None: return ""
-    # Nếu là Series/List, lấy phần tử đầu tiên
     if hasattr(val, '__len__') and not isinstance(val, str):
         if len(val) > 0: 
             try: val = val.iloc[0] 
@@ -238,12 +234,23 @@ def run_simple_matching(rfq_file, db_df):
         
     return pd.DataFrame(results)
 
-# --- INIT STATE ---
+# --- INIT STATE (ROBUST FIX) ---
+# Tự động khởi tạo các biến session state nếu chưa có (tránh lỗi AttributeError)
 if 'init' not in st.session_state:
     st.session_state.init = True
+
+if 'quote_result' not in st.session_state:
     st.session_state.quote_result = pd.DataFrame()
+
+if 'temp_supp' not in st.session_state:
     st.session_state.temp_supp = pd.DataFrame(columns=["item_code", "item_name", "specs", "qty", "price_rmb", "total_rmb", "supplier"])
+
+if 'temp_cust' not in st.session_state:
     st.session_state.temp_cust = pd.DataFrame(columns=["item_code", "item_name", "specs", "qty", "unit_price", "total_price", "customer"])
+
+for k in ["end","buy","tax","vat","pay","mgmt","trans"]: 
+    if f"pct_{k}" not in st.session_state:
+        st.session_state[f"pct_{k}"] = "0"
 
 # --- UI ---
 st.title("HỆ THỐNG CRM QUẢN LÝ (FULL CLOUD)")
@@ -370,7 +377,8 @@ with t3:
                     st.success("Đã tính toán xong!")
                 except Exception as e: st.error(f"Lỗi tính toán: {e}")
 
-    if not st.session_state.quote_result.empty:
+    # Kiểm tra an toàn trước khi hiển thị (Fix AttributeError)
+    if 'quote_result' in st.session_state and not st.session_state.quote_result.empty:
         st.write("### Kết quả chi tiết")
         edited_quote = st.data_editor(
             st.session_state.quote_result,
