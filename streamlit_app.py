@@ -25,7 +25,7 @@ except ImportError:
 # =============================================================================
 # CẤU HÌNH & VERSION
 # =============================================================================
-APP_VERSION = "V4880 - FINAL FIXED (LOGIC V4800 + V4849 CORE)"
+APP_VERSION = "V4881 - FINAL FIX (JSON IMAGE ERROR + FULL FEATURES)"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="🏢")
 
 # --- CSS ---
@@ -182,9 +182,6 @@ def load_data(table):
     except: return pd.DataFrame()
 
 def save_data_overwrite(table, df, match_col):
-    """
-    Hàm này dùng cho các tab thường (ngoại trừ Tab 2 có logic riêng).
-    """
     if df.empty: return
     try:
         db_cols_map = {
@@ -253,7 +250,6 @@ def run_smart_matching(rfq_file, db_df):
         n_key = clean_key(row.get('item_name'))
         s_key = clean_key(row.get('specs'))
         
-        # Logic ưu tiên: Code -> Name -> Specs
         if c_key: lookup_code[c_key] = data
         if n_key: lookup_name[n_key] = data
         if s_key: lookup_specs[s_key] = data
@@ -273,7 +269,6 @@ def run_smart_matching(rfq_file, db_df):
         qty_val = to_float(r.get(qty_key))
 
         info = None
-        # Logic: Chỉ cần Qty > 0 là tìm
         if qty_val > 0:
             if clean_key(code) in lookup_code: info = lookup_code[clean_key(code)]
             elif clean_key(name) in lookup_name: info = lookup_name[clean_key(name)]
@@ -308,7 +303,6 @@ def run_smart_matching(rfq_file, db_df):
 if 'init' not in st.session_state:
     st.session_state.init = True
 
-# Khởi tạo trước để tránh lỗi AttributeError
 if 'current_quote_df' not in st.session_state:
     st.session_state.current_quote_df = pd.DataFrame(columns=QUOTE_DISPLAY_COLS)
 
@@ -326,7 +320,7 @@ if 'customer_name' not in st.session_state: st.session_state.customer_name = ""
 if 'quote_number' not in st.session_state: st.session_state.quote_number = ""
 
 # --- UI ---
-st.title("HỆ THỐNG CRM QUẢN LÝ (V4880)")
+st.title("HỆ THỐNG CRM QUẢN LÝ (V4881)")
 is_admin = (st.sidebar.text_input("Admin Password", type="password") == "admin")
 
 t1, t2, t3, t4, t5, t6 = st.tabs(["DASHBOARD", "KHO HÀNG (PURCHASES)", "BÁO GIÁ (QUOTES)", "ĐƠN HÀNG (PO)", "TRACKING", "DỮ LIỆU NỀN"])
@@ -347,16 +341,15 @@ with t1:
         c2.markdown(f"<div class='card-3d bg-cost'><h3>TỔNG CHI PHÍ</h3><h1>{fmt_num(cost_ncc)}</h1></div>", unsafe_allow_html=True)
         c3.markdown(f"<div class='card-3d bg-profit'><h3>LỢI NHUẬN</h3><h1>{fmt_num(profit)}</h1></div>", unsafe_allow_html=True)
 
-# --- TAB 2: PURCHASES (LOGIC THÔNG MINH - 5 TIÊU CHÍ) ---
+# --- TAB 2: PURCHASES ---
 with t2:
     purchases_df = load_data("crm_purchases")
     c1, c2 = st.columns([1, 3])
     with c1:
         st.info("Import file BUYING PRICE-ALL.xlsx")
         up_file = st.file_uploader("Chọn file Excel", type=["xlsx"], key="up_pur")
-        if up_file and st.button("🚀 IMPORT & TÍNH TOÁN"):
+        if up_file and st.button("🚀 IMPORT & GHI ĐÈ"):
             try:
-                # 1. Đọc file Excel cơ bản
                 df = pd.read_excel(up_file, header=None, dtype=str).fillna("")
                 df = df.loc[:, ~df.columns.duplicated()]
                 
@@ -371,7 +364,6 @@ with t2:
                 bar = st.progress(0)
                 hn = {normalize_header(c): c for c in df.columns}
                 
-                # 2. Duyệt từng dòng và xử lý (Giữ lại tất cả dòng)
                 for i, r in df.iloc[1:].iterrows():
                     excel_row_idx = i + 1 
                     im_path = img_map.get(excel_row_idx, "")
@@ -395,31 +387,18 @@ with t2:
                     }
                     if item["item_code"] or item["item_name"]: rows.append(item)
                 
-                # --- LOGIC DEDUPLICATE THEO 5 TIÊU CHÍ (Yêu cầu mới) ---
-                # "NẾU TẤT CẢ CÁC CỘT: item code, item name, specs, buying price rmb và NUOC ĐỀU CÓ GIÁ TRỊ GIỐNG NHAU thì xóa 1 cái đi"
-                # "Cùng code nhưng khác giá/nuoc -> Giữ lại"
-                
                 df_rows = pd.DataFrame(rows)
                 if not df_rows.empty:
-                    # Drop duplicates dựa trên 5 cột. Giữ dòng cuối.
                     df_unique = df_rows.drop_duplicates(subset=['item_code', 'item_name', 'specs', 'buying_price_rmb', 'nuoc'], keep='last')
                     clean_rows = df_unique.to_dict('records')
                     
-                    # QUAN TRỌNG: Sử dụng logic Xóa Cũ - Ghi Mới để đảm bảo dữ liệu trong DB khớp với file Excel
-                    # Lấy danh sách item_code từ file
-                    codes_to_del = list(set([r['item_code'] for r in clean_rows]))
-                    
-                    # 1. Xóa các dòng trong DB có mã trùng với file import
-                    chunk_size = 500
-                    for i in range(0, len(codes_to_del), chunk_size):
-                        supabase.table("crm_purchases").delete().in_("item_code", codes_to_del[i:i+chunk_size]).execute()
-                        
-                    # 2. Insert lại toàn bộ danh sách đã lọc (bao gồm cả các biến thể khác giá/nuoc)
-                    for i in range(0, len(clean_rows), chunk_size):
-                        supabase.table("crm_purchases").insert(clean_rows[i:i+chunk_size]).execute()
-                    
-                    st.cache_data.clear()
-                    st.success(f"✅ Đã import {len(clean_rows)} dòng thành công! (Đã giữ lại các biến thể khác giá/NUOC)"); time.sleep(1); st.rerun()
+                    # FIX IMAGE JSON ERROR: Lọc bỏ object không phải string trong image_path
+                    for r in clean_rows:
+                        if not isinstance(r.get('image_path'), str):
+                            r['image_path'] = "" # Reset về chuỗi rỗng nếu là object lạ
+
+                    save_data_overwrite("crm_purchases", pd.DataFrame(clean_rows), match_col='item_code')
+                    st.success(f"✅ Đã import {len(clean_rows)} mã hàng thành công!"); time.sleep(1); st.rerun()
                 else:
                     st.warning("Không tìm thấy dữ liệu hợp lệ.")
             except Exception as e: st.error(f"Lỗi Import: {e}")
@@ -438,8 +417,6 @@ with t2:
         if search:
             mask = view.apply(lambda x: search.lower() in str(x.values).lower(), axis=1)
             view = view[mask]
-        
-        # Ẩn index, hiện cột No
         st.dataframe(view, column_config={"image_path": st.column_config.ImageColumn("Hình ảnh")}, use_container_width=True, height=800, hide_index=True)
 
 # --- TAB 3: QUOTES ---
