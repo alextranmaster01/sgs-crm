@@ -23,8 +23,8 @@ except ImportError:
 # =============================================================================
 # CẤU HÌNH & VERSION
 # =============================================================================
-APP_VERSION = "V4824 - FINAL IMAGE FIX (THUMBNAIL MODE)"
-st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="📸")
+APP_VERSION = "V4825 - FIX CRITICAL DB ERROR & IMAGE"
+st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="🚀")
 
 # --- CSS GIAO DIỆN ---
 st.markdown("""
@@ -36,7 +36,7 @@ st.markdown("""
     .bg-profit { background: linear-gradient(135deg, #f83600, #f9d423); }
     .bg-ncc { background: linear-gradient(135deg, #667eea, #764ba2); }
     
-    /* Tăng chiều cao bảng và ẩn cột index */
+    /* Ẩn cột index thừa và tăng chiều cao bảng */
     [data-testid="stDataFrame"] > div { height: 800px !important; }
     [data-testid="stDataFrame"] table thead th:first-child { display: none; }
     [data-testid="stDataFrame"] table tbody td:first-child { display: none; }
@@ -54,7 +54,7 @@ except Exception as e:
     st.error(f"⚠️ Lỗi Config: {e}")
     st.stop()
 
-# --- XỬ LÝ GOOGLE DRIVE (CHÌA KHÓA HIỂN THỊ ẢNH) ---
+# --- XỬ LÝ GOOGLE DRIVE ---
 def get_drive_service():
     try:
         creds = Credentials(None, refresh_token=OAUTH_INFO["refresh_token"], 
@@ -67,13 +67,11 @@ def upload_to_drive(file_obj, sub_folder, file_name):
     srv = get_drive_service()
     if not srv: return ""
     try:
-        # Tìm folder
         q_f = f"'{ROOT_FOLDER_ID}' in parents and name='{sub_folder}' and trashed=false"
         folders = srv.files().list(q=q_f, fields="files(id)").execute().get('files', [])
         folder_id = folders[0]['id'] if folders else srv.files().create(body={'name': sub_folder, 'mimeType': 'application/vnd.google-apps.folder', 'parents': [ROOT_FOLDER_ID]}, fields='id').execute()['id']
         srv.permissions().create(fileId=folder_id, body={'role': 'reader', 'type': 'anyone'}).execute()
 
-        # Check trùng -> Ghi đè
         q_file = f"'{folder_id}' in parents and name = '{file_name}' and trashed = false"
         existing = srv.files().list(q=q_file, fields='files(id)').execute().get('files', [])
         media = MediaIoBaseUpload(file_obj, mimetype=mimetypes.guess_type(file_name)[0] or 'application/octet-stream', resumable=True)
@@ -84,12 +82,10 @@ def upload_to_drive(file_obj, sub_folder, file_name):
         else:
             file_id = srv.files().create(body={'name': file_name, 'parents': [folder_id]}, media_body=media, fields='id').execute()['id']
             
-        # CẤP QUYỀN PUBLIC (BẮT BUỘC ĐỂ HIỆN ẢNH)
         try: srv.permissions().create(fileId=file_id, body={'role': 'reader', 'type': 'anyone'}).execute()
         except: pass
         
-        # TRẢ VỀ LINK THUMBNAIL (ĐỊNH DẠNG NÀY MỚI HIỆN ĐƯỢC TRONG BẢNG)
-        # sz=w200 nghĩa là chiều rộng 200px, tải nhanh và nét
+        # LINK THUMBNAIL (QUAN TRỌNG ĐỂ HIỆN ẢNH)
         return f"https://drive.google.com/thumbnail?id={file_id}&sz=w200" 
     except: return ""
 
@@ -127,7 +123,7 @@ MAP_MASTER = {
     "destination": "destination", "paymentterm": "payment_term"
 }
 
-# --- DATABASE HANDLERS (AUTO CLEAN & DEDUPLICATE) ---
+# --- DATABASE HANDLERS ---
 @st.cache_data(ttl=5) 
 def load_data(table):
     try:
@@ -135,6 +131,7 @@ def load_data(table):
         df = pd.DataFrame(res.data)
         if not df.empty and 'no' not in df.columns: 
             df.insert(0, 'no', range(1, len(df)+1))
+        
         # Ẩn cột kỹ thuật
         drop_cols = ['id', '_clean_code', '_clean_name', '_clean_specs']
         for c in drop_cols:
@@ -145,11 +142,12 @@ def load_data(table):
 def save_data(table, df, unique_cols=None):
     if df.empty: return
     try:
-        # 1. CLEAN DATA ĐỂ TRÁNH DUPLICATE ẢO (Do khoảng trắng)
+        # 1. CLEAN & DEDUPLICATE (Xử lý khoảng trắng để tránh lỗi Duplicate Key)
         if unique_cols and all(col in df.columns for col in unique_cols):
             for col in unique_cols:
-                df[col] = df[col].astype(str).str.strip() # Xóa khoảng trắng thừa
-            # Giữ dòng cuối cùng nếu trùng
+                # Ép về string và xóa khoảng trắng thừa đầu đuôi
+                df[col] = df[col].astype(str).str.strip()
+            # Xóa dòng trùng ngay trong lô dữ liệu gửi đi (giữ dòng cuối)
             df = df.drop_duplicates(subset=unique_cols, keep='last')
 
         VALID_COLS = {
@@ -170,15 +168,18 @@ def save_data(table, df, unique_cols=None):
             clean = {k: str(v) if v is not None and str(v)!='nan' else None for k,v in r.items() if k in valid}
             if clean: clean_recs.append(clean)
         
-        # Gọi Upsert (Dựa vào SQL Unique Constraint)
+        # 2. GỬI DỮ LIỆU (FIX LỖI 42P10)
+        # Sử dụng chuỗi tên cột nối bằng dấu phẩy cho tham số on_conflict
         if unique_cols:
-            supabase.table(table).upsert(clean_recs, on_conflict=unique_cols).execute()
+            conflict_target = ",".join(unique_cols) # Ví dụ: "item_code,buying_price_rmb,nuoc"
+            supabase.table(table).upsert(clean_recs, on_conflict=conflict_target).execute()
         else:
             supabase.table(table).upsert(clean_recs).execute()
+            
         st.cache_data.clear()
     except Exception as e: st.error(f"❌ Lỗi Lưu DB ({table}): {e}")
 
-# --- INIT STATE ---
+# --- INIT ---
 if 'init' not in st.session_state:
     st.session_state.init = True
     st.session_state.quote_df = pd.DataFrame(columns=["item_code", "item_name", "specs", "qty", "buying_price_vnd", "buying_price_rmb", "exchange_rate", "ap_price", "unit_price", "total_price_vnd", "supplier_name", "image_path", "leadtime", "transportation"])
@@ -186,7 +187,7 @@ if 'init' not in st.session_state:
     st.session_state.temp_cust = pd.DataFrame(columns=["item_code", "item_name", "specs", "qty", "unit_price", "total_price", "customer"])
     for k in ["end","buy","tax","vat","pay","mgmt","trans"]: st.session_state[f"pct_{k}"] = "0"
 
-# --- UI CHÍNH ---
+# --- UI ---
 st.title("HỆ THỐNG CRM QUẢN LÝ (FULL CLOUD)")
 is_admin = (st.sidebar.text_input("Admin Password", type="password") == "admin")
 
@@ -276,6 +277,7 @@ with t2:
                     rows.append(d)
                     bar.progress((i+1)/len(df))
                 
+                # SỬ DỤNG UNIQUE KEYS LÀ ITEM_CODE, PRICE, NUOC ĐỂ UPDATE
                 save_data("crm_purchases", pd.DataFrame(rows), unique_cols=['item_code', 'buying_price_rmb', 'nuoc'])
                 st.success(f"✅ Thành công! Đã xử lý {len(rows)} mã hàng."); time.sleep(1); st.rerun()
             except Exception as e: st.error(f"Lỗi Import: {e}")
@@ -285,7 +287,8 @@ with t2:
         code = st.text_input("Item Code")
         if st.button("Upload") and up_img and code:
             url = upload_to_drive(up_img, "CRM_PURCHASE_IMAGES", f"IMG_{safe_filename(code)}.png")
-            # Update thông qua item_code, bỏ qua unique constraint trong trường hợp này để update ảnh
+            # Update này có thể gây lỗi nếu có nhiều dòng trùng item_code, nên dùng logic update an toàn hơn hoặc cảnh báo
+            # Ở đây ta giả định update ảnh cho tất cả dòng có item_code đó
             supabase.table("crm_purchases").update({"image_path": url}).eq("item_code", code).execute()
             st.success("Uploaded!"); st.rerun()
 
@@ -478,7 +481,6 @@ with t5:
             prf = st.file_uploader("Proof Img", accept_multiple_files=True, key="up_proof")
             if st.button("Upload Proof") and pk and prf:
                 urls = [upload_to_drive(f, "CRM_PROOF_IMAGES", f"PRF_{pk}_{f.name}") for f in prf]
-                # Lưu mảng ảnh vào DB (ở đây lưu URL đầu tiên để hiển thị đơn giản)
                 if urls: supabase.table("crm_tracking").update({"proof_image": urls[0]}).eq("po_no", pk).execute()
                 st.success("Uploaded")
 
