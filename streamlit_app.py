@@ -25,7 +25,7 @@ except ImportError:
 # =============================================================================
 # CẤU HÌNH & VERSION
 # =============================================================================
-APP_VERSION = "V4850 - FINAL STABLE (SMART MATCHING + CLEAN REVIEW)"
+APP_VERSION = "V4857 - PERFECT HYBRID (LEGACY PO + SMART QUOTE)"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="🏢")
 
 # --- CSS ---
@@ -38,7 +38,8 @@ st.markdown("""
     .bg-profit { background: linear-gradient(135deg, #f83600, #f9d423); }
     .bg-ncc { background: linear-gradient(135deg, #667eea, #764ba2); }
     
-    [data-testid="stDataFrame"] > div { height: 800px !important; }
+    [data-testid="stDataFrame"] { margin-bottom: 20px; }
+    [data-testid="stDataFrame"] > div { height: auto !important; min_height: 150px; max_height: 600px; overflow-y: auto; }
     [data-testid="stDataFrame"] table thead th:first-child { display: none; }
     [data-testid="stDataFrame"] table tbody td:first-child { display: none; }
     </style>""", unsafe_allow_html=True)
@@ -136,7 +137,6 @@ QUOTE_DISPLAY_COLS = [
     "Leadtime", "Supplier", "Images", "Type", "N/U/O/C"
 ]
 
-# CÁC CỘT REVIEW (THEO YÊU CẦU MỚI)
 REVIEW_COLS = [
     "No", "Item code", "Item name", "Specs", "Q'ty",
     "Unit price (VND)", "Total price (VND)", "Profit (VND)", "Profit (%)"
@@ -218,18 +218,13 @@ def save_data_overwrite(table, df, match_col):
         st.cache_data.clear()
     except Exception as e: st.error(f"❌ Lưu Lỗi: {e}")
 
-# --- LOGIC MATCHING THÔNG MINH (SMART MATCHING) ---
+# --- LOGIC MATCHING THÔNG MINH (TAB 3) ---
 def run_smart_matching(rfq_file, db_df):
-    """
-    Logic: Tìm theo Item Code -> Nếu không có thì tìm theo Item Name -> Nếu không có thì tìm theo Specs
-    """
-    # 1. Tạo 3 bộ từ điển tra cứu
     lookup_code = {}
     lookup_name = {}
     lookup_specs = {}
     
     for _, row in db_df.iterrows():
-        # Lấy dữ liệu chuẩn
         data = {
             'price_rmb': to_float(row.get('buying_price_rmb')),
             'rate': to_float(row.get('exchange_rate')),
@@ -239,8 +234,6 @@ def run_smart_matching(rfq_file, db_df):
             'type': safe_str(row.get('type')),
             'nuoc': safe_str(row.get('nuoc'))
         }
-        
-        # Key sạch
         c_key = clean_key(row.get('item_code'))
         n_key = clean_key(row.get('item_name'))
         s_key = clean_key(row.get('specs'))
@@ -249,14 +242,12 @@ def run_smart_matching(rfq_file, db_df):
         if n_key: lookup_name[n_key] = data
         if s_key: lookup_specs[s_key] = data
 
-    # 2. Đọc RFQ
     df_rfq = pd.read_excel(rfq_file, header=0, dtype=str).fillna("")
     df_rfq = df_rfq.loc[:, ~df_rfq.columns.duplicated()]
     rfq_map = {normalize_header(c): c for c in df_rfq.columns}
     
     results = []
     
-    # 3. Duyệt và Matching
     for _, r in df_rfq.iterrows():
         no = safe_str(r.get(rfq_map.get('no')))
         code = safe_str(r.get(rfq_map.get('itemcode')))
@@ -265,20 +256,11 @@ def run_smart_matching(rfq_file, db_df):
         qty_key = rfq_map.get('qty') or rfq_map.get('qty') or rfq_map.get('quantity')
         qty_val = to_float(r.get(qty_key))
 
-        # LOGIC TÌM KIẾM THEO ƯU TIÊN
         info = None
-        
-        # Ưu tiên 1: Code
-        if clean_key(code) in lookup_code: 
-            info = lookup_code[clean_key(code)]
-        # Ưu tiên 2: Name
-        elif clean_key(name) in lookup_name:
-            info = lookup_name[clean_key(name)]
-        # Ưu tiên 3: Specs
-        elif clean_key(specs) in lookup_specs:
-            info = lookup_specs[clean_key(specs)]
+        if clean_key(code) in lookup_code: info = lookup_code[clean_key(code)]
+        elif clean_key(name) in lookup_name: info = lookup_name[clean_key(name)]
+        elif clean_key(specs) in lookup_specs: info = lookup_specs[clean_key(specs)]
             
-        # Mặc định nếu không tìm thấy
         if not info:
             info = {'price_rmb': 0, 'rate': 0, 'lead': '', 'supp': '', 'img': '', 'type': '', 'nuoc': ''}
         
@@ -292,14 +274,11 @@ def run_smart_matching(rfq_file, db_df):
             "Exchange rate": fmt_num(rate),
             "Buying price (VND)": fmt_num(rmb * rate),
             "Total buying price (VND)": fmt_num(rmb * qty_val * rate),
-            
-            # CÁC CỘT TÍNH TOÁN (ĐỂ TRỐNG ĐỂ TÍNH SAU)
             "AP price (VND)": "0", "AP total price (VND)": "0",
             "Unit price (VND)": "0", "Total price (VND)": "0",
             "GAP": "0", "End user": "0", "Buyer": "0", "Import tax": "0", "VAT": "0",
             "Transportation": "0", "Management fee": "0", "Payback": "0",
             "Profit (VND)": "0", "Profit (%)": "0%",
-            
             "Leadtime": info['lead'], "Supplier": info['supp'], "Images": info['img'],
             "Type": info['type'], "N/U/O/C": info['nuoc']
         }
@@ -307,7 +286,7 @@ def run_smart_matching(rfq_file, db_df):
         
     return pd.DataFrame(results)
 
-# --- INIT STATE (ROBUST) ---
+# --- INIT STATE ---
 if 'init' not in st.session_state:
     st.session_state.init = True
 
@@ -327,7 +306,7 @@ for k in ["end","buy","tax","vat","pay","mgmt","trans"]:
     if f"pct_{k}" not in st.session_state: st.session_state[f"pct_{k}"] = "0"
 
 # --- UI ---
-st.title("HỆ THỐNG CRM QUẢN LÝ (V4850)")
+st.title("HỆ THỐNG CRM QUẢN LÝ (V4857)")
 is_admin = (st.sidebar.text_input("Admin Password", type="password") == "admin")
 
 t1, t2, t3, t4, t5, t6 = st.tabs(["DASHBOARD", "KHO HÀNG (PURCHASES)", "BÁO GIÁ (QUOTES)", "ĐƠN HÀNG (PO)", "TRACKING", "DỮ LIỆU NỀN"])
@@ -358,7 +337,10 @@ with t2:
         up_file = st.file_uploader("Chọn file Excel", type=["xlsx"], key="up_pur")
         if up_file and st.button("🚀 IMPORT & TÍNH TOÁN"):
             try:
+                # DÙNG LOGIC CŨ (HARDCODE ILOC) NHƯNG VẪN CLEAN HEADER
                 df = pd.read_excel(up_file, header=0, dtype=str).fillna("")
+                
+                # Fix duplicate columns
                 df = df.loc[:, ~df.columns.duplicated()]
                 
                 img_map = {}
@@ -419,216 +401,208 @@ with t2:
 
 # --- TAB 3: QUOTES ---
 with t3:
-    st.header("1. BẢNG TÍNH GIÁ")
-    
-    with st.expander("CẤU HÌNH TÍNH TOÁN (%)", expanded=True):
-        cols = st.columns(7)
-        pct_inputs = {}
-        labels = ["END USER(%)", "BUYER(%)", "TAX(%)", "VAT(%)", "PAYBACK(%)", "MGMT(%)", "TRANS(VND)"]
-        keys = ["end", "buy", "tax", "vat", "pay", "mgmt", "trans"]
-        for i, (label, key) in enumerate(zip(labels, keys)):
-            val = st.session_state.get(f"pct_{key}", "0")
-            pct_inputs[key] = cols[i].text_input(label, val)
-            st.session_state[f"pct_{key}"] = pct_inputs[key]
+    if st.button("🆕 TẠO BÁO GIÁ MỚI (RESET)"):
+        st.session_state.quote_result = pd.DataFrame()
+        st.rerun()
 
-    col_up, col_act = st.columns([1, 2])
-    with col_up:
-        up_rfq = st.file_uploader("Upload 'RFQ-38 FROM ALL.xlsx'", type=["xlsx"], key="up_rfq")
-    
-    with col_act:
-        st.write(""); st.write("")
-        if up_rfq and st.button("🚀 BƯỚC 1: LẤY GIÁ VỐN (SMART MATCHING)"):
-            if purchases_df.empty:
-                st.error("Chưa có dữ liệu trong Kho hàng.")
-            else:
-                try:
-                    # GỌI HÀM MATCHING THÔNG MINH
-                    st.session_state.quote_result = run_smart_matching(up_rfq, purchases_df)
-                    st.success("Đã tìm thấy giá vốn!")
-                except Exception as e: st.error(f"Lỗi tính toán: {e}")
+    # --- KHU VỰC 1: NHẬP LIỆU & TÍNH TOÁN ---
+    with st.container(border=True):
+        st.header("1. TÍNH TOÁN GIÁ")
+        
+        with st.expander("CẤU HÌNH TÍNH TOÁN (%)", expanded=True):
+            cols = st.columns(7)
+            pct_inputs = {}
+            labels = ["END USER(%)", "BUYER(%)", "TAX(%)", "VAT(%)", "PAYBACK(%)", "MGMT(%)", "TRANS(VND)"]
+            keys = ["end", "buy", "tax", "vat", "pay", "mgmt", "trans"]
+            for i, (label, key) in enumerate(zip(labels, keys)):
+                val = st.session_state.get(f"pct_{key}", "0")
+                pct_inputs[key] = cols[i].text_input(label, val)
+                st.session_state[f"pct_{key}"] = pct_inputs[key]
 
-    if 'quote_result' in st.session_state and not st.session_state.quote_result.empty:
-        st.write("---")
-        f1, f2, f3, f4 = st.columns(4)
-        ap_f = f1.text_input("AP Formula (e.g. =BUY*1.1)")
-        unit_f = f3.text_input("Unit Formula (e.g. =AP*1.2)")
+        col_up, col_act = st.columns([1, 2])
+        with col_up:
+            up_rfq = st.file_uploader("Upload 'RFQ-38 FROM ALL.xlsx'", type=["xlsx"], key="up_rfq")
         
-        if f2.button("Apply AP"):
-            df = st.session_state.quote_result
-            for i, r in df.iterrows():
-                buy_vnd = to_float(r["Buying price (VND)"])
-                curr_ap = to_float(r.get("AP price (VND)", 0))
-                new_ap = parse_formula(ap_f, buy_vnd, curr_ap)
-                df.at[i, "AP price (VND)"] = fmt_num(new_ap)
-            st.session_state.quote_result = df
-            st.rerun()
-
-        if f4.button("Apply Unit"):
-            df = st.session_state.quote_result
-            for i, r in df.iterrows():
-                buy_vnd = to_float(r["Buying price (VND)"])
-                curr_ap = to_float(r.get("AP price (VND)", 0))
-                new_unit = parse_formula(unit_f, buy_vnd, curr_ap)
-                df.at[i, "Unit price (VND)"] = fmt_num(new_unit)
-            st.session_state.quote_result = df
-            st.rerun()
-
-        st.write("---")
-        
-        if st.button("🔄 BƯỚC 2: TÍNH LỢI NHUẬN (FINAL CALC)"):
-            df = st.session_state.quote_result
-            
-            p_end = to_float(st.session_state.pct_end)/100
-            p_buy = to_float(st.session_state.pct_buy)/100
-            p_tax = to_float(st.session_state.pct_tax)/100
-            p_vat = to_float(st.session_state.pct_vat)/100
-            p_pay = to_float(st.session_state.pct_pay)/100
-            p_mgmt = to_float(st.session_state.pct_mgmt)/100
-            trans = to_float(st.session_state.pct_trans)
-            
-            for i, r in df.iterrows():
-                qty = to_float(r["Q'ty"])
-                buy_total = to_float(r["Total buying price (VND)"])
-                
-                unit_sell = to_float(r.get("Unit price (VND)", 0))
-                ap_price = to_float(r.get("AP price (VND)", 0))
-                
-                total_sell = unit_sell * qty
-                ap_total = ap_price * qty
-                
-                gap = total_sell - ap_total 
-                gap_share = gap * 0.6 if gap > 0 else 0
-                
-                v_end = ap_total * p_end
-                v_buy = total_sell * p_buy
-                v_tax = total_sell * p_tax
-                v_vat = total_sell * p_vat
-                v_mgmt = total_sell * p_mgmt
-                v_trans = trans * qty
-                
-                ops = gap_share + v_end + v_buy + v_tax + v_vat + v_mgmt + v_trans
-                v_payback = gap * p_pay
-                profit = total_sell - buy_total - ops + v_payback
-                
-                pct_profit = (profit / total_sell * 100) if total_sell else 0
-                
-                # CẬP NHẬT GIÁ TRỊ VÀO BẢNG
-                df.at[i, "AP total price (VND)"] = fmt_num(ap_total)
-                df.at[i, "Total price (VND)"] = fmt_num(total_sell)
-                df.at[i, "GAP"] = fmt_num(gap)
-                df.at[i, "Profit (VND)"] = fmt_num(profit)
-                df.at[i, "Profit (%)"] = f"{pct_profit:.1f}%"
-                
-                df.at[i, "End user"] = fmt_num(v_end)
-                df.at[i, "Buyer"] = fmt_num(v_buy)
-                df.at[i, "Import tax"] = fmt_num(v_tax)
-                df.at[i, "VAT"] = fmt_num(v_vat)
-                df.at[i, "Transportation"] = fmt_num(v_trans)
-                df.at[i, "Management fee"] = fmt_num(v_mgmt)
-                df.at[i, "Payback"] = fmt_num(v_payback)
-                
-            st.session_state.quote_result = df
-            st.success("Đã tính toán xong!")
-
-        # --- BẢNG TÍNH TOÁN ---
-        edited_quote = st.data_editor(
-            st.session_state.quote_result,
-            column_config={
-                "Images": st.column_config.ImageColumn("Hình ảnh", width="small"),
-                "Buying price (RMB)": st.column_config.TextColumn("Giá Vốn RMB", disabled=True),
-                "Buying price (VND)": st.column_config.TextColumn("Giá Vốn VND", disabled=True),
-                "AP price (VND)": st.column_config.TextColumn("AP Price (VND)", required=True),
-                "Unit price (VND)": st.column_config.TextColumn("Unit Price (VND)", required=True),
-                "Total price (VND)": st.column_config.TextColumn("Thành Tiền Bán", disabled=True),
-                "Profit (VND)": st.column_config.TextColumn("LỢI NHUẬN", disabled=True),
-            },
-            use_container_width=True,
-            height=500,
-            num_rows="dynamic",
-            column_order=QUOTE_DISPLAY_COLS
-        )
-        
-        if not edited_quote.equals(st.session_state.quote_result):
-            st.session_state.quote_result = edited_quote
-
-        # --- PHẦN 2: REVIEW & CẢNH BÁO ---
-        st.divider()
-        st.header("2. REVIEW LỢI NHUẬN (<10%)")
-        
-        df_review = st.session_state.quote_result.copy()
-        # Lọc các dòng có Profit < 10%
-        df_low = df_review[df_review["Profit (%)"].apply(lambda x: to_float(str(x).replace('%','')) < 10)]
-        
-        if not df_low.empty:
-            st.error(f"Cảnh báo: Có {len(df_low)} mặt hàng lợi nhuận dưới 10%!")
-            # CHỈ HIỂN THỊ CÁC CỘT CẦN THIẾT
-            st.dataframe(df_low[REVIEW_COLS], use_container_width=True)
-        else:
-            st.success("Tất cả mặt hàng đều đạt lợi nhuận > 10%.")
-
-        # --- PHẦN 3: EXPORT EXCEL ---
-        st.divider()
-        st.header("3. XUẤT FILE BÁO GIÁ")
-        
-        col_ex1, col_ex2 = st.columns(2)
-        with col_ex1:
-            csv = edited_quote.to_csv(index=False).encode('utf-8-sig')
-            st.download_button("📥 Tải CSV (Dữ liệu thô)", csv, "RFQ_Result.csv", "text/csv")
-        
-        with col_ex2:
-            if st.session_state.quote_template:
-                if st.button("📤 EXPORT EXCEL (THEO TEMPLATE)"):
+        with col_act:
+            st.write(""); st.write("")
+            if up_rfq and st.button("🚀 BƯỚC 1: LẤY GIÁ VỐN (SMART MATCHING)"):
+                if purchases_df.empty:
+                    st.error("Chưa có dữ liệu trong Kho hàng.")
+                else:
                     try:
-                        output = io.BytesIO()
-                        # Load template từ memory
-                        wb = load_workbook(io.BytesIO(st.session_state.quote_template.getvalue()))
-                        ws = wb.active
-                        start_row = 15 # Dòng bắt đầu điền (Có thể chỉnh sửa nếu cần)
-                        
-                        thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
-                        
-                        for i, r in edited_quote.iterrows():
-                            # Map cột vào Excel (Ví dụ template chuẩn)
-                            ws.cell(row=start_row+i, column=1, value=r.get("No"))
-                            ws.cell(row=start_row+i, column=2, value=r.get("Item code"))
-                            ws.cell(row=start_row+i, column=3, value=r.get("Item name"))
-                            ws.cell(row=start_row+i, column=4, value=r.get("Specs"))
-                            ws.cell(row=start_row+i, column=5, value=to_float(r.get("Q'ty")))
-                            
-                            # Cột Giá Bán (Ví dụ cột 10)
-                            ws.cell(row=start_row+i, column=10, value=to_float(r.get("Unit price (VND)")))
-                            # Cột Thành Tiền (Ví dụ cột 11)
-                            ws.cell(row=start_row+i, column=11, value=to_float(r.get("Total price (VND)")))
-                            
-                            for c in range(1, 15): ws.cell(row=start_row+i, column=c).border = thin_border
+                        st.session_state.quote_result = run_smart_matching(up_rfq, purchases_df)
+                        st.success("Đã tìm thấy giá vốn!")
+                    except Exception as e: st.error(f"Lỗi tính toán: {e}")
 
-                        wb.save(output)
-                        st.download_button("📥 TẢI FILE BÁO GIÁ ĐÃ XONG", output.getvalue(), "Bao_Gia_Final.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-                    except Exception as e: st.error(f"Lỗi xuất Excel: {e}")
+        if 'quote_result' in st.session_state and not st.session_state.quote_result.empty:
+            f1, f2, f3, f4 = st.columns(4)
+            ap_f = f1.text_input("AP Formula (e.g. =BUY*1.1)")
+            unit_f = f3.text_input("Unit Formula (e.g. =AP*1.2)")
+            
+            if f2.button("Apply AP"):
+                df = st.session_state.quote_result
+                for i, r in df.iterrows():
+                    buy_vnd = to_float(r["Buying price (VND)"])
+                    curr_ap = to_float(r.get("AP price (VND)", 0))
+                    new_ap = parse_formula(ap_f, buy_vnd, curr_ap)
+                    df.at[i, "AP price (VND)"] = fmt_num(new_ap)
+                st.session_state.quote_result = df
+                st.rerun()
+
+            if f4.button("Apply Unit"):
+                df = st.session_state.quote_result
+                for i, r in df.iterrows():
+                    buy_vnd = to_float(r["Buying price (VND)"])
+                    curr_ap = to_float(r.get("AP price (VND)", 0))
+                    new_unit = parse_formula(unit_f, buy_vnd, curr_ap)
+                    df.at[i, "Unit price (VND)"] = fmt_num(new_unit)
+                st.session_state.quote_result = df
+                st.rerun()
+
+            st.write("---")
+            if st.button("🔄 BƯỚC 2: TÍNH LỢI NHUẬN (FINAL CALC)"):
+                df = st.session_state.quote_result
+                
+                p_end = to_float(st.session_state.pct_end)/100
+                p_buy = to_float(st.session_state.pct_buy)/100
+                p_tax = to_float(st.session_state.pct_tax)/100
+                p_vat = to_float(st.session_state.pct_vat)/100
+                p_pay = to_float(st.session_state.pct_pay)/100
+                p_mgmt = to_float(st.session_state.pct_mgmt)/100
+                trans = to_float(st.session_state.pct_trans)
+                
+                for i, r in df.iterrows():
+                    qty = to_float(r["Q'ty"])
+                    buy_total = to_float(r["Total buying price (VND)"])
+                    unit_sell = to_float(r.get("Unit price (VND)", 0))
+                    ap_price = to_float(r.get("AP price (VND)", 0))
+                    
+                    total_sell = unit_sell * qty
+                    ap_total = ap_price * qty
+                    
+                    gap = total_sell - ap_total 
+                    gap_share = gap * 0.6 if gap > 0 else 0
+                    
+                    v_end = ap_total * p_end
+                    v_buy = total_sell * p_buy
+                    v_tax = total_sell * p_tax
+                    v_vat = total_sell * p_vat
+                    v_mgmt = total_sell * p_mgmt
+                    v_trans = trans * qty
+                    
+                    ops = gap_share + v_end + v_buy + v_tax + v_vat + v_mgmt + v_trans
+                    v_payback = gap * p_pay
+                    profit = total_sell - buy_total - ops + v_payback
+                    
+                    pct_profit = (profit / total_sell * 100) if total_sell else 0
+                    
+                    df.at[i, "AP total price (VND)"] = fmt_num(ap_total)
+                    df.at[i, "Total price (VND)"] = fmt_num(total_sell)
+                    df.at[i, "GAP"] = fmt_num(gap)
+                    df.at[i, "Profit (VND)"] = fmt_num(profit)
+                    df.at[i, "Profit (%)"] = f"{pct_profit:.1f}%"
+                    df.at[i, "End user"] = fmt_num(v_end)
+                    df.at[i, "Buyer"] = fmt_num(v_buy)
+                    df.at[i, "Import tax"] = fmt_num(v_tax)
+                    df.at[i, "VAT"] = fmt_num(v_vat)
+                    df.at[i, "Transportation"] = fmt_num(v_trans)
+                    df.at[i, "Management fee"] = fmt_num(v_mgmt)
+                    df.at[i, "Payback"] = fmt_num(v_payback)
+                    
+                st.session_state.quote_result = df
+                st.success("Đã tính toán xong!")
+
+            # BẢNG CHỈNH SỬA
+            edited_quote = st.data_editor(
+                st.session_state.quote_result,
+                column_config={
+                    "Images": st.column_config.ImageColumn("Hình ảnh", width="small"),
+                    "Buying price (RMB)": st.column_config.TextColumn("Giá Vốn RMB", disabled=True),
+                    "Buying price (VND)": st.column_config.TextColumn("Giá Vốn VND", disabled=True),
+                    "AP price (VND)": st.column_config.TextColumn("AP Price (VND)", required=True),
+                    "Unit price (VND)": st.column_config.TextColumn("Unit Price (VND)", required=True),
+                    "Total price (VND)": st.column_config.TextColumn("Thành Tiền Bán", disabled=True),
+                    "Profit (VND)": st.column_config.TextColumn("LỢI NHUẬN", disabled=True),
+                },
+                use_container_width=True,
+                height=400,
+                num_rows="dynamic",
+                column_order=QUOTE_DISPLAY_COLS
+            )
+            
+            if not edited_quote.equals(st.session_state.quote_result):
+                st.session_state.quote_result = edited_quote
+
+    # --- KHU VỰC 2: REVIEW ---
+    if 'quote_result' in st.session_state and not st.session_state.quote_result.empty:
+        with st.container(border=True):
+            st.header("2. REVIEW LỢI NHUẬN")
+            
+            df_review = st.session_state.quote_result.copy()
+            df_low = df_review[df_review["Profit (%)"].apply(lambda x: to_float(str(x).replace('%','')) < 10)]
+            
+            if not df_low.empty:
+                st.dataframe(df_low[REVIEW_COLS], use_container_width=True, hide_index=True)
+                st.error(f"⚠️ CẢNH BÁO: Có {len(df_low)} mặt hàng lợi nhuận dưới 10%!")
             else:
-                st.warning("⚠️ Chưa có Template. Vui lòng vào Tab 6 (Dữ liệu nền) để upload Template Báo Giá trước.")
+                st.success("✅ Tất cả mặt hàng đều đạt lợi nhuận > 10%.")
 
-        if st.button("💾 Lưu vào Lịch sử"):
-            to_save = edited_quote.copy()
-            rename_map = {
-                "Item code": "item_code", "Item name": "item_name", "Specs": "specs", "Q'ty": "qty",
-                "Buying price (RMB)": "buying_price_rmb", "Total buying price (RMB)": "total_buying_price_rmb",
-                "Exchange rate": "exchange_rate", "Buying price (VND)": "buying_price_vnd",
-                "Total buying price (VND)": "total_buying_price_vnd", "Leadtime": "leadtime",
-                "Supplier": "supplier_name", "Images": "image_path",
-                "Unit price (VND)": "unit_price", "Total price (VND)": "total_price_vnd", 
-                "Profit (VND)": "profit_vnd", "Profit (%)": "profit_pct",
-                "AP price (VND)": "ap_price", "AP total price (VND)": "ap_total_vnd",
-                "GAP": "gap", "End user": "end_user_val", "Buyer": "buyer_val",
-                "Import tax": "import_tax_val", "VAT": "vat_val", "Transportation": "transportation",
-                "Management fee": "mgmt_fee", "Payback": "payback_val"
-            }
-            to_save = to_save.rename(columns=rename_map)
-            to_save["history_id"] = f"QUOTE_{int(time.time())}"
-            to_save["date"] = datetime.now().strftime("%d/%m/%Y")
-            to_save["quote_no"] = "AUTO_SAVE"
-            save_data_overwrite("crm_shared_history", to_save, "history_id")
-            st.success("Đã lưu!")
+        # --- KHU VỰC 3: EXPORT ---
+        with st.container(border=True):
+            st.header("3. XUẤT FILE BÁO GIÁ")
+            
+            col_ex1, col_ex2 = st.columns(2)
+            with col_ex1:
+                csv = edited_quote.to_csv(index=False).encode('utf-8-sig')
+                st.download_button("📥 Tải CSV (Dữ liệu thô)", csv, "RFQ_Result.csv", "text/csv")
+            
+            with col_ex2:
+                if st.session_state.quote_template:
+                    if st.button("📤 EXPORT EXCEL (THEO TEMPLATE)"):
+                        try:
+                            output = io.BytesIO()
+                            wb = load_workbook(io.BytesIO(st.session_state.quote_template.getvalue()))
+                            ws = wb.active
+                            start_row = 15
+                            thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
+                            
+                            for i, r in edited_quote.iterrows():
+                                ws.cell(row=start_row+i, column=1, value=r.get("No"))
+                                ws.cell(row=start_row+i, column=2, value=r.get("Item code"))
+                                ws.cell(row=start_row+i, column=3, value=r.get("Item name"))
+                                ws.cell(row=start_row+i, column=4, value=r.get("Specs"))
+                                ws.cell(row=start_row+i, column=5, value=to_float(r.get("Q'ty")))
+                                ws.cell(row=start_row+i, column=10, value=to_float(r.get("Unit price (VND)")))
+                                ws.cell(row=start_row+i, column=11, value=to_float(r.get("Total price (VND)")))
+                                for c in range(1, 15): ws.cell(row=start_row+i, column=c).border = thin_border
+
+                            wb.save(output)
+                            st.download_button("📥 TẢI FILE BÁO GIÁ ĐÃ XONG", output.getvalue(), "Bao_Gia_Final.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                        except Exception as e: st.error(f"Lỗi xuất Excel: {e}")
+                else:
+                    st.warning("⚠️ Chưa có Template. Vui lòng vào Tab 6 (Dữ liệu nền) để upload Template Báo Giá trước.")
+
+            if st.button("💾 Lưu vào Lịch sử"):
+                to_save = edited_quote.copy()
+                rename_map = {
+                    "Item code": "item_code", "Item name": "item_name", "Specs": "specs", "Q'ty": "qty",
+                    "Buying price (RMB)": "buying_price_rmb", "Total buying price (RMB)": "total_buying_price_rmb",
+                    "Exchange rate": "exchange_rate", "Buying price (VND)": "buying_price_vnd",
+                    "Total buying price (VND)": "total_buying_price_vnd", "Leadtime": "leadtime",
+                    "Supplier": "supplier_name", "Images": "image_path",
+                    "Unit price (VND)": "unit_price", "Total price (VND)": "total_price_vnd", 
+                    "Profit (VND)": "profit_vnd", "Profit (%)": "profit_pct",
+                    "AP price (VND)": "ap_price", "AP total price (VND)": "ap_total_vnd",
+                    "GAP": "gap", "End user": "end_user_val", "Buyer": "buyer_val",
+                    "Import tax": "import_tax_val", "VAT": "vat_val", "Transportation": "transportation",
+                    "Management fee": "mgmt_fee", "Payback": "payback_val"
+                }
+                to_save = to_save.rename(columns=rename_map)
+                to_save["history_id"] = f"QUOTE_{int(time.time())}"
+                to_save["date"] = datetime.now().strftime("%d/%m/%Y")
+                to_save["quote_no"] = "AUTO_SAVE"
+                save_data_overwrite("crm_shared_history", to_save, "history_id")
+                st.success("Đã lưu!")
 
 # --- TAB 4: PO ---
 with t4:
@@ -641,10 +615,19 @@ with t4:
         po_s = st.text_input("PO NCC No")
         up_s = st.file_uploader("Upload PO NCC", type=["xlsx"], key="up_po_s")
         if up_s:
+            # FIX LOGIC NHẬP PO: DÙNG HÀM CŨ (HARDCODE ILOC) -> ĐẢM BẢO FULL ROWS
             df = pd.read_excel(up_s, dtype=str).fillna("")
             recs = []
             for i, r in df.iterrows():
-                recs.append({"item_code": safe_str(r.iloc[1]), "item_name": safe_str(r.iloc[2]), "qty": fmt_num(to_float(r.iloc[4])), "price_rmb": fmt_num(to_float(r.iloc[5]))})
+                try:
+                    # Lấy trực tiếp theo cột, bỏ qua header phức tạp
+                    recs.append({
+                        "item_code": safe_str(r.iloc[1]), 
+                        "item_name": safe_str(r.iloc[2]), 
+                        "qty": fmt_num(to_float(r.iloc[4])), 
+                        "price_rmb": fmt_num(to_float(r.iloc[5]))
+                    })
+                except: pass
             st.session_state.temp_supp = pd.DataFrame(recs)
         
         ed_s = st.data_editor(st.session_state.temp_supp, num_rows="dynamic", use_container_width=True, key="editor_po_supp", hide_index=True)
@@ -661,10 +644,18 @@ with t4:
         po_c = st.text_input("PO Cust No")
         up_c = st.file_uploader("Upload PO Cust", type=["xlsx"], key="up_po_c")
         if up_c:
+            # FIX LOGIC NHẬP PO CUST TƯƠNG TỰ
             df = pd.read_excel(up_c, dtype=str).fillna("")
             recs = []
             for i, r in df.iterrows():
-                recs.append({"item_code": safe_str(r.iloc[1]), "item_name": safe_str(r.iloc[2]), "qty": fmt_num(to_float(r.iloc[4])), "unit_price": fmt_num(to_float(r.iloc[5]))})
+                try:
+                    recs.append({
+                        "item_code": safe_str(r.iloc[1]), 
+                        "item_name": safe_str(r.iloc[2]), 
+                        "qty": fmt_num(to_float(r.iloc[4])), 
+                        "unit_price": fmt_num(to_float(r.iloc[5]))
+                    })
+                except: pass
             st.session_state.temp_cust = pd.DataFrame(recs)
             
         ed_c = st.data_editor(st.session_state.temp_cust, num_rows="dynamic", use_container_width=True, key="editor_po_cust", hide_index=True)
