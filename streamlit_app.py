@@ -25,7 +25,7 @@ except ImportError:
 # =============================================================================
 # CẤU HÌNH & VERSION
 # =============================================================================
-APP_VERSION = "V4881 - FINAL FIX (JSON IMAGE ERROR + FULL FEATURES)"
+APP_VERSION = "V4882 - FINAL STABLE (FIX DUPLICATE + REVIEW FEATURES)"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="🏢")
 
 # --- CSS ---
@@ -49,6 +49,15 @@ st.markdown("""
         color: #cc0000;
         border-radius: 5px;
         border: 1px solid #ff0000;
+        font-weight: bold;
+        margin-top: 10px;
+    }
+    .success-box {
+        padding: 15px;
+        background-color: #d4edda;
+        color: #155724;
+        border-radius: 5px;
+        border: 1px solid #c3e6cb;
         font-weight: bold;
         margin-top: 10px;
     }
@@ -182,6 +191,9 @@ def load_data(table):
     except: return pd.DataFrame()
 
 def save_data_overwrite(table, df, match_col):
+    """
+    CƠ CHẾ LƯU: XÓA CŨ -> GHI MỚI
+    """
     if df.empty: return
     try:
         db_cols_map = {
@@ -217,11 +229,13 @@ def save_data_overwrite(table, df, match_col):
                 clean_recs.append(clean)
                 if match_col in clean and clean[match_col]: codes_to_del.append(clean[match_col])
         
+        # 1. Xóa cũ
         if codes_to_del:
             chunk_size = 500
             for i in range(0, len(codes_to_del), chunk_size):
                 supabase.table(table).delete().in_(match_col, codes_to_del[i:i+chunk_size]).execute()
         
+        # 2. Ghi mới
         if clean_recs:
             chunk_size = 500
             for i in range(0, len(clean_recs), chunk_size):
@@ -320,7 +334,7 @@ if 'customer_name' not in st.session_state: st.session_state.customer_name = ""
 if 'quote_number' not in st.session_state: st.session_state.quote_number = ""
 
 # --- UI ---
-st.title("HỆ THỐNG CRM QUẢN LÝ (V4881)")
+st.title("HỆ THỐNG CRM QUẢN LÝ (V4882)")
 is_admin = (st.sidebar.text_input("Admin Password", type="password") == "admin")
 
 t1, t2, t3, t4, t5, t6 = st.tabs(["DASHBOARD", "KHO HÀNG (PURCHASES)", "BÁO GIÁ (QUOTES)", "ĐƠN HÀNG (PO)", "TRACKING", "DỮ LIỆU NỀN"])
@@ -387,18 +401,19 @@ with t2:
                     }
                     if item["item_code"] or item["item_name"]: rows.append(item)
                 
+                # --- LOGIC FIX LỖI 23505 ---
                 df_rows = pd.DataFrame(rows)
                 if not df_rows.empty:
-                    df_unique = df_rows.drop_duplicates(subset=['item_code', 'item_name', 'specs', 'buying_price_rmb', 'nuoc'], keep='last')
+                    # Lọc trùng 3 tiêu chí của DB (Code, Price, NUOC) -> Giữ dòng cuối
+                    df_unique = df_rows.drop_duplicates(subset=['item_code', 'buying_price_rmb', 'nuoc'], keep='last')
                     clean_rows = df_unique.to_dict('records')
                     
-                    # FIX IMAGE JSON ERROR: Lọc bỏ object không phải string trong image_path
+                    # Fix Image object JSON error
                     for r in clean_rows:
-                        if not isinstance(r.get('image_path'), str):
-                            r['image_path'] = "" # Reset về chuỗi rỗng nếu là object lạ
+                        if not isinstance(r.get('image_path'), str): r['image_path'] = ""
 
                     save_data_overwrite("crm_purchases", pd.DataFrame(clean_rows), match_col='item_code')
-                    st.success(f"✅ Đã import {len(clean_rows)} mã hàng thành công!"); time.sleep(1); st.rerun()
+                    st.success(f"✅ Đã import {len(clean_rows)} mã hàng thành công! (Không lỗi trùng lặp)"); time.sleep(1); st.rerun()
                 else:
                     st.warning("Không tìm thấy dữ liệu hợp lệ.")
             except Exception as e: st.error(f"Lỗi Import: {e}")
@@ -427,7 +442,6 @@ with t3:
         st.session_state.quote_number = ""
         st.rerun()
 
-    # KHUNG TÍNH TOÁN
     with st.container(border=True):
         st.header("1. TÍNH TOÁN GIÁ")
         c_inf1, c_inf2 = st.columns(2)
@@ -458,7 +472,6 @@ with t3:
                         st.success("Đã tìm thấy giá vốn!")
                     except Exception as e: st.error(f"Lỗi tính toán: {e}")
 
-        # TÍNH TOÁN TỨC THÌ
         if 'current_quote_df' in st.session_state and not st.session_state.current_quote_df.empty:
             st.write("---")
             f1, f2 = st.columns(2)
@@ -482,7 +495,6 @@ with t3:
                 if ap_f:
                     curr_ap = parse_formula(ap_f, buy_vnd, curr_ap)
                     df.at[i, "AP price (VND)"] = fmt_num(curr_ap)
-                
                 if unit_f:
                     new_unit = parse_formula(unit_f, buy_vnd, curr_ap)
                     df.at[i, "Unit price (VND)"] = fmt_num(new_unit)
@@ -525,7 +537,6 @@ with t3:
             
             st.session_state.current_quote_df = df
             
-            # Editor
             edited_quote = st.data_editor(
                 st.session_state.current_quote_df,
                 column_config={
@@ -549,35 +560,35 @@ with t3:
 
     st.write(""); st.write(""); st.write(""); st.write("")
 
-    # KHUNG REVIEW
     if 'current_quote_df' in st.session_state and not st.session_state.current_quote_df.empty:
         with st.container(border=True):
             st.header("2. REVIEW LỢI NHUẬN")
-            df_review = st.session_state.current_quote_df.copy()
-            df_low = df_review[df_review["Profit (%)"].apply(lambda x: to_float(str(x).replace('%','')) < 10)]
             
-            if not df_low.empty:
-                st.dataframe(df_low[REVIEW_COLS], use_container_width=True, hide_index=True)
-                st.markdown(f"<div class='alert-box'>⚠️ CẢNH BÁO: Có {len(df_low)} mặt hàng lợi nhuận dưới 10%!</div>", unsafe_allow_html=True)
-            else:
-                st.success("✅ Tuyệt vời! Tất cả mặt hàng đều đạt lợi nhuận > 10%.")
+            if st.button("📉 Review Lợi Nhuận < 10%"):
+                df_review = st.session_state.current_quote_df.copy()
+                df_low = df_review[df_review["Profit (%)"].apply(lambda x: to_float(str(x).replace('%','')) < 10)]
+                
+                if not df_low.empty:
+                    st.dataframe(df_low[REVIEW_COLS], use_container_width=True, hide_index=True)
+                    st.markdown(f"<div class='alert-box'>⚠️ CẢNH BÁO: Có {len(df_low)} mặt hàng lợi nhuận dưới 10%!</div>", unsafe_allow_html=True)
+                else:
+                    st.markdown(f"<div class='success-box'>✅ Tuyệt vời! Tất cả mặt hàng đều đạt lợi nhuận > 10%.</div>", unsafe_allow_html=True)
 
-        # KHUNG EXPORT
         with st.container(border=True):
             st.header("3. XUẤT FILE BÁO GIÁ")
-            col_ex1, col_ex2 = st.columns(2)
+            col_ex1, col_ex2, col_ex3 = st.columns(3)
+            
             with col_ex1:
                 csv = edited_quote.to_csv(index=False).encode('utf-8-sig')
-                st.download_button("📥 Tải CSV (Thô)", csv, "RFQ_Result.csv", "text/csv")
+                st.download_button("📥 Lưu Lịch Sử (.csv)", csv, "Lich_Su_Bao_Gia.csv", "text/csv")
             
             with col_ex2:
                 if st.session_state.quote_template:
-                    if st.button("📤 EXPORT EXCEL (THEO TEMPLATE)"):
+                    if st.button("📤 Xuất Excel (Template AAA)"):
                         try:
                             output = io.BytesIO()
                             wb = load_workbook(io.BytesIO(st.session_state.quote_template.getvalue()))
                             ws = wb.active
-                            
                             leadtime_val = get_scalar(edited_quote['Leadtime'].iloc[0]) if not edited_quote.empty else ""
                             ws['H8'] = f"{leadtime_val}"
                             
@@ -593,19 +604,19 @@ with t3:
                                 ws.cell(row=current_row, column=6, value=to_float(r.get("Q'ty"))) 
                                 ws.cell(row=current_row, column=7, value=to_float(r.get("Unit price (VND)"))) 
                                 ws.cell(row=current_row, column=8, value=to_float(r.get("Total price (VND)"))) 
-                                
                                 for c in range(1, 9): ws.cell(row=current_row, column=c).border = thin_border
 
                             wb.save(output)
-                            st.download_button("📥 TẢI FILE BÁO GIÁ ĐÃ XONG", output.getvalue(), "Bao_Gia_Final.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                            st.download_button("📥 TẢI FILE EXCEL", output.getvalue(), "Bao_Gia_Final.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
                         except Exception as e: st.error(f"Lỗi xuất Excel: {e}")
                 else:
-                    st.warning("⚠️ Chưa có Template. Upload tại Tab 6.")
+                    st.warning("⚠️ Chưa upload Template ở Tab 6")
 
-            if st.button("💾 Lưu vào Lịch sử"):
-                to_save = edited_quote.copy()
-                save_data_overwrite("crm_shared_history", to_save, "history_id")
-                st.success("Đã lưu!")
+            with col_ex3:
+                if st.button("💾 Lưu vào DB (History)"):
+                    to_save = edited_quote.copy()
+                    save_data_overwrite("crm_shared_history", to_save, "history_id")
+                    st.success("Đã lưu vào Database!")
 
 # --- TAB 4: PO ---
 with t4:
@@ -699,7 +710,7 @@ with t5:
                 save_data_overwrite("crm_payment", ed_p, "po_no")
                 st.success("Updated")
         else:
-            st.info("Chưa có dữ liệu Payment. (Sẽ có khi Tracking = Delivered)")
+            st.info("Chưa có dữ liệu Payment.")
 
 # --- TAB 6: MASTER DATA ---
 with t6:
