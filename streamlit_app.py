@@ -25,7 +25,7 @@ except ImportError:
 # =============================================================================
 # CẤU HÌNH & VERSION
 # =============================================================================
-APP_VERSION = "V4860 - FINAL BUG FIX (DB CONSTRAINT FIXED)"
+APP_VERSION = "V4861 - FINAL FIX ERROR 21000 (AUTO DEDUPLICATE)"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="🛠️")
 
 # --- CSS ---
@@ -168,7 +168,7 @@ MAP_MASTER = {
     "destination": "destination", "paymentterm": "payment_term"
 }
 
-# --- DB HANDLERS (SỬ DỤNG THUẬT TOÁN UPSERT CỦA APP-3) ---
+# --- DB HANDLERS (UPDATED TO FIX 21000) ---
 @st.cache_data(ttl=5) 
 def load_data(table):
     try:
@@ -183,9 +183,8 @@ def load_data(table):
 
 def save_data(table, df, unique_cols=None):
     """
-    Sử dụng thuật toán Upsert chuẩn xác:
-    - Nếu unique_cols được cung cấp, sử dụng nó làm conflict target để update dòng cũ.
-    - Đảm bảo các dòng khác nhau về khóa (vd: giá khác nhau) vẫn được thêm mới.
+    Hàm lưu dữ liệu thông minh (Upsert).
+    Đã thêm logic Deduplicate để sửa lỗi 21000.
     """
     if df.empty: return
     try:
@@ -205,6 +204,11 @@ def save_data(table, df, unique_cols=None):
         }
         df = df.rename(columns=db_cols_map)
 
+        # FIX LỖI 21000: Loại bỏ dòng trùng lặp trong lô dữ liệu trước khi gửi
+        if unique_cols and set(unique_cols).issubset(df.columns):
+            # Giữ lại dòng cuối cùng nếu có trùng lặp
+            df = df.drop_duplicates(subset=unique_cols, keep='last')
+
         valid_db_cols = set(list(MAP_PURCHASE.values()) + list(MAP_MASTER.values()) + [
             "image_path", "po_number", "order_date", "price_rmb", "total_rmb", "price_vnd", "total_vnd", "eta", "supplier", "pdf_path",
             "customer", "unit_price", "total_price", "base_buying_vnd", "full_cost_total",
@@ -219,7 +223,7 @@ def save_data(table, df, unique_cols=None):
             clean = {k: safe_str(v) for k,v in r.items() if k in valid_db_cols}
             if clean: clean_recs.append(clean)
         
-        # LOGIC UPSERT (QUAN TRỌNG)
+        # Gửi dữ liệu theo batch
         if unique_cols:
             conflict_target = ",".join(unique_cols)
             chunk_size = 500
@@ -321,7 +325,7 @@ for k in ["end","buy","tax","vat","pay","mgmt","trans"]:
     if f"pct_{k}" not in st.session_state: st.session_state[f"pct_{k}"] = "0"
 
 # --- UI ---
-st.title("HỆ THỐNG CRM QUẢN LÝ (V4860)")
+st.title("HỆ THỐNG CRM QUẢN LÝ (V4861)")
 is_admin = (st.sidebar.text_input("Admin Password", type="password") == "admin")
 
 t1, t2, t3, t4, t5, t6 = st.tabs(["DASHBOARD", "KHO HÀNG (PURCHASES)", "BÁO GIÁ (QUOTES)", "ĐƠN HÀNG (PO)", "TRACKING", "DỮ LIỆU NỀN"])
@@ -400,9 +404,8 @@ with t2:
                     rows.append(d)
                     bar.progress((i+1)/len(df))
                 
-                # QUAN TRỌNG: CẬP NHẬT KEY UPSERT THÊM 'nuoc'
+                # SỬ DỤNG UPSERT ĐÃ FIX LỖI 21000
                 save_data("crm_purchases", pd.DataFrame(rows), unique_cols=['item_code', 'buying_price_rmb', 'nuoc'])
-                
                 st.success(f"✅ Đã import {len(rows)} mã hàng!"); time.sleep(1); st.rerun()
             except Exception as e: st.error(f"Lỗi Import: {e}")
             
