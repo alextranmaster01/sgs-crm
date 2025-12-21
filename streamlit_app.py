@@ -24,8 +24,8 @@ except ImportError:
 # =============================================================================
 # CẤU HÌNH & VERSION
 # =============================================================================
-APP_VERSION = "V4843 - FINAL FIXED (STABLE)"
-st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
+APP_VERSION = "V4845 - FULL COLUMNS & PROFIT %"
+st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="📊")
 
 # --- CSS ---
 st.markdown("""
@@ -88,7 +88,7 @@ def upload_to_drive(file_obj, sub_folder, file_name):
         return f"https://drive.google.com/thumbnail?id={file_id}&sz=200" 
     except: return ""
 
-# --- DATA HELPERS (SAFE) ---
+# --- DATA HELPERS (SAFE SCALAR) ---
 def get_scalar(val):
     if isinstance(val, pd.Series): return val.iloc[0] if not val.empty else None
     if isinstance(val, (list, np.ndarray)): return val[0] if len(val) > 0 else None
@@ -159,7 +159,12 @@ def save_data_overwrite(table, df, match_col):
                               "customer", "unit_price", "total_price", "base_buying_vnd", "full_cost_total",
                               "po_no", "partner", "status", "proof_image", "order_type", "last_update", "finished",
                               "invoice_no", "due_date", "paid_date",
-                              "history_id", "date", "quote_no", "ap_price", "ap_total_vnd", "gap", "end_user_val", "buyer_val", "import_tax_val", "vat_val", "transportation", "mgmt_fee", "payback_val", "profit_vnd", "profit_pct", "pct_end", "pct_buy", "pct_tax", "pct_vat", "pct_pay", "pct_mgmt", "pct_trans"])
+                              # CÁC CỘT CHO BẢNG HISTORY PHẢI KHỚP
+                              "history_id", "date", "quote_no", 
+                              "ap_price", "ap_total_vnd", "gap", 
+                              "end_user_val", "buyer_val", "import_tax_val", "vat_val", "transportation", "mgmt_fee", "payback_val", 
+                              "profit_vnd", "profit_pct", 
+                              "pct_end", "pct_buy", "pct_tax", "pct_vat", "pct_pay", "pct_mgmt", "pct_trans"])
         
         recs = df.to_dict(orient='records')
         clean_recs = []
@@ -230,8 +235,22 @@ def run_simple_matching(rfq_file, db_df):
             "Total buying price (VND)": fmt_num(rmb * qty_val * rate),
             "Leadtime": info['lead'], "Supplier": info['supp'], "Images": info['img'],
             "Type": info['type'], "N/U/O/C": info['nuoc'],
-            "AP Price": "0", "Unit Price": "0", 
-            "Total Sell": "0", "Gap": "0", "Profit": "0"
+            
+            # --- CÁC CỘT TÍNH TOÁN BỔ SUNG (THEO YÊU CẦU) ---
+            "AP price (VND)": "0", 
+            "AP total price (VND)": "0", 
+            "Unit price (VND)": "0", 
+            "Total price (VND)": "0", 
+            "GAP": "0",
+            "End user": "0",
+            "Buyer": "0",
+            "Import tax": "0",
+            "VAT": "0",
+            "Transportation": "0",
+            "Management fee": "0",
+            "Payback": "0",
+            "Profit (VND)": "0",
+            "Profit (%)": "0%"
         }
         results.append(row_res)
         
@@ -248,7 +267,7 @@ for k in ["end","buy","tax","vat","pay","mgmt","trans"]:
     if f"pct_{k}" not in st.session_state: st.session_state[f"pct_{k}"] = "0"
 
 # --- UI ---
-st.title("HỆ THỐNG CRM QUẢN LÝ (FULL CLOUD)")
+st.title("HỆ THỐNG CRM QUẢN LÝ (V4845)")
 is_admin = (st.sidebar.text_input("Admin Password", type="password") == "admin")
 
 t1, t2, t3, t4, t5, t6 = st.tabs(["DASHBOARD", "KHO HÀNG (PURCHASES)", "BÁO GIÁ (QUOTES)", "ĐƠN HÀNG (PO)", "TRACKING", "DỮ LIỆU NỀN"])
@@ -391,9 +410,9 @@ with t3:
             df = st.session_state.quote_result
             for i, r in df.iterrows():
                 buy_vnd = to_float(r["Buying price (VND)"])
-                curr_ap = to_float(r.get("AP Price", 0))
+                curr_ap = to_float(r.get("AP price (VND)", 0))
                 new_ap = parse_formula(ap_f, buy_vnd, curr_ap)
-                df.at[i, "AP Price"] = fmt_num(new_ap)
+                df.at[i, "AP price (VND)"] = fmt_num(new_ap)
             st.session_state.quote_result = df
             st.rerun()
 
@@ -401,9 +420,9 @@ with t3:
             df = st.session_state.quote_result
             for i, r in df.iterrows():
                 buy_vnd = to_float(r["Buying price (VND)"])
-                curr_ap = to_float(r.get("AP Price", 0))
+                curr_ap = to_float(r.get("AP price (VND)", 0))
                 new_unit = parse_formula(unit_f, buy_vnd, curr_ap)
-                df.at[i, "Unit Price"] = fmt_num(new_unit)
+                df.at[i, "Unit price (VND)"] = fmt_num(new_unit)
             st.session_state.quote_result = df
             st.rerun()
 
@@ -423,14 +442,15 @@ with t3:
             for i, r in df.iterrows():
                 qty = to_float(r["Q'ty"])
                 buy_total = to_float(r["Total buying price (VND)"])
-                unit_sell = to_float(r.get("Unit Price", 0))
-                ap_price = to_float(r.get("AP Price", 0))
+                
+                unit_sell = to_float(r.get("Unit price (VND)", 0))
+                ap_price = to_float(r.get("AP price (VND)", 0))
                 
                 total_sell = unit_sell * qty
                 ap_total = ap_price * qty
                 
                 gap = total_sell - ap_total 
-                gap_share = gap * 0.6
+                gap_share = gap * 0.6 if gap > 0 else 0
                 
                 v_end = ap_total * p_end
                 v_buy = total_sell * p_buy
@@ -443,9 +463,21 @@ with t3:
                 v_payback = gap * p_pay
                 profit = total_sell - buy_total - ops + v_payback
                 
-                df.at[i, "Total Sell"] = fmt_num(total_sell)
-                df.at[i, "Gap"] = fmt_num(gap)
-                df.at[i, "Profit"] = fmt_num(profit)
+                pct_profit = (profit / total_sell * 100) if total_sell else 0
+                
+                df.at[i, "AP total price (VND)"] = fmt_num(ap_total)
+                df.at[i, "Total price (VND)"] = fmt_num(total_sell)
+                df.at[i, "GAP"] = fmt_num(gap)
+                df.at[i, "Profit (VND)"] = fmt_num(profit)
+                df.at[i, "Profit (%)"] = f"{pct_profit:.1f}%"
+                
+                df.at[i, "End user"] = fmt_num(v_end)
+                df.at[i, "Buyer"] = fmt_num(v_buy)
+                df.at[i, "Import tax"] = fmt_num(v_tax)
+                df.at[i, "VAT"] = fmt_num(v_vat)
+                df.at[i, "Transportation"] = fmt_num(v_trans)
+                df.at[i, "Management fee"] = fmt_num(v_mgmt)
+                df.at[i, "Payback"] = fmt_num(v_payback)
                 
             st.session_state.quote_result = df
             st.success("Đã tính toán xong!")
@@ -456,10 +488,10 @@ with t3:
                 "Images": st.column_config.ImageColumn("Hình ảnh", width="small"),
                 "Buying price (RMB)": st.column_config.TextColumn("Giá Vốn RMB", disabled=True),
                 "Buying price (VND)": st.column_config.TextColumn("Giá Vốn VND", disabled=True),
-                "AP Price": st.column_config.TextColumn("AP Price (VND)", required=True),
-                "Unit Price": st.column_config.TextColumn("Unit Price (VND)", required=True),
-                "Total Sell": st.column_config.TextColumn("Thành Tiền Bán", disabled=True),
-                "Profit": st.column_config.TextColumn("LỢI NHUẬN", disabled=True),
+                "AP price (VND)": st.column_config.TextColumn("AP Price (VND)", required=True),
+                "Unit price (VND)": st.column_config.TextColumn("Unit Price (VND)", required=True),
+                "Total price (VND)": st.column_config.TextColumn("Thành Tiền Bán", disabled=True),
+                "Profit (VND)": st.column_config.TextColumn("LỢI NHUẬN", disabled=True),
             },
             use_container_width=True,
             height=600,
@@ -480,8 +512,21 @@ with t3:
                 "Exchange rate": "exchange_rate", "Buying price (VND)": "buying_price_vnd",
                 "Total buying price (VND)": "total_buying_price_vnd", "Leadtime": "leadtime",
                 "Supplier": "supplier_name", "Images": "image_path",
-                "Unit Price": "unit_price", "Total Sell": "total_price_vnd", "Profit": "profit_vnd",
-                "AP Price": "ap_price"
+                
+                "Unit price (VND)": "unit_price", 
+                "Total price (VND)": "total_price_vnd", 
+                "Profit (VND)": "profit_vnd",
+                "Profit (%)": "profit_pct",
+                "AP price (VND)": "ap_price",
+                "AP total price (VND)": "ap_total_vnd",
+                "GAP": "gap",
+                "End user": "end_user_val",
+                "Buyer": "buyer_val",
+                "Import tax": "import_tax_val",
+                "VAT": "vat_val",
+                "Transportation": "transportation",
+                "Management fee": "mgmt_fee",
+                "Payback": "payback_val"
             }
             to_save = to_save.rename(columns=rename_map)
             to_save["history_id"] = f"QUOTE_{int(time.time())}"
