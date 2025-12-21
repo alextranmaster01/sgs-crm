@@ -8,6 +8,7 @@ import io
 import time
 import unicodedata
 import mimetypes
+import numpy as np # Thêm numpy để xử lý data an toàn hơn
 
 # --- THƯ VIỆN KẾT NỐI CLOUD ---
 try:
@@ -17,14 +18,14 @@ try:
     from googleapiclient.discovery import build
     from googleapiclient.http import MediaIoBaseUpload
 except ImportError:
-    st.error("⚠️ Cài đặt thư viện: pip install pandas openpyxl supabase google-api-python-client google-auth-oauthlib")
+    st.error("⚠️ Cài đặt thư viện: pip install pandas openpyxl supabase google-api-python-client google-auth-oauthlib numpy")
     st.stop()
 
 # =============================================================================
 # CẤU HÌNH & VERSION
 # =============================================================================
-APP_VERSION = "V4830 - FIXED AMBIGUOUS ERROR & AUTO CALC"
-st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="✅")
+APP_VERSION = "V4830 - FIXED AMBIGUOUS & DATA DISPLAY"
+st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="🛡️")
 
 # --- CSS ---
 st.markdown("""
@@ -37,6 +38,7 @@ st.markdown("""
     .bg-ncc { background: linear-gradient(135deg, #667eea, #764ba2); }
     
     [data-testid="stDataFrame"] > div { height: 800px !important; }
+    /* Ẩn cột index bên trái */
     [data-testid="stDataFrame"] table thead th:first-child { display: none; }
     [data-testid="stDataFrame"] table tbody td:first-child { display: none; }
     </style>""", unsafe_allow_html=True)
@@ -84,12 +86,20 @@ def upload_to_drive(file_obj, sub_folder, file_name):
         try: srv.permissions().create(fileId=file_id, body={'role': 'reader', 'type': 'anyone'}).execute()
         except: pass
         
-        # FIX ẢNH: Link Thumbnail
         return f"https://drive.google.com/thumbnail?id={file_id}&sz=w200"
     except: return ""
 
-# --- DATA HELPERS (FIXED AMBIGUOUS ERROR) ---
+# --- DATA HELPERS (SỬA LỖI AMBIGUOUS) ---
+def safe_get(val):
+    """Hàm an toàn để lấy giá trị vô hướng (scalar) từ Series/List"""
+    if isinstance(val, (pd.Series, np.ndarray, list)):
+        if len(val) > 0:
+            return val[0] if isinstance(val, list) else val.iloc[0] if hasattr(val, 'iloc') else val[0]
+        return None
+    return val
+
 def safe_str(val): 
+    val = safe_get(val)
     if val is None: return ""
     s = str(val).strip()
     if s.lower() in ['nan', 'none', 'null', 'nat', '']: return ""
@@ -98,9 +108,10 @@ def safe_str(val):
 def safe_filename(s): return re.sub(r'[^\w\-_]', '_', unicodedata.normalize('NFKD', safe_str(s)).encode('ascii', 'ignore').decode('utf-8')).strip('_')
 
 def to_float(val):
+    val = safe_get(val)
     if val is None: return 0.0
     s = str(val).replace(",", "").replace("¥", "").replace("$", "").replace("RMB", "").replace("VND", "").replace(" ", "").replace("\n","")
-    if not s: return 0.0 # Check string rỗng an toàn
+    if not s: return 0.0
     try: 
         nums = re.findall(r"[-+]?\d*\.\d+|\d+", s)
         if not nums: return 0.0
@@ -149,9 +160,7 @@ def load_data(table):
     except: return pd.DataFrame()
 
 def save_data_overwrite(table, df, match_col):
-    """
-    Xóa dòng cũ có cùng mã -> Thêm dòng mới (Safe & Clean)
-    """
+    """Xóa cũ -> Thêm mới để tránh lỗi"""
     if df.empty: return
     try:
         VALID_COLS = {
@@ -171,18 +180,19 @@ def save_data_overwrite(table, df, match_col):
         codes_to_del = []
         
         for r in recs:
-            clean = {k: str(v) if v is not None and str(v)!='nan' else None for k,v in r.items() if k in valid}
+            clean = {k: str(safe_get(v)) if v is not None and str(safe_get(v))!='nan' else None for k,v in r.items() if k in valid}
             if clean: 
                 clean_recs.append(clean)
-                if match_col in clean: codes_to_del.append(clean[match_col])
+                if match_col in clean and clean[match_col]: codes_to_del.append(clean[match_col])
         
         if codes_to_del:
-            chunk_size = 500
+            # Xóa sạch các mã trùng
+            chunk_size = 200
             for i in range(0, len(codes_to_del), chunk_size):
                 supabase.table(table).delete().in_(match_col, codes_to_del[i:i+chunk_size]).execute()
         
         if clean_recs:
-            chunk_size = 500
+            chunk_size = 200
             for i in range(0, len(clean_recs), chunk_size):
                 supabase.table(table).insert(clean_recs[i:i+chunk_size]).execute()
             
@@ -265,7 +275,9 @@ with t2:
                     d = {}
                     # 1. Map dữ liệu
                     for nk, db in MAP_PURCHASE.items():
-                        if nk in hn: d[db] = safe_str(r[hn[nk]])
+                        if nk in hn: 
+                            val = r[hn[nk]]
+                            d[db] = safe_str(val) # Sử dụng safe_str phiên bản mới
                     
                     if not d.get('item_code'): continue
                     
@@ -283,7 +295,7 @@ with t2:
                     d['_clean_name'] = clean_lookup_key(d.get('item_name'))
                     d['_clean_specs'] = clean_lookup_key(d.get('specs'))
                     
-                    # 3. TỰ ĐỘNG TÍNH TOÁN (FIXED LOGIC)
+                    # 3. TỰ ĐỘNG TÍNH TOÁN (AUTO CALC LOGIC)
                     qty = to_float(d.get('qty'))
                     price_rmb = to_float(d.get('buying_price_rmb'))
                     rate = to_float(d.get('exchange_rate'))
