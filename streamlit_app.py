@@ -25,8 +25,8 @@ except ImportError:
 # =============================================================================
 # CẤU HÌNH & VERSION
 # =============================================================================
-APP_VERSION = "V4853 - FINAL UI FIX (SEPARATED CONTAINERS)"
-st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="📑")
+APP_VERSION = "V4854 - FINAL FIX (PO IMPORT ALL ITEMS)"
+st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="🏢")
 
 # --- CSS ---
 st.markdown("""
@@ -38,7 +38,6 @@ st.markdown("""
     .bg-profit { background: linear-gradient(135deg, #f83600, #f9d423); }
     .bg-ncc { background: linear-gradient(135deg, #667eea, #764ba2); }
     
-    /* Fix bảng không bị chồng chéo */
     [data-testid="stDataFrame"] { margin-bottom: 20px; }
     [data-testid="stDataFrame"] > div { height: auto !important; min_height: 150px; max_height: 600px; overflow-y: auto; }
     [data-testid="stDataFrame"] table thead th:first-child { display: none; }
@@ -275,13 +274,11 @@ def run_smart_matching(rfq_file, db_df):
             "Exchange rate": fmt_num(rate),
             "Buying price (VND)": fmt_num(rmb * rate),
             "Total buying price (VND)": fmt_num(rmb * qty_val * rate),
-            
             "AP price (VND)": "0", "AP total price (VND)": "0",
             "Unit price (VND)": "0", "Total price (VND)": "0",
             "GAP": "0", "End user": "0", "Buyer": "0", "Import tax": "0", "VAT": "0",
             "Transportation": "0", "Management fee": "0", "Payback": "0",
             "Profit (VND)": "0", "Profit (%)": "0%",
-            
             "Leadtime": info['lead'], "Supplier": info['supp'], "Images": info['img'],
             "Type": info['type'], "N/U/O/C": info['nuoc']
         }
@@ -309,7 +306,7 @@ for k in ["end","buy","tax","vat","pay","mgmt","trans"]:
     if f"pct_{k}" not in st.session_state: st.session_state[f"pct_{k}"] = "0"
 
 # --- UI ---
-st.title("HỆ THỐNG CRM QUẢN LÝ (V4853)")
+st.title("HỆ THỐNG CRM QUẢN LÝ (V4854)")
 is_admin = (st.sidebar.text_input("Admin Password", type="password") == "admin")
 
 t1, t2, t3, t4, t5, t6 = st.tabs(["DASHBOARD", "KHO HÀNG (PURCHASES)", "BÁO GIÁ (QUOTES)", "ĐƠN HÀNG (PO)", "TRACKING", "DỮ LIỆU NỀN"])
@@ -543,7 +540,6 @@ with t3:
             
             if not df_low.empty:
                 st.dataframe(df_low[REVIEW_COLS], use_container_width=True, hide_index=True)
-                # Cảnh báo nằm dưới cùng bên trái
                 st.error(f"⚠️ CẢNH BÁO: Có {len(df_low)} mặt hàng lợi nhuận dưới 10%!")
             else:
                 st.success("✅ Tất cả mặt hàng đều đạt lợi nhuận > 10%.")
