@@ -25,7 +25,7 @@ except ImportError:
 # =============================================================================
 # CẤU HÌNH & VERSION
 # =============================================================================
-APP_VERSION = "V4862 - FINAL GOLD (RESTORED TAB 2 + NEW FEATURES)"
+APP_VERSION = "V4863 - FINAL FIX ERROR 21000 + FULL UI"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="🏢")
 
 # --- CSS ---
@@ -326,7 +326,7 @@ for k in ["end","buy","tax","vat","pay","mgmt","trans"]:
     if f"pct_{k}" not in st.session_state: st.session_state[f"pct_{k}"] = "0"
 
 # --- UI ---
-st.title("HỆ THỐNG CRM QUẢN LÝ (V4862)")
+st.title("HỆ THỐNG CRM QUẢN LÝ (V4863)")
 is_admin = (st.sidebar.text_input("Admin Password", type="password") == "admin")
 
 t1, t2, t3, t4, t5, t6 = st.tabs(["DASHBOARD", "KHO HÀNG (PURCHASES)", "BÁO GIÁ (QUOTES)", "ĐƠN HÀNG (PO)", "TRACKING", "DỮ LIỆU NỀN"])
@@ -348,16 +348,19 @@ with t1:
         c2.markdown(f"<div class='card-3d bg-cost'><h3>TỔNG CHI PHÍ</h3><h1>{fmt_num(cost_ncc)}</h1></div>", unsafe_allow_html=True)
         c3.markdown(f"<div class='card-3d bg-profit'><h3>LỢI NHUẬN</h3><h1>{fmt_num(profit)}</h1></div>", unsafe_allow_html=True)
 
-# --- TAB 2: PURCHASES (GIỮ NGUYÊN 100% CỦA APP-5) ---
+# --- TAB 2: PURCHASES ---
 with t2:
     purchases_df = load_data("crm_purchases")
     c1, c2 = st.columns([1, 3])
     with c1:
         st.info("Import file BUYING PRICE-ALL.xlsx")
         up_file = st.file_uploader("Chọn file Excel", type=["xlsx"], key="up_pur")
-        if up_file and st.button("🚀 IMPORT & GHI ĐÈ"):
+        if up_file and st.button("🚀 IMPORT & TÍNH TOÁN"):
             try:
+                # SỬ DỤNG LẠI LOGIC CŨ (HEADER 0)
                 df = pd.read_excel(up_file, header=0, dtype=str).fillna("")
+                df = df.loc[:, ~df.columns.duplicated()]
+                
                 img_map = {}
                 try:
                     wb = load_workbook(up_file, data_only=False); ws = wb.active
@@ -402,20 +405,35 @@ with t2:
                     rows.append(d)
                     bar.progress((i+1)/len(df))
                 
-                # Hàm lưu riêng cho Tab 2 (từ app-5)
-                # Dùng Upsert với conflict item_code, price, nuoc
+                # --- FINAL FIX ERROR 21000: DEDUPLICATE BEFORE UPSERT ---
+                # 1. Chuyển list dict thành DataFrame để lọc trùng
                 valid_cols = list(MAP_PURCHASE.values()) + ["image_path", "_clean_code", "_clean_name", "_clean_specs"]
-                recs = pd.DataFrame(rows).to_dict(orient='records')
-                clean_recs = []
-                for r in recs:
-                    clean = {k: str(v) if v is not None and str(v)!='nan' else None for k,v in r.items() if k in valid_cols}
-                    if clean: clean_recs.append(clean)
+                recs = pd.DataFrame(rows)
                 
-                # Upsert tránh lỗi Duplicate
-                supabase.table("crm_purchases").upsert(clean_recs, on_conflict="item_code,buying_price_rmb,nuoc").execute()
+                # 2. Lọc trùng lặp dựa trên khóa duy nhất (giữ dòng cuối cùng)
+                if not recs.empty:
+                    # Chuyển đổi để đảm bảo tên cột khớp
+                    # Ở bước trên ta đã tạo 'rows' dictionary, giờ ta cần đảm bảo keys của rows khớp với valid_cols
+                    # Tuy nhiên rows đang chứa key chuẩn từ MAP_PURCHASE
+                    
+                    # Lọc lấy các cột valid và drop duplicates
+                    clean_recs_df = recs.drop_duplicates(subset=['item_code', 'buying_price_rmb', 'nuoc'], keep='last')
+                    
+                    # Chuyển về list dict để upsert
+                    final_recs = clean_recs_df.to_dict(orient='records')
+                    
+                    # Làm sạch giá trị nan
+                    clean_final = []
+                    for r in final_recs:
+                        c = {k: str(v) if v is not None and str(v)!='nan' else None for k,v in r.items() if k in valid_cols}
+                        if c: clean_final.append(c)
+
+                    # 3. Gửi Upsert
+                    if clean_final:
+                        supabase.table("crm_purchases").upsert(clean_final, on_conflict="item_code,buying_price_rmb,nuoc").execute()
+                
                 st.cache_data.clear()
-                
-                st.success(f"✅ Thành công! Đã xử lý {len(rows)} mã hàng."); time.sleep(1); st.rerun()
+                st.success(f"✅ Đã import {len(rows)} mã hàng! (Đã lọc trùng lặp)"); time.sleep(1); st.rerun()
             except Exception as e: st.error(f"Lỗi Import: {e}")
             
     with c2:
@@ -695,6 +713,8 @@ with t5:
                 urls = [upload_to_drive(f, "CRM_PROOF_IMAGES", f"PRF_{pk}_{f.name}") for f in prf]
                 if urls: supabase.table("crm_tracking").update({"proof_image": urls[0]}).eq("po_no", pk).execute()
                 st.success("Uploaded")
+        else:
+            st.info("Chưa có dữ liệu Tracking. Hãy tạo PO ở Tab 4 trước.")
 
     with c2:
         st.subheader("Payment")
@@ -703,6 +723,8 @@ with t5:
             if st.button("Update Payment"):
                 save_data_overwrite("crm_payment", ed_p, "po_no")
                 st.success("Updated")
+        else:
+            st.info("Chưa có dữ liệu Payment. (Sẽ có khi Tracking = Delivered)")
 
 # --- TAB 6: MASTER DATA ---
 with t6:
