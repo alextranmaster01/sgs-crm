@@ -8,7 +8,6 @@ import io
 import time
 import unicodedata
 import mimetypes
-import numpy as np
 
 # --- THƯ VIỆN KẾT NỐI CLOUD ---
 try:
@@ -18,14 +17,14 @@ try:
     from googleapiclient.discovery import build
     from googleapiclient.http import MediaIoBaseUpload
 except ImportError:
-    st.error("⚠️ Cài đặt: pip install pandas openpyxl supabase google-api-python-client google-auth-oauthlib numpy")
+    st.error("⚠️ Cài đặt: pip install pandas openpyxl supabase google-api-python-client google-auth-oauthlib")
     st.stop()
 
 # =============================================================================
 # CẤU HÌNH & VERSION
 # =============================================================================
-APP_VERSION = "V4831 - FIXED AMBIGUOUS & DATA LINKING"
-st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="🛠️")
+APP_VERSION = "V4832 - PURE LOGIC (V4800 STYLE)"
+st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="🏢")
 
 # --- CSS ---
 st.markdown("""
@@ -88,15 +87,16 @@ def upload_to_drive(file_obj, sub_folder, file_name):
         return f"https://drive.google.com/thumbnail?id={file_id}&sz=w200"
     except: return ""
 
-# --- DATA HELPERS (FIXED AMBIGUOUS ERROR) ---
+# --- HÀM XỬ LÝ DỮ LIỆU (LOGIC ĐƠN GIẢN HÓA CỦA V4800) ---
 def safe_str(val):
-    """Chuyển đổi an toàn sang string, xử lý cả Series/List"""
+    """Chuyển mọi thứ thành string an toàn, tránh lỗi Series ambiguous"""
     if val is None: return ""
-    # Nếu là Series/List/Array, lấy phần tử đầu tiên
-    if isinstance(val, (pd.Series, np.ndarray, list)):
-        if len(val) == 0: return ""
-        val = val[0] if isinstance(val, list) else (val.iloc[0] if hasattr(val, 'iloc') else val.flat[0])
-    
+    # Nếu là list/series, lấy phần tử đầu tiên
+    if hasattr(val, '__len__') and not isinstance(val, str):
+        if len(val) > 0: 
+            try: val = val.iloc[0] 
+            except: val = val[0]
+        else: return ""
     s = str(val).strip()
     if s.lower() in ['nan', 'none', 'null', 'nat', '']: return ""
     return s
@@ -104,24 +104,31 @@ def safe_str(val):
 def safe_filename(s): return re.sub(r'[^\w\-_]', '_', unicodedata.normalize('NFKD', safe_str(s)).encode('ascii', 'ignore').decode('utf-8')).strip('_')
 
 def to_float(val):
-    """Chuyển đổi an toàn sang float, KHÔNG BAO GIỜ LỖI AMBIGUOUS"""
+    """Hàm chuyển đổi số cực mạnh, lọc bỏ hết ký tự lạ"""
     if val is None: return 0.0
     
-    # Xử lý nếu val là Series/List/Array
-    if isinstance(val, (pd.Series, np.ndarray, list)):
-        if len(val) == 0: return 0.0
-        # Lấy phần tử đầu tiên
-        val = val[0] if isinstance(val, list) else (val.iloc[0] if hasattr(val, 'iloc') else val.flat[0])
+    # Xử lý nếu là Series/List (Nguyên nhân lỗi Ambiguous)
+    if hasattr(val, '__len__') and not isinstance(val, str):
+        if len(val) > 0: 
+            try: val = val.iloc[0] 
+            except: val = val[0]
+        else: return 0.0
 
-    s = str(val).replace(",", "").replace("¥", "").replace("$", "").replace("RMB", "").replace("VND", "").replace(" ", "").replace("\n","")
+    s = str(val).strip()
     if not s: return 0.0
-    try: 
-        nums = re.findall(r"[-+]?\d*\.\d+|\d+", s)
-        if not nums: return 0.0
-        return max([float(n) for n in nums])
+    
+    # Xóa ký tự tiền tệ và dấu phẩy ngàn
+    s_clean = s.replace(",", "").replace("¥", "").replace("$", "").replace("RMB", "").replace("VND", "").replace(" ", "").upper()
+    
+    # Dùng Regex lấy số
+    try:
+        numbers = re.findall(r"[-+]?\d*\.\d+|\d+", s_clean)
+        if not numbers: return 0.0
+        return float(numbers[0]) # Lấy số đầu tiên tìm thấy
     except: return 0.0
 
 def fmt_num(x): return "{:,.0f}".format(float(x)) if x is not None else "0"
+
 def clean_lookup_key(s): return re.sub(r'[^a-zA-Z0-9]', '', safe_str(s)).lower()
 
 def parse_formula(formula, buying, ap):
@@ -148,7 +155,7 @@ MAP_MASTER = {
     "destination": "destination", "paymentterm": "payment_term"
 }
 
-# --- DB HANDLERS ---
+# --- DATABASE HANDLERS ---
 @st.cache_data(ttl=5) 
 def load_data(table):
     try:
@@ -157,13 +164,16 @@ def load_data(table):
         if not df.empty and 'no' not in df.columns: 
             df.insert(0, 'no', range(1, len(df)+1))
         
-        drop_cols = ['id', '_clean_code', '_clean_name', '_clean_specs']
-        for c in drop_cols:
+        # Xóa cột rác
+        for c in ['id', '_clean_code', '_clean_name', '_clean_specs']:
             if c in df.columns: df = df.drop(columns=[c])
         return df
     except: return pd.DataFrame()
 
 def save_data_overwrite(table, df, match_col):
+    """
+    Chiến thuật: XÓA CŨ -> THÊM MỚI (An toàn tuyệt đối, tránh lỗi Duplicate Key)
+    """
     if df.empty: return
     try:
         VALID_COLS = {
@@ -183,23 +193,30 @@ def save_data_overwrite(table, df, match_col):
         codes_to_del = []
         
         for r in recs:
-            clean = {k: str(safe_str(v)) if v is not None and str(safe_str(v))!='nan' else None for k,v in r.items() if k in valid}
+            # Lọc chỉ lấy cột hợp lệ
+            clean = {k: safe_str(v) for k,v in r.items() if k in valid}
             if clean: 
                 clean_recs.append(clean)
-                if match_col in clean and clean[match_col]: codes_to_del.append(clean[match_col])
+                if match_col in clean and clean[match_col]: 
+                    codes_to_del.append(clean[match_col])
         
+        # 1. XÓA CŨ
         if codes_to_del:
-            chunk_size = 200
+            # Xóa từng đợt 500 để tránh quá tải URL
+            chunk_size = 500
             for i in range(0, len(codes_to_del), chunk_size):
-                supabase.table(table).delete().in_(match_col, codes_to_del[i:i+chunk_size]).execute()
+                chunk = codes_to_del[i:i+chunk_size]
+                supabase.table(table).delete().in_(match_col, chunk).execute()
         
+        # 2. THÊM MỚI
         if clean_recs:
-            chunk_size = 200
+            chunk_size = 500
             for i in range(0, len(clean_recs), chunk_size):
-                supabase.table(table).insert(clean_recs[i:i+chunk_size]).execute()
+                chunk = clean_recs[i:i+chunk_size]
+                supabase.table(table).insert(chunk).execute()
             
         st.cache_data.clear()
-    except Exception as e: st.error(f"❌ Lưu Lỗi: {e}")
+    except Exception as e: st.error(f"❌ Lỗi Lưu DB ({table}): {e}")
 
 # --- INIT ---
 if 'init' not in st.session_state:
@@ -210,7 +227,7 @@ if 'init' not in st.session_state:
     for k in ["end","buy","tax","vat","pay","mgmt","trans"]: st.session_state[f"pct_{k}"] = "0"
 
 # --- UI ---
-st.title("HỆ THỐNG CRM QUẢN LÝ (V4831)")
+st.title("HỆ THỐNG CRM QUẢN LÝ (V4832)")
 is_admin = (st.sidebar.text_input("Admin Password", type="password") == "admin")
 
 t1, t2, t3, t4, t5, t6 = st.tabs(["DASHBOARD", "KHO HÀNG (PURCHASES)", "BÁO GIÁ (QUOTES)", "ĐƠN HÀNG (PO)", "TRACKING", "DỮ LIỆU NỀN"])
@@ -244,13 +261,6 @@ with t1:
         c1.markdown(f"<div class='card-3d bg-sales'><h3>DOANH THU</h3><h1>{fmt_num(rev)}</h1></div>", unsafe_allow_html=True)
         c2.markdown(f"<div class='card-3d bg-cost'><h3>TỔNG CHI PHÍ</h3><h1>{fmt_num(cost_ncc + other_cost)}</h1></div>", unsafe_allow_html=True)
         c3.markdown(f"<div class='card-3d bg-profit'><h3>LỢI NHUẬN</h3><h1>{fmt_num(profit)}</h1></div>", unsafe_allow_html=True)
-        
-        st.divider()
-        c4, c5, c6, c7 = st.columns(4)
-        with c4: st.markdown(f"<div class='card-3d bg-ncc'><div>ĐƠN ĐẶT NCC</div><h3>{len(track[track['order_type']=='NCC']) if not track.empty else 0}</h3></div>", unsafe_allow_html=True)
-        with c5: st.markdown(f"<div class='card-3d bg-recv'><div>ĐƠN KHÁCH</div><h3>{len(db_cust['po_number'].unique()) if not db_cust.empty else 0}</h3></div>", unsafe_allow_html=True)
-        with c6: st.markdown(f"<div class='card-3d bg-del'><div>ĐÃ GIAO</div><h3>{len(track[(track['order_type']=='KH') & (track['status']=='Đã giao hàng')]) if not track.empty else 0}</h3></div>", unsafe_allow_html=True)
-        with c7: st.markdown(f"<div class='card-3d bg-pend'><div>CHỜ GIAO</div><h3>{len(db_cust['po_number'].unique()) - len(track[(track['order_type']=='KH') & (track['status']=='Đã giao hàng')]) if not db_cust.empty else 0}</h3></div>", unsafe_allow_html=True)
 
 # --- TAB 2: PURCHASES ---
 with t2:
@@ -275,7 +285,7 @@ with t2:
                 
                 for i, r in df.iterrows():
                     d = {}
-                    # 1. Map dữ liệu (Safe String)
+                    # 1. Map dữ liệu (Dùng safe_str)
                     for nk, db in MAP_PURCHASE.items():
                         if nk in hn: d[db] = safe_str(r[hn[nk]])
                     
@@ -295,17 +305,19 @@ with t2:
                     d['_clean_name'] = clean_lookup_key(d.get('item_name'))
                     d['_clean_specs'] = clean_lookup_key(d.get('specs'))
                     
-                    # 3. AUTO CALC (FIXED)
-                    qty = to_float(d.get('qty'))
-                    price_rmb = to_float(d.get('buying_price_rmb'))
-                    rate = to_float(d.get('exchange_rate'))
+                    # 3. AUTO CALC (LOGIC TÍNH TOÁN)
+                    qty = to_float(d.get('qty', 0))
+                    price_rmb = to_float(d.get('buying_price_rmb', 0))
+                    rate = to_float(d.get('exchange_rate', 0))
                     
-                    if rate == 0: rate = 4000 # Mặc định nếu thiếu
+                    # Fix lỗi mất data: Nếu rate chưa có, thử mặc định
+                    if rate == 0: rate = 4000 
                     
                     total_rmb = qty * price_rmb
                     price_vnd = price_rmb * rate
                     total_vnd = total_rmb * rate
                     
+                    # Cập nhật ngược lại string để lưu
                     d['qty'] = fmt_num(qty)
                     d['buying_price_rmb'] = fmt_num(price_rmb)
                     d['total_buying_price_rmb'] = fmt_num(total_rmb)
@@ -316,8 +328,9 @@ with t2:
                     rows.append(d)
                     bar.progress((i+1)/len(df))
                 
+                # Lưu (Ghi đè - Delete then Insert)
                 save_data_overwrite("crm_purchases", pd.DataFrame(rows), match_col='item_code')
-                st.success(f"✅ Đã import {len(rows)} mã hàng!"); time.sleep(1); st.rerun()
+                st.success(f"✅ Đã import {len(rows)} mã hàng! Số liệu đã được tính toán."); time.sleep(1); st.rerun()
             except Exception as e: st.error(f"Lỗi Import: {e}")
             
         st.divider()
@@ -332,6 +345,7 @@ with t2:
         search = st.text_input("Search", key="search_pur")
         view = purchases_df.copy()
         if search:
+            # Sửa lỗi Ambiguous trong search
             mask = view.apply(lambda x: search.lower() in str(x.values).lower(), axis=1)
             view = view[mask]
         
@@ -368,7 +382,7 @@ with t3:
     up_rfq = st.file_uploader("Import RFQ", type=["xlsx"], key="up_rfq")
     if up_rfq and st.button("Load RFQ"):
         try:
-            # TẠO MAP TRA CỨU
+            # Map tra cứu
             pmap = {}
             if not purchases_df.empty:
                 for _, r in purchases_df.iterrows():
@@ -381,11 +395,7 @@ with t3:
                 c_raw = safe_str(r.iloc[1]); n_raw = safe_str(r.iloc[2])
                 if not c_raw and not n_raw: continue
                 
-                # Tìm trong DB
-                clean_c = clean_lookup_key(c_raw)
-                clean_n = clean_lookup_key(n_raw)
-                target = pmap.get(clean_c) or pmap.get(clean_n)
-                
+                target = pmap.get(clean_lookup_key(c_raw)) or pmap.get(clean_lookup_key(n_raw))
                 item = {
                     "item_code": c_raw, "item_name": n_raw, "specs": safe_str(r.iloc[3]), 
                     "qty": fmt_num(to_float(r.iloc[4])), 
@@ -394,12 +404,10 @@ with t3:
                 }
                 
                 if target is not None:
-                    # Lấy data từ DB, ép kiểu số để tránh lỗi
                     db_rmb = to_float(target.get("buying_price_rmb"))
                     db_rate = to_float(target.get("exchange_rate"))
                     if db_rate == 0: db_rate = 4000
-                    
-                    db_vnd = db_rmb * db_rate # Tự tính lại VND để chắc chắn
+                    db_vnd = db_rmb * db_rate 
                     
                     item.update({
                         "buying_price_rmb": fmt_num(db_rmb),
@@ -439,7 +447,6 @@ with t3:
     
     final = edited.copy()
     for i, r in final.iterrows():
-        # TÍNH TOÁN REAL-TIME CHO BÁO GIÁ
         qty = to_float(r.get('qty')); buy_vnd = to_float(r.get('buying_price_vnd'))
         unit = to_float(r.get('unit_price')); ap = to_float(r.get('ap_price')); trans = to_float(pcts['trans'])
         
