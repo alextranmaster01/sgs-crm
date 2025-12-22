@@ -169,6 +169,7 @@ def search_file_in_drive_by_name(name_contains):
         q = f"name contains '{name_contains}' and trashed=false"
         results = srv.files().list(q=q, fields="files(id, name, parents)").execute().get('files', [])
         if results:
+            # Trả về ID, Name và Parent ID (để tạo link folder)
             return results[0]['id'], results[0]['name'], (results[0]['parents'][0] if 'parents' in results[0] else None)
         return None, None, None
     except: return None, None, None
@@ -858,6 +859,35 @@ with t4:
     if 'po_ncc_df' not in st.session_state: st.session_state.po_ncc_df = pd.DataFrame()
     if 'po_cust_df' not in st.session_state: st.session_state.po_cust_df = pd.DataFrame()
     
+    # ---------------- GLOBAL SEARCH FOR PO TAB ----------------
+    st.markdown("### 🔎 TRA CỨU ĐƠN HÀNG (PO)")
+    search_po = st.text_input("Nhập số PO, Mã hàng, Tên hàng, Khách, NCC...", key="search_po_tab")
+    if search_po:
+        df_po_cust = load_data("db_customer_orders")
+        df_po_supp = load_data("db_supplier_orders")
+        
+        # Search Customer POs
+        res_cust = pd.DataFrame()
+        if not df_po_cust.empty:
+            mask_c = df_po_cust.astype(str).apply(lambda x: x.str.contains(search_po, case=False, na=False)).any(axis=1)
+            res_cust = df_po_cust[mask_c]
+            if not res_cust.empty:
+                st.info(f"Tìm thấy {len(res_cust)} dòng trong PO Khách Hàng")
+                st.dataframe(res_cust, use_container_width=True)
+
+        # Search Supplier POs
+        res_supp = pd.DataFrame()
+        if not df_po_supp.empty:
+            mask_s = df_po_supp.astype(str).apply(lambda x: x.str.contains(search_po, case=False, na=False)).any(axis=1)
+            res_supp = df_po_supp[mask_s]
+            if not res_supp.empty:
+                st.info(f"Tìm thấy {len(res_supp)} dòng trong PO Nhà Cung Cấp")
+                st.dataframe(res_supp, use_container_width=True)
+                
+        if res_cust.empty and res_supp.empty:
+            st.warning("Không tìm thấy kết quả nào.")
+
+    st.divider()
     c_ncc, c_kh = st.columns(2)
     
     # ---------------- PO NHÀ CUNG CẤP ----------------
@@ -873,109 +903,112 @@ with t4:
                     st.success("Đã reset bộ đếm PO NCC!"); time.sleep(1); st.rerun()
                 else: st.error("Sai Pass")
 
-        # Nút Tạo Mới (Clear & Allow Upload)
         if st.button("➕ TẠO MỚI (Đặt NCC)"):
             st.session_state.po_ncc_df = pd.DataFrame()
-            st.session_state.show_ncc_upload = True # Cho phép hiện upload
+            st.session_state.show_ncc_upload = True 
             st.rerun()
 
         if st.session_state.show_ncc_upload:
             po_s_no = st.text_input("Số PO NCC", key="po_s_input")
-            supps = load_data("crm_suppliers")
-            s_name = st.selectbox("Chọn NCC", [""] + supps['short_name'].tolist() if not supps.empty else [], key="sel_ncc")
             
             up_s = st.file_uploader("Upload File Items (Excel)", key="ups")
             
             if up_s and st.button("Load Items NCC"):
-                # Load Excel
                 df_up = pd.read_excel(up_s, dtype=str).fillna("")
-                # Merge with Database to get Prices & Leadtime
                 db = load_data("crm_purchases")
+                # Map Code -> All Info
                 lookup = {clean_key(r['item_code']): r for r in db.to_dict('records')}
                 
                 recs = []
                 for i, r in df_up.iterrows():
-                    # Excel NCC: Code(B), Qty(E)
-                    code = safe_str(r.iloc[1])
-                    qty = to_float(r.iloc[4])
+                    # Assuming standard import list: No(0), Code(1), Name(2), Specs(3), Qty(4) 
+                    code_raw = safe_str(r.iloc[1])
+                    qty_val = to_float(r.iloc[4])
+                    no_val = safe_str(r.iloc[0]) # Copy 100% No column
                     
-                    # Lookup Info
-                    match = lookup.get(clean_key(code))
+                    match = lookup.get(clean_key(code_raw))
                     if match:
-                        name = match['item_name']
-                        specs = match['specs']
-                        buy_rmb = to_float(match['buying_price_rmb'])
-                        rate = to_float(match['exchange_rate'])
-                        buy_vnd = to_float(match['buying_price_vnd'])
-                        leadtime = match['leadtime']
+                        name = match['item_name']; specs = match['specs']; supplier = match['supplier_name']
+                        buy_rmb = to_float(match['buying_price_rmb']); rate = to_float(match['exchange_rate'])
+                        buy_vnd = to_float(match['buying_price_vnd']); leadtime = match['leadtime']
                     else:
-                        name = safe_str(r.iloc[2]); specs = safe_str(r.iloc[3]); 
+                        name = safe_str(r.iloc[2]); specs = safe_str(r.iloc[3]); supplier = "Unknown"
                         buy_rmb = 0; rate = 0; buy_vnd = 0; leadtime = "0"
                     
                     eta = calc_eta(datetime.now(), leadtime)
                     
                     recs.append({
-                        "No": i+1, "Item code": code, "Item name": name, "Specs": specs, "Q'ty": qty,
-                        "Buying price(RMB)": fmt_num(buy_rmb), "Total buying price(RMB)": fmt_num(buy_rmb * qty),
+                        "No": no_val, "Item code": code_raw, "Item name": name, "Specs": specs, "Q'ty": qty_val,
+                        "Buying price(RMB)": fmt_num(buy_rmb), "Total buying price(RMB)": fmt_num(buy_rmb * qty_val),
                         "Exchange rate": fmt_num(rate),
-                        "Buying price(VND)": fmt_num(buy_vnd), "Total buying price(VND)": fmt_num(buy_vnd * qty),
-                        "ETA": eta
+                        "Buying price(VND)": fmt_num(buy_vnd), "Total buying price(VND)": fmt_num(buy_vnd * qty_val),
+                        "Supplier": supplier, "ETA": eta
                     })
                 st.session_state.po_ncc_df = pd.DataFrame(recs)
             
-            # Hiển thị bảng
             if not st.session_state.po_ncc_df.empty:
-                st.dataframe(st.session_state.po_ncc_df, use_container_width=True)
+                # Column Config for better view
+                st.dataframe(
+                    st.session_state.po_ncc_df, 
+                    use_container_width=True, hide_index=True
+                )
                 
                 if st.button("💾 XÁC NHẬN ĐẶT HÀNG NCC"):
-                    if not po_s_no or not s_name: st.error("Thiếu PO hoặc NCC")
+                    if not po_s_no: st.error("Thiếu số PO")
                     else:
-                        # 1. Lưu DB Đơn hàng
-                        db_recs = []
-                        for r in st.session_state.po_ncc_df.to_dict('records'):
-                            db_recs.append({
-                                "po_number": po_s_no, "supplier": s_name, "order_date": datetime.now().strftime("%d/%m/%Y"),
-                                "item_code": r["Item code"], "item_name": r["Item name"], "specs": r["Specs"],
-                                "qty": to_float(r["Q'ty"]), "total_vnd": to_float(r["Total buying price(VND)"]),
-                                "eta": r["ETA"]
-                            })
-                        supabase.table("db_supplier_orders").insert(db_recs).execute()
+                        # 1. Group by Supplier -> Generate PO for each
+                        grouped = st.session_state.po_ncc_df.groupby("Supplier")
                         
-                        # 2. Insert Tracking (Link Data)
-                        track_rec = {
-                            "po_no": po_s_no, "partner": s_name, "status": "Ordered", "order_type": "NCC",
-                            "last_update": datetime.now().strftime("%d/%m/%Y"), 
-                            "eta": st.session_state.po_ncc_df.iloc[0]["ETA"]
-                        }
-                        supabase.table("crm_tracking").insert([track_rec]).execute()
-
-                        # 3. Xuất File Excel (No footer) & Lưu Drive
-                        wb = Workbook()
-                        ws = wb.active; ws.title = "PO NCC"
-                        ws.append(["No", "Item code", "Item name", "Specs", "Q'ty", "Buying(RMB)", "Total(RMB)", "Rate", "Buying(VND)", "Total(VND)", "ETA"])
-                        for r in st.session_state.po_ncc_df.to_dict('records'):
-                            ws.append([r["No"], r["Item code"], r["Item name"], r["Specs"], r["Q'ty"], r["Buying price(RMB)"], r["Total buying price(RMB)"], r["Exchange rate"], r["Buying price(VND)"], r["Total buying price(VND)"], r["ETA"]])
+                        created_files = []
                         
-                        out = io.BytesIO(); wb.save(out); out.seek(0)
+                        for supp_name, group in grouped:
+                            if not supp_name: supp_name = "Unknown"
+                            
+                            # Save DB
+                            db_recs = []
+                            for r in group.to_dict('records'):
+                                db_recs.append({
+                                    "po_number": po_s_no, "supplier": supp_name, "order_date": datetime.now().strftime("%d/%m/%Y"),
+                                    "item_code": r["Item code"], "item_name": r["Item name"], "specs": r["Specs"],
+                                    "qty": to_float(r["Q'ty"]), "total_vnd": to_float(r["Total buying price(VND)"]),
+                                    "eta": r["ETA"]
+                                })
+                            supabase.table("db_supplier_orders").insert(db_recs).execute()
+                            
+                            # Insert Tracking
+                            track_rec = {
+                                "po_no": f"{po_s_no}_{supp_name}", "partner": supp_name, "status": "Ordered", "order_type": "NCC",
+                                "last_update": datetime.now().strftime("%d/%m/%Y"), 
+                                "eta": group.iloc[0]["ETA"]
+                            }
+                            supabase.table("crm_tracking").insert([track_rec]).execute()
+                            
+                            # Export Excel
+                            wb = Workbook(); ws = wb.active; ws.title = "PO"
+                            headers = ["No", "Item code", "Item name", "Specs", "Q'ty", "Buying(RMB)", "Total(RMB)", "Rate", "Buying(VND)", "Total(VND)", "Supplier", "ETA"]
+                            ws.append(headers)
+                            for r in group.to_dict('records'):
+                                ws.append([r["No"], r["Item code"], r["Item name"], r["Specs"], r["Q'ty"], 
+                                           r["Buying price(RMB)"], r["Total buying price(RMB)"], r["Exchange rate"],
+                                           r["Buying price(VND)"], r["Total buying price(VND)"], r["Supplier"], r["ETA"]])
+                            
+                            out = io.BytesIO(); wb.save(out); out.seek(0)
+                            
+                            # PO_NCC \ NĂM \ NCC \ THÁNG
+                            curr_year = datetime.now().strftime("%Y")
+                            curr_month = datetime.now().strftime("%b").upper()
+                            file_name = f"PO_{po_s_no}_{supp_name}.xlsx"
+                            path_list = ["PO_NCC", curr_year, supp_name, curr_month]
+                            
+                            lnk, _ = upload_to_drive_structured(out, path_list, file_name)
+                            created_files.append((file_name, lnk, out)) 
                         
-                        # Cấu trúc: PO_NCC \ NĂM \ NCC \ THÁNG \ FILE
-                        curr_year = datetime.now().strftime("%Y")
-                        curr_month = datetime.now().strftime("%b").upper() # DEC
-                        file_name = f"PO_{po_s_no}_{s_name}.xlsx"
-                        path_list = ["PO_NCC", curr_year, s_name, curr_month]
+                        st.success(f"✅ Đã tạo {len(created_files)} PO cho các NCC!")
                         
-                        folder_link, file_id = upload_to_drive_structured(out, path_list, file_name)
-                        
-                        st.success("✅ Đặt hàng thành công! Đã link sang Tracking.")
-                        st.markdown(f"📂 **[Mở Folder PO NCC: {s_name}/{curr_month}]({folder_link})**", unsafe_allow_html=True)
-                        
-                        # Add Download Button for PO NCC
-                        st.download_button(
-                             label="📥 Tải File PO NCC",
-                             data=out,
-                             file_name=file_name,
-                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                        )
+                        for fname, lnk, buffer in created_files:
+                            c_d1, c_d2 = st.columns([2,1])
+                            c_d1.markdown(f"📂 **[Mở Folder: {fname}]({lnk})**", unsafe_allow_html=True)
+                            c_d2.download_button(label=f"📥 Tải {fname}", data=buffer, file_name=fname, mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key=f"dl_{fname}")
 
     # ---------------- PO KHÁCH HÀNG ----------------
     with c_kh:
@@ -1010,13 +1043,14 @@ with t4:
                     
                     if excel_files:
                         all_recs = []
-                        # Load History to get Price
+                        # Load History
                         hist = load_data("crm_shared_history") 
                         cust_hist = hist[hist['customer'] == c_name].sort_values(by='date', ascending=False)
                         
                         price_lookup = {}
                         for _, h in cust_hist.iterrows():
                             c_code = clean_key(h['item_code'])
+                            # Ensure lookup has latest price
                             if c_code not in price_lookup:
                                 price_lookup[c_code] = to_float(h['unit_price'])
                         
@@ -1027,10 +1061,10 @@ with t4:
                             try:
                                 df_up = pd.read_excel(f, header=None, skiprows=1, dtype=str).fillna("")
                                 for i, r in df_up.iterrows():
+                                    no_val = safe_str(r.iloc[0]) # Copy No
                                     code = safe_str(r.iloc[1])
                                     qty = to_float(r.iloc[4])
                                     
-                                    # Fix: Unit price retrieval
                                     unit_price = price_lookup.get(clean_key(code), 0)
                                     total = unit_price * qty
                                     leadtime = lt_lookup.get(clean_key(code), "0")
@@ -1038,7 +1072,7 @@ with t4:
 
                                     if code:
                                         all_recs.append({
-                                            "No.": safe_str(r.iloc[0]), "Item code": code, "Item name": safe_str(r.iloc[2]),
+                                            "No.": no_val, "Item code": code, "Item name": safe_str(r.iloc[2]),
                                             "Specs": safe_str(r.iloc[3]), "Q'ty": qty,
                                             "Unit price(VND)": fmt_num(unit_price), "Total price(VND)": fmt_num(total),
                                             "Customer": c_name, "ETA": eta, "Source File": f.name
@@ -1046,16 +1080,14 @@ with t4:
                             except: pass
                         
                         st.session_state.po_cust_df = pd.DataFrame(all_recs)
-                    else:
-                        st.info("Chỉ load dữ liệu từ file Excel. Các file PDF sẽ được lưu khi bấm 'Lưu PO'.")
+                    else: st.info("Chỉ load data từ Excel. PDF sẽ được lưu khi bấm 'Lưu PO'.")
 
             if not st.session_state.po_cust_df.empty:
-                st.dataframe(st.session_state.po_cust_df, use_container_width=True)
+                st.dataframe(st.session_state.po_cust_df, use_container_width=True, hide_index=True)
                 
                 if st.button("💾 LƯU PO KHÁCH HÀNG"):
                     if not po_c_no: st.error("Thiếu số PO")
                     else:
-                        # 1. Save DB
                         db_recs = []
                         for r in st.session_state.po_cust_df.to_dict('records'):
                             db_recs.append({
@@ -1066,7 +1098,6 @@ with t4:
                             })
                         supabase.table("db_customer_orders").insert(db_recs).execute()
                         
-                        # 2. Insert Tracking
                         track_rec = {
                             "po_no": po_c_no, "partner": c_name, "status": "Waiting", "order_type": "KH",
                             "last_update": datetime.now().strftime("%d/%m/%Y"),
@@ -1074,8 +1105,6 @@ with t4:
                         }
                         supabase.table("crm_tracking").insert([track_rec]).execute()
                         
-                        # 3. Save Uploaded Files to Drive
-                        # Path: PO_KHACH_HANG \ NĂM \ KHÁCH \ THÁNG
                         curr_year = datetime.now().strftime("%Y")
                         curr_month = datetime.now().strftime("%b").upper()
                         path_list = ["PO_KHACH_HANG", curr_year, c_name, curr_month]
@@ -1083,9 +1112,7 @@ with t4:
                         saved_links = []
                         if uploaded_files:
                             for upf in uploaded_files:
-                                # Reset pointer
                                 upf.seek(0)
-                                # Rename file to include PO No
                                 f_name = f"{po_c_no}_{upf.name}"
                                 lnk, _ = upload_to_drive_structured(upf, path_list, f_name)
                                 saved_links.append(lnk)
