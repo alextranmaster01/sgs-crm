@@ -12,7 +12,7 @@ import numpy as np
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO
 # =============================================================================
-APP_VERSION = "V5706 - LOGIC EXCEL FIXED"
+APP_VERSION = "V5707 - FINAL FORMULA FIX"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # CSS UI
@@ -306,7 +306,7 @@ with t2:
                 df_pur = df_pur[mask]
             st.dataframe(df_pur, column_config={"image_path": st.column_config.ImageColumn("Ảnh")}, use_container_width=True, height=600)
 
-# --- TAB 3: BÁO GIÁ (LOGIC FIX) ---
+# --- TAB 3: BÁO GIÁ (LOGIC FIXED FINAL) ---
 with t3:
     if 'quote_df' not in st.session_state: st.session_state.quote_df = pd.DataFrame()
     st.subheader("TÍNH TOÁN & LÀM BÁO GIÁ")
@@ -415,19 +415,24 @@ with t3:
         should_rerun = False
         df_work = edited_df.copy() # Làm việc trên bản copy
         
-        # 1. APPLY BUTTONS (Vectorized - Xử lý cả cột 1 lúc)
+        # 1. APPLY BUTTONS (Đã sửa lỗi invalid decimal literal)
         if btn_apply_ap and ap_f:
             try:
-                # Tạo hàm apply an toàn
                 def apply_ap_row(row):
                     buy = to_float(row["Buying price(VND)"])
                     ap = to_float(row["AP price(VND)"])
-                    expr = ap_f[1:].upper().replace("BUY", str(buy)).replace("AP", str(ap))
+                    
+                    # Xử lý chuỗi công thức: Chấp nhận dấu phẩy, dấu %, dấu X
+                    formula = ap_f.strip().upper()
+                    if formula.startswith("="): formula = formula[1:]
+                    formula = formula.replace(",", ".").replace("%", "/100").replace("X", "*")
+                    
+                    expr = formula.replace("BUY", str(buy)).replace("AP", str(ap))
                     return eval(expr)
                 
                 df_work["AP price(VND)"] = df_work.apply(apply_ap_row, axis=1)
                 should_rerun = True
-                st.success("Đã áp dụng công thức AP!")
+                st.success(f"Đã áp dụng: {ap_f}")
             except Exception as e: st.error(f"Lỗi công thức AP: {e}")
 
         if btn_apply_unit and unit_f:
@@ -435,19 +440,21 @@ with t3:
                 def apply_unit_row(row):
                     buy = to_float(row["Buying price(VND)"])
                     ap = to_float(row["AP price(VND)"])
-                    expr = unit_f[1:].upper().replace("BUY", str(buy)).replace("AP", str(ap))
+                    
+                    # Xử lý chuỗi công thức: Chấp nhận dấu phẩy, dấu %, dấu X
+                    formula = unit_f.strip().upper()
+                    if formula.startswith("="): formula = formula[1:]
+                    formula = formula.replace(",", ".").replace("%", "/100").replace("X", "*")
+
+                    expr = formula.replace("BUY", str(buy)).replace("AP", str(ap))
                     return eval(expr)
                     
                 df_work["Unit price(VND)"] = df_work.apply(apply_unit_row, axis=1)
                 should_rerun = True
-                st.success("Đã áp dụng công thức Unit!")
+                st.success(f"Đã áp dụng: {unit_f}")
             except Exception as e: st.error(f"Lỗi công thức Unit: {e}")
 
         # 2. KIỂM TRA THAY ĐỔI (Do User nhập tay hoặc do nút bấm)
-        # So sánh df_work (mới) và st.session_state.quote_df (cũ)
-        # Tuy nhiên do định dạng số/chuỗi có thể lệch, ta so sánh trên values sau khi clean
-        # Đơn giản nhất: Nếu có nút bấm -> Chắc chắn tính lại. Nếu không -> So sánh equals
-        
         if should_rerun or not df_work.equals(st.session_state.quote_df):
             # TÍNH TOÁN LẠI TOÀN BỘ LOGIC
             df_final = recalculate_quote_logic(df_work, params)
