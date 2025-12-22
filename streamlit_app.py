@@ -12,7 +12,7 @@ import numpy as np
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO
 # =============================================================================
-APP_VERSION = "V5701 - FINAL FIXED (KEY ERROR FIX)"
+APP_VERSION = "V5702 - FINAL FIXED (FORMULA LOGIC REPAIRED)"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # CSS UI
@@ -303,7 +303,7 @@ with t3:
                 buy_vnd = to_float(match.get('buying_price_vnd')) if match else 0
                 ex_rate = to_float(match.get('exchange_rate')) if match else 0
                 
-                # STANDARDIZED KEYS
+                # STANDARDIZED KEYS (Lưu ý: KEY CỘT ĐÚNG VỚI LOGIC TÍNH TOÁN DƯỚI)
                 item = {
                     "No": i+1,
                     "Item code": code,
@@ -341,31 +341,34 @@ with t3:
     ap_f = f1.text_input("Formula AP (vd: =BUY*1.1)")
     unit_f = f2.text_input("Formula Unit (vd: =AP*1.2)")
     
-    # CALCULATION LOOP
+    # CALCULATION LOOP (FIXED: UPPERCASE & ROBUST REPLACE)
     if not st.session_state.quote_df.empty:
         df = st.session_state.quote_df.copy()
         low_profit_idx = []
         for i, r in df.iterrows():
-            # KEY MATCHING MUST BE EXACT
+            # Get Base Values
+            # Lưu ý: Key phải khớp chính xác với Dictionary 'item' ở trên
             buy = to_float(r.get("Buying price(VND)", 0))
             qty = to_float(r.get("Q'ty", 0))
             ap = to_float(r.get("AP price(VND)", 0))
             
-            # Apply Formula (AP & Unit)
+            # Apply Formula (AP & Unit) - XỬ LÝ HOA/THƯỜNG
             if ap_f and ap_f.startswith("=") and len(ap_f) > 1: 
                 try:
-                    expr = ap_f[1:].replace("BUY", str(buy)).replace("AP", str(ap))
+                    # Viết hoa công thức để replace không bị lỗi case
+                    expr = ap_f[1:].upper().replace("BUY", str(buy)).replace("AP", str(ap))
                     ap = eval(expr)
                     df.at[i, "AP price(VND)"] = fmt_num(ap)
                 except: pass
 
             if unit_f and unit_f.startswith("=") and len(unit_f) > 1:
                 try:
-                    expr = unit_f[1:].replace("BUY", str(buy)).replace("AP", str(ap))
+                    expr = unit_f[1:].upper().replace("BUY", str(buy)).replace("AP", str(ap))
                     unit = eval(expr)
                     df.at[i, "Unit price(VND)"] = fmt_num(unit)
                 except: pass
             
+            # Re-read after formula update
             unit = to_float(df.at[i, "Unit price(VND)"])
             ap = to_float(df.at[i, "AP price(VND)"])
             
