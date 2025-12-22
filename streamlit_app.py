@@ -290,29 +290,26 @@ with t1:
 # --- TAB 2: KHO HÀNG (Mapping cột A-O) ---
 with t2:
     st.subheader("QUẢN LÝ KHO HÀNG (Excel Online)")
-    c_imp, c_view = st.columns([1, 2])
+    
+    # CHỈNH SỬA: Tăng tỷ lệ cột View để giảm kích thước cột Import (1:4)
+    c_imp, c_view = st.columns([1, 4])
     
     with c_imp:
-        st.markdown("**📥 Import Kho Hàng (Cột A -> O)**")
-        st.info("File Excel cần đúng thứ tự 15 cột: No, Code, Name, Specs, Qty, BuyRMB, TotalRMB, Rate, BuyVND, TotalVND, Leadtime, Supplier, Images, Type, N/U/O/C")
+        st.markdown("**📥 Import Kho Hàng**")
+        st.caption("Excel cột A->O") # Rút gọn text
+        st.info("No, Code, Name, Specs, Qty, BuyRMB, TotalRMB, Rate, BuyVND, TotalVND, Leadtime, Supplier, Images, Type, N/U/O/C")
         
-        with st.expander("🛠️ Admin Reset Database"):
-            # Giảm 1 nửa kích thước chiều ngang cho phần nhập pass và nút
-            c_adm_inner, _ = st.columns([1, 1])
-            with c_adm_inner:
-                adm_pass = st.text_input("Admin Password", type="password", key="adm_inv")
-                if st.button("⚠️ XÓA SẠCH KHO HÀNG"):
-                    if adm_pass == "admin":
-                        supabase.table("crm_purchases").delete().neq("id", 0).execute()
-                        st.success("Đã xóa sạch!"); time.sleep(1); st.rerun()
-                    else: st.error("Sai mật khẩu!")
+        with st.expander("🛠️ Reset DB"):
+            adm_pass = st.text_input("Pass", type="password", key="adm_inv")
+            if st.button("⚠️ XÓA SẠCH"):
+                if adm_pass == "admin":
+                    supabase.table("crm_purchases").delete().neq("id", 0).execute()
+                    st.success("Deleted!"); time.sleep(1); st.rerun()
+                else: st.error("Sai Pass!")
         
-        # Giảm 1 nửa kích thước chiều ngang cho phần upload
-        c_up_inner, _ = st.columns([1, 1])
-        with c_up_inner:
-            up_file = st.file_uploader("Upload File Excel", type=["xlsx"], key="inv_up")
+        up_file = st.file_uploader("Upload Excel", type=["xlsx"], key="inv_up")
             
-        if up_file and st.button("🚀 Import Kho"):
+        if up_file and st.button("🚀 Import"):
             try:
                 # 1. Xử lý Ảnh
                 wb = load_workbook(up_file, data_only=False); ws = wb.active
