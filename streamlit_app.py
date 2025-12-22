@@ -12,7 +12,7 @@ import numpy as np
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO
 # =============================================================================
-APP_VERSION = "V6000 - FIX MATCHING (CODE OR NAME)"
+APP_VERSION = "V6001 - SMART IMPORT & UPSERT"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # CSS UI
@@ -227,13 +227,20 @@ def recalculate_quote_logic(df, params):
     
     return df
 
-# MAPPING IMPORT
+# MAPPING IMPORT (Giữ nguyên để map đúng cột DB)
 MAP_PURCHASE = {
-    "item_code": ["Item code", "Mã hàng", "Code"], "item_name": ["Item name", "Tên hàng", "Name"],
-    "specs": ["Specs", "Quy cách"], "qty": ["Q'ty", "Qty", "Số lượng"],
-    "buying_price_rmb": ["Buying price (RMB)", "Giá RMB"], "exchange_rate": ["Exchange rate", "Tỷ giá"],
-    "buying_price_vnd": ["Buying price (VND)", "Giá VND"], "leadtime": ["Leadtime"],
-    "supplier_name": ["Supplier"], "image_path": ["image_path"], "type": ["Type"], "nuoc": ["NUOC"]
+    "item_code": ["Item code", "Mã hàng", "Code", "Mã"], 
+    "item_name": ["Item name", "Tên hàng", "Name", "Tên"],
+    "specs": ["Specs", "Quy cách", "Thông số"], 
+    "qty": ["Q'ty", "Qty", "Số lượng"],
+    "buying_price_rmb": ["Buying price (RMB)", "Giá RMB", "Buying RMB"], 
+    "exchange_rate": ["Exchange rate", "Tỷ giá"],
+    "buying_price_vnd": ["Buying price (VND)", "Giá VND", "Buying VND"], 
+    "leadtime": ["Leadtime", "Thời gian giao hàng"],
+    "supplier_name": ["Supplier", "Nhà cung cấp"], 
+    "image_path": ["image_path", "Hình ảnh", "Ảnh"], 
+    "type": ["Type", "Loại"], 
+    "nuoc": ["NUOC", "Nước"]
 }
 
 # =============================================================================
@@ -254,7 +261,7 @@ with t1:
     c2.markdown(f"<div class='card-3d bg-cost'><h3>CHI PHÍ NCC</h3><h1>{fmt_num(cost)}</h1></div>", unsafe_allow_html=True)
     c3.markdown(f"<div class='card-3d bg-profit'><h3>LỢI NHUẬN GỘP</h3><h1>{fmt_num(profit)}</h1></div>", unsafe_allow_html=True)
 
-# --- TAB 2: KHO HÀNG ---
+# --- TAB 2: KHO HÀNG (UPDATED LOGIC) ---
 with t2:
     st.subheader("QUẢN LÝ KHO HÀNG")
     c_imp, c_view = st.columns([1, 2])
@@ -269,11 +276,12 @@ with t2:
                 else: st.error("Sai mật khẩu!")
         
         st.divider()
-        st.write("📥 **Import / Ghi đè (Update)**")
+        st.write("📥 **Import / Ghi đè (Smart Upsert)**")
         up_file = st.file_uploader("Upload File Excel (Đảm bảo đủ dòng)", type=["xlsx"])
         
         if up_file and st.button("🚀 Import"):
             try:
+                # Xử lý hình ảnh trong Excel (nếu có)
                 wb = load_workbook(up_file, data_only=False); ws = wb.active
                 img_map = {}
                 for image in getattr(ws, '_images', []):
@@ -283,15 +291,17 @@ with t2:
                     link, _ = upload_to_drive(buf, "CRM_PRODUCT_IMAGES", fname)
                     img_map[row] = link
                 
+                # Đọc dữ liệu
                 df = pd.read_excel(up_file, dtype=str).fillna("")
                 hn = {normalize_header(c): c for c in df.columns}
                 
                 records = []
-                codes_to_del = []
                 prog = st.progress(0)
                 
+                # LOGIC MỚI: DUYỆT VÀ CHUẨN BỊ DATA
                 for i, r in df.iterrows():
                     d = {}
+                    # 1. Map các cột quan trọng (Logic Mapping)
                     for db_col, list_ex in MAP_PURCHASE.items():
                         val = ""
                         for kw in list_ex:
@@ -300,37 +310,46 @@ with t2:
                                 break
                         d[db_col] = val
                     
+                    # 2. Map thêm ảnh nếu có
                     if not d.get('image_path'): d['image_path'] = img_map.get(i+2, "")
                     d['row_order'] = i + 1 
                     
+                    # 3. Tính toán lại giá trị số (để lưu DB cho chuẩn)
                     qty = to_float(d.get('qty', 0))
                     p_rmb = to_float(d.get('buying_price_rmb', 0))
                     p_vnd = to_float(d.get('buying_price_vnd', 0))
                     
+                    d['qty'] = qty
+                    d['buying_price_rmb'] = p_rmb
+                    d['buying_price_vnd'] = p_vnd
                     d['total_buying_price_rmb'] = p_rmb * qty
                     d['total_buying_price_vnd'] = p_vnd * qty
                     
+                    # 4. Chỉ lấy dòng có Item Code
                     if d.get('item_code'):
                         records.append(d)
-                        if d['item_code'] not in codes_to_del:
-                            codes_to_del.append(d['item_code'])
                     
                     prog.progress((i + 1) / len(df))
 
-                if codes_to_del:
-                    chunk = 50
-                    for k in range(0, len(codes_to_del), chunk):
-                        batch = codes_to_del[k:k+chunk]
-                        supabase.table("crm_purchases").delete().in_("item_code", batch).execute()
-                    
+                # THỰC HIỆN UPSERT (GHI ĐÈ NẾU TRÙNG ITEM_CODE)
+                if records:
                     chunk_ins = 100
                     for k in range(0, len(records), chunk_ins):
-                        supabase.table("crm_purchases").insert(records[k:k+chunk_ins]).execute()
-                        
-                    st.success(f"Đã import đủ {len(records)} dòng (trên tổng {len(df)} dòng Excel)!")
+                        batch = records[k:k+chunk_ins]
+                        # Dùng upsert với on_conflict='item_code'
+                        # Yêu cầu: Table 'crm_purchases' trong Supabase phải có cột 'item_code' là Unique
+                        try:
+                            supabase.table("crm_purchases").upsert(batch, on_conflict="item_code").execute()
+                        except Exception as e_upsert:
+                             # Fallback nếu upsert lỗi (ví dụ chưa set unique key), dùng delete + insert thủ công cho batch đó
+                             codes = [b['item_code'] for b in batch]
+                             supabase.table("crm_purchases").delete().in_("item_code", codes).execute()
+                             supabase.table("crm_purchases").insert(batch).execute()
+
+                    st.success(f"✅ Đã xử lý xong {len(records)} dòng! (Tự động ghi đè dữ liệu trùng)")
                     st.cache_data.clear(); time.sleep(1); st.rerun()
                     
-            except Exception as e: st.error(f"Lỗi: {e}")
+            except Exception as e: st.error(f"Lỗi Import: {e}")
 
     with c_view:
         df_pur = load_data("crm_purchases", order_by="row_order")
