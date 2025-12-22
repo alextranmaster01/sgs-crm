@@ -135,6 +135,7 @@ def upload_to_drive_simple(file_obj, sub_folder, file_name):
         exists = srv.files().list(q=q_ex, fields="files(id)").execute().get('files', [])
         
         if exists:
+            # Logic ghi đè ảnh cũ nếu trùng tên
             file_id = exists[0]['id']
             srv.files().update(fileId=file_id, media_body=media).execute()
         else:
@@ -296,23 +297,44 @@ with t2:
         st.info("File Excel cần đúng thứ tự 15 cột: No, Code, Name, Specs, Qty, BuyRMB, TotalRMB, Rate, BuyVND, TotalVND, Leadtime, Supplier, Images, Type, N/U/O/C")
         
         with st.expander("🛠️ Admin Reset Database"):
-            adm_pass = st.text_input("Admin Password", type="password", key="adm_inv")
-            if st.button("⚠️ XÓA SẠCH KHO HÀNG"):
-                if adm_pass == "admin":
-                    supabase.table("crm_purchases").delete().neq("id", 0).execute()
-                    st.success("Đã xóa sạch!"); time.sleep(1); st.rerun()
-                else: st.error("Sai mật khẩu!")
+            # Giảm 1 nửa kích thước chiều ngang cho phần nhập pass và nút
+            c_adm_inner, _ = st.columns([1, 1])
+            with c_adm_inner:
+                adm_pass = st.text_input("Admin Password", type="password", key="adm_inv")
+                if st.button("⚠️ XÓA SẠCH KHO HÀNG"):
+                    if adm_pass == "admin":
+                        supabase.table("crm_purchases").delete().neq("id", 0).execute()
+                        st.success("Đã xóa sạch!"); time.sleep(1); st.rerun()
+                    else: st.error("Sai mật khẩu!")
         
-        up_file = st.file_uploader("Upload File Excel", type=["xlsx"], key="inv_up")
+        # Giảm 1 nửa kích thước chiều ngang cho phần upload
+        c_up_inner, _ = st.columns([1, 1])
+        with c_up_inner:
+            up_file = st.file_uploader("Upload File Excel", type=["xlsx"], key="inv_up")
+            
         if up_file and st.button("🚀 Import Kho"):
             try:
                 # 1. Xử lý Ảnh
                 wb = load_workbook(up_file, data_only=False); ws = wb.active
                 img_map = {}
+                
+                # Logic mới: Tên ảnh theo Specs & Ghi đè
                 for image in getattr(ws, '_images', []):
                     row = image.anchor._from.row + 1
                     buf = io.BytesIO(image._data())
-                    fname = f"IMG_R{row}_{int(time.time())}.png"
+                    
+                    # Lấy giá trị Specs từ cột D (Cột 4) của dòng tương ứng
+                    cell_specs = ws.cell(row=row, column=4).value # Cột D là cột 4
+                    specs_val = safe_str(cell_specs)
+                    
+                    # Sanitize tên file từ specs (bỏ ký tự đặc biệt)
+                    safe_name = re.sub(r'[\\/*?:"<>|]', "", specs_val).strip()
+                    if not safe_name: safe_name = f"NO_SPECS_R{row}"
+                    
+                    # Tên file ảnh dựa trên Specs
+                    fname = f"{safe_name}.png"
+                    
+                    # Upload (hàm simple đã có sẵn logic check exists -> update/overwrite)
                     link, _ = upload_to_drive_simple(buf, "CRM_PRODUCT_IMAGES", fname)
                     img_map[row] = link
                 
@@ -377,10 +399,15 @@ with t2:
     with c_view:
         # Load theo row_order ASC để đúng thứ tự Excel
         df_pur = load_data("crm_purchases", order_by="row_order", ascending=True) 
-        search = st.text_input("🔍 Tìm kiếm (Search all fields...)", key="search_pur")
+        
+        # Bỏ đi cột created_at và row_order khi hiển thị
+        cols_to_drop = ['created_at', 'row_order']
+        df_pur = df_pur.drop(columns=[c for c in cols_to_drop if c in df_pur.columns], errors='ignore')
+
+        search = st.text_input("🔍 Tìm kiếm (Name, Code, Specs...)", key="search_pur")
         
         if not df_pur.empty:
-            # Logic Search: Tìm trên tất cả các cột
+            # Logic Search: Tìm trên tất cả các cột (Đảm bảo tìm được tên, code, specs)
             if search:
                 # Convert toàn bộ DF sang string và tìm kiếm
                 mask = df_pur.astype(str).apply(lambda x: x.str.contains(search, case=False, na=False)).any(axis=1)
@@ -388,8 +415,16 @@ with t2:
             
             st.dataframe(
                 df_pur, 
-                column_config={"image_path": st.column_config.ImageColumn("Images")}, 
-                use_container_width=True, 
+                column_config={
+                    "image_path": st.column_config.ImageColumn("Images"),
+                    # Cấu hình hiển thị tiền tệ có dấu phân cách (1,000,000)
+                    "buying_price_vnd": st.column_config.NumberColumn("Buying (VND)", format="%.0f"),
+                    "total_buying_price_vnd": st.column_config.NumberColumn("Total (VND)", format="%.0f"),
+                    "buying_price_rmb": st.column_config.NumberColumn("Buying (RMB)", format="%.0f"),
+                    "total_buying_price_rmb": st.column_config.NumberColumn("Total (RMB)", format="%.0f"),
+                    "qty": st.column_config.NumberColumn("Qty", format="%.0f"),
+                }, 
+                use_container_width=True, # Tự động căn chỉnh vừa màn hình
                 height=700,
                 hide_index=True
             )
