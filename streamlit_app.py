@@ -414,12 +414,16 @@ with t2:
                 df_pur, 
                 column_config={
                     "image_path": st.column_config.ImageColumn("Images"),
-                    # Cấu hình hiển thị tiền tệ có dấu phân cách (1,000,000)
-                    "buying_price_vnd": st.column_config.NumberColumn("Buying (VND)", format="%.0f"),
-                    "total_buying_price_vnd": st.column_config.NumberColumn("Total (VND)", format="%.0f"),
-                    "buying_price_rmb": st.column_config.NumberColumn("Buying (RMB)", format="%.0f"),
-                    "total_buying_price_rmb": st.column_config.NumberColumn("Total (RMB)", format="%.0f"),
-                    "qty": st.column_config.NumberColumn("Qty", format="%.0f"),
+                    # Text Columns - Added Width for wrapping visibility
+                    "item_code": st.column_config.TextColumn("Code", width="medium"),
+                    "item_name": st.column_config.TextColumn("Name", width="medium"),
+                    "specs": st.column_config.TextColumn("Specs", width="large"),
+                    # Cấu hình hiển thị tiền tệ có dấu phân cách (1,000,000) using format="%,.0f"
+                    "buying_price_vnd": st.column_config.NumberColumn("Buying (VND)", format="%,.0f"),
+                    "total_buying_price_vnd": st.column_config.NumberColumn("Total (VND)", format="%,.0f"),
+                    "buying_price_rmb": st.column_config.NumberColumn("Buying (RMB)", format="%,.0f"),
+                    "total_buying_price_rmb": st.column_config.NumberColumn("Total (RMB)", format="%,.0f"),
+                    "qty": st.column_config.NumberColumn("Qty", format="%,.0f"),
                 }, 
                 use_container_width=True, # Tự động căn chỉnh vừa màn hình
                 height=700,
