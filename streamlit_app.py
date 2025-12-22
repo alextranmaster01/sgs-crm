@@ -164,12 +164,13 @@ def upload_to_drive_simple(file_obj, sub_folder, file_name):
 def search_file_in_drive_by_name(name_contains):
     """Tìm file trong Drive dựa vào tên (Partial match)"""
     srv = get_drive_service()
-    if not srv: return None, None
+    if not srv: return None, None, None
     try:
         q = f"name contains '{name_contains}' and trashed=false"
         results = srv.files().list(q=q, fields="files(id, name, parents)").execute().get('files', [])
         if results:
-            return results[0]['id'], results[0]['name'], results[0]['parents'][0] if 'parents' in results[0] else None
+            # Trả về ID, Name và Parent ID (để tạo link folder)
+            return results[0]['id'], results[0]['name'], (results[0]['parents'][0] if 'parents' in results[0] else None)
         return None, None, None
     except: return None, None, None
 
@@ -266,8 +267,7 @@ def recalculate_quote_logic(df, params):
     df["Payback(%)"] = df["GAP"] * ppay
     
     # --- FIX LOGIC TRANSPORTATION ---
-    # Gán trực tiếp giá trị nhập vào cho cột Transportation (không nhân Qty nữa nếu muốn fix cứng)
-    # Hoặc nếu muốn chia đều? Ở đây theo yêu cầu: "input 10000 thì hiện 10000" -> Gán thẳng.
+    # Input 10000 -> Hiện 10000 (Gán trực tiếp giá trị input)
     df["Transportation"] = val_trans 
 
     gap_positive = df["GAP"].apply(lambda x: x * 0.6 if x > 0 else 0)
@@ -479,10 +479,18 @@ with t3:
         up_src = c_src2.file_uploader("Hoặc Import Excel kiểm tra", type=["xlsx"], key="src_up")
         
         if st.button("Kiểm tra trạng thái"):
-            # Load History & PO Data
+            # Load History & PO Data & Purchases (for Name/Specs lookup)
             df_hist = load_data("crm_shared_history")
             df_po = load_data("db_customer_orders")
-            
+            df_items = load_data("crm_purchases") 
+
+            # Map Code -> Name/Specs for search (KEY FIX: Lookup Dictionary)
+            item_map = {}
+            if not df_items.empty:
+                for r in df_items.to_dict('records'):
+                    k = clean_key(r['item_code'])
+                    item_map[k] = f"{safe_str(r['item_name'])} {safe_str(r['specs'])}"
+
             # Prepare PO Lookup (Customer + Item Code -> PO Number)
             po_map = {}
             if not df_po.empty:
@@ -492,16 +500,29 @@ with t3:
 
             results = []
             
-            # Logic 1: Search by Text
+            # Logic 1: Search by Text (UPDATED to search in mapped Name/Specs)
             if search_kw and not df_hist.empty:
-                mask = df_hist.astype(str).apply(lambda x: x.str.contains(search_kw, case=False, na=False)).any(axis=1)
+                def check_row(row):
+                    # Check existing string columns in history
+                    if search_kw.lower() in str(row.values).lower(): return True
+                    # Check looked up name/specs from item code
+                    code = clean_key(row['item_code'])
+                    info = item_map.get(code, "").lower()
+                    if search_kw.lower() in info: return True
+                    return False
+
+                mask = df_hist.apply(check_row, axis=1)
                 found = df_hist[mask]
+                
                 for _, r in found.iterrows():
                     key = f"{clean_key(r['customer'])}_{clean_key(r['item_code'])}"
                     po_found = po_map.get(key, "")
+                    # Get info for display
+                    code_info = item_map.get(clean_key(r['item_code']), "")
                     results.append({
                         "Trạng thái": "✅ Đã báo giá", "Customer": r['customer'], "Date": r['date'],
-                        "Item Code": r['item_code'], "Unit Price": fmt_num(r['unit_price']),
+                        "Item Code": r['item_code'], "Info": code_info, 
+                        "Unit Price": fmt_num(r['unit_price']),
                         "Quote No": r['quote_no'], "PO No": po_found if po_found else "---"
                     })
             
@@ -509,35 +530,31 @@ with t3:
             if up_src:
                 try:
                     df_check = pd.read_excel(up_src, dtype=str).fillna("")
-                    # Find column headers dynamically
                     cols_check = {clean_key(c): c for c in df_check.columns}
                     
                     for i, r in df_check.iterrows():
-                        # Try to find meaningful columns
                         code = ""; name = ""; specs = ""
                         for k, col in cols_check.items():
                             if "code" in k: code = safe_str(r[col])
                             elif "name" in k: name = safe_str(r[col])
                             elif "specs" in k: specs = safe_str(r[col])
                         
-                        # Check in History
                         match = pd.DataFrame()
                         if not df_hist.empty:
                             if code: match = df_hist[df_hist['item_code'].str.contains(code, case=False, na=False)]
-                            if match.empty and name: match = df_hist[df_hist.astype(str).apply(lambda x: x.str.contains(name, case=False, na=False)).any(axis=1)]
+                            # Search by Name using Map lookup is hard efficiently without loop, skipping for now or use fuzzy?
+                            # Stick to code/direct match for Excel bulk check usually
                         
                         if not match.empty:
-                            # Found match
                             for _, m in match.iterrows():
                                 key = f"{clean_key(m['customer'])}_{clean_key(m['item_code'])}"
                                 po_found = po_map.get(key, "")
                                 results.append({
                                     "Trạng thái": "✅ Đã báo giá", "Customer": m['customer'], "Date": m['date'],
-                                    "Item Code": m['item_code'], "Unit Price": fmt_num(m['unit_price']),
-                                    "Quote No": m['quote_no'], "PO No": po_found
+                                    "Item Code": m['item_code'], "Info": item_map.get(clean_key(m['item_code']), ""),
+                                    "Unit Price": fmt_num(m['unit_price']), "Quote No": m['quote_no'], "PO No": po_found
                                 })
                         else:
-                            # Not found
                             results.append({
                                 "Trạng thái": "❌ Chưa báo giá", "Item Code": code, "Customer": "---", 
                                 "Date": "---", "Unit Price": "---", "Quote No": "---", "PO No": "---"
@@ -553,37 +570,37 @@ with t3:
     with st.expander("📂 XEM CHI TIẾT FILE LỊCH SỬ (COST & LỢI NHUẬN)", expanded=False):
         df_hist_idx = load_data("crm_shared_history", order_by="date")
         if not df_hist_idx.empty:
-            # Create a list of available quotes to select
             df_hist_idx['display'] = df_hist_idx.apply(lambda x: f"{x['date']} | {x['customer']} | Quote: {x['quote_no']}", axis=1)
             unique_quotes = df_hist_idx['display'].unique()
+            
+            # Logic: Selectbox changed -> Find folder -> Show Link
             sel_quote_hist = st.selectbox("Chọn báo giá cũ để xem chi tiết:", [""] + list(unique_quotes))
             
-            if sel_quote_hist and st.button("Tải file chi tiết"):
-                # Extract keys
+            if sel_quote_hist:
                 parts = sel_quote_hist.split(" | ")
                 if len(parts) >= 3:
                     q_no = parts[2].replace("Quote: ", "").strip()
                     cust = parts[1].strip()
                     
-                    # Search CSV in Drive: HIST_{q_no}_{cust}
                     search_name = f"HIST_{q_no}_{cust}"
                     fid, fname, pid = search_file_in_drive_by_name(search_name)
                     
-                    if fid:
-                        # Mở folder
-                        if pid:
-                            folder_link = f"https://drive.google.com/drive/folders/{pid}"
-                            st.markdown(f"📂 [Mở Folder Lịch Sử Trên Drive]({folder_link})", unsafe_allow_html=True)
+                    if pid:
+                         folder_link = f"https://drive.google.com/drive/folders/{pid}"
+                         st.markdown(f"👉 **[Mở Folder chứa file này trên Google Drive]({folder_link})**", unsafe_allow_html=True)
+                    
+                    if fid and st.button(f"Tải file chi tiết: {fname}"):
+                         fh = download_from_drive(fid)
+                         if fh:
+                             try:
+                                 df_csv = pd.read_csv(fh)
+                                 st.success("Đã tải xong!")
+                                 st.dataframe(df_csv, use_container_width=True)
+                             except: st.error("Lỗi đọc file CSV.")
+                         else: st.error("Không tải được file.")
+                    elif not fid:
+                        st.warning(f"Không tìm thấy file chi tiết trên Drive (HIST_{q_no}...).")
 
-                        fh = download_from_drive(fid)
-                        if fh:
-                            try:
-                                df_csv = pd.read_csv(fh)
-                                st.success(f"Đã tải: {fname}")
-                                st.dataframe(df_csv, use_container_width=True)
-                            except: st.error("Lỗi đọc file CSV.")
-                        else: st.error("Không tải được file.")
-                    else: st.warning(f"Không tìm thấy file chi tiết cho {q_no} trên Drive.")
         else: st.info("Chưa có lịch sử.")
 
     st.divider()
@@ -708,7 +725,7 @@ with t3:
         cols_order = ["Cảnh báo", "No"] + [c for c in st.session_state.quote_df.columns if c not in ["Cảnh báo", "No"]]
         st.session_state.quote_df = st.session_state.quote_df[cols_order]
 
-        # REMOVE COLUMNS: Image & Profit_Pct_Raw
+        # REMOVE COLUMNS: Image & Profit_Pct_Raw (Ẩn khỏi bảng Editor nhưng vẫn giữ trong DF)
         cols_to_hide = ["Image", "Profit_Pct_Raw"]
         df_show = st.session_state.quote_df.drop(columns=[c for c in cols_to_hide if c in st.session_state.quote_df.columns], errors='ignore')
 
