@@ -167,11 +167,11 @@ def search_file_in_drive_by_name(name_contains):
     if not srv: return None, None
     try:
         q = f"name contains '{name_contains}' and trashed=false"
-        results = srv.files().list(q=q, fields="files(id, name)").execute().get('files', [])
+        results = srv.files().list(q=q, fields="files(id, name, parents)").execute().get('files', [])
         if results:
-            return results[0]['id'], results[0]['name']
-        return None, None
-    except: return None, None
+            return results[0]['id'], results[0]['name'], results[0]['parents'][0] if 'parents' in results[0] else None
+        return None, None, None
+    except: return None, None, None
 
 def download_from_drive(file_id):
     srv = get_drive_service()
@@ -250,7 +250,7 @@ def recalculate_quote_logic(df, params):
     pend = params['end']/100; pbuy = params['buy']/100
     ptax = params['tax']/100; pvat = params['vat']/100
     ppay = params['pay']/100; pmgmt = params['mgmt']/100
-    val_trans = params['trans']
+    val_trans = params['trans'] # Đây là giá trị Transportation nhập vào
 
     df["Total buying price(VND)"] = df["Buying price(VND)"] * df["Q'ty"]
     df["Total buying price(rmb)"] = df["Buying price(RMB)"] * df["Q'ty"]
@@ -264,7 +264,11 @@ def recalculate_quote_logic(df, params):
     df["VAT"] = df["Total price(VND)"] * pvat
     df["Management fee(%)"] = df["Total price(VND)"] * pmgmt
     df["Payback(%)"] = df["GAP"] * ppay
-    df["Transportation"] = val_trans * df["Q'ty"]
+    
+    # --- FIX LOGIC TRANSPORTATION ---
+    # Gán trực tiếp giá trị nhập vào cho cột Transportation (không nhân Qty nữa nếu muốn fix cứng)
+    # Hoặc nếu muốn chia đều? Ở đây theo yêu cầu: "input 10000 thì hiện 10000" -> Gán thẳng.
+    df["Transportation"] = val_trans 
 
     gap_positive = df["GAP"].apply(lambda x: x * 0.6 if x > 0 else 0)
     cost_ops = gap_positive + df["End user(%)"] + df["Buyer(%)"] + df["Import tax(%)"] + df["VAT"] + df["Management fee(%)"] + df["Transportation"]
@@ -563,9 +567,14 @@ with t3:
                     
                     # Search CSV in Drive: HIST_{q_no}_{cust}
                     search_name = f"HIST_{q_no}_{cust}"
-                    fid, fname = search_file_in_drive_by_name(search_name)
+                    fid, fname, pid = search_file_in_drive_by_name(search_name)
                     
                     if fid:
+                        # Mở folder
+                        if pid:
+                            folder_link = f"https://drive.google.com/drive/folders/{pid}"
+                            st.markdown(f"📂 [Mở Folder Lịch Sử Trên Drive]({folder_link})", unsafe_allow_html=True)
+
                         fh = download_from_drive(fid)
                         if fh:
                             try:
@@ -699,21 +708,27 @@ with t3:
         cols_order = ["Cảnh báo", "No"] + [c for c in st.session_state.quote_df.columns if c not in ["Cảnh báo", "No"]]
         st.session_state.quote_df = st.session_state.quote_df[cols_order]
 
+        # REMOVE COLUMNS: Image & Profit_Pct_Raw
+        cols_to_hide = ["Image", "Profit_Pct_Raw"]
+        df_show = st.session_state.quote_df.drop(columns=[c for c in cols_to_hide if c in st.session_state.quote_df.columns], errors='ignore')
+
         edited_df = st.data_editor(
-            st.session_state.quote_df,
+            df_show,
             column_config={
-                "Image": st.column_config.ImageColumn("Ảnh"),
                 "Buying price(RMB)": st.column_config.TextColumn("Buying(RMB)", disabled=True),
                 "Buying price(VND)": st.column_config.TextColumn("Buying(VND)", disabled=True),
                 "Cảnh báo": st.column_config.TextColumn("Cảnh báo", width="small", disabled=True),
                 "Q'ty": st.column_config.NumberColumn("Q'ty", format="%d"),
             },
             use_container_width=True, height=600, key="main_editor",
-            hide_index=True # Bỏ cột index 0,1,2...
+            hide_index=True 
         )
         
-        df_temp = edited_df.copy()
-        df_recalc = recalculate_quote_logic(df_temp, params)
+        # Merge edits back to main df (preserve hidden cols)
+        for c in edited_df.columns:
+            st.session_state.quote_df[c] = edited_df[c]
+
+        df_recalc = recalculate_quote_logic(st.session_state.quote_df, params)
         if not df_recalc.equals(st.session_state.quote_df):
              st.session_state.quote_df = df_recalc; st.rerun()
 
@@ -728,7 +743,6 @@ with t3:
             st.write("### 📋 BẢNG REVIEW")
             cols_review = ["No", "Item code", "Item name", "Specs", "Q'ty", "Unit price(VND)", "Total price(VND)", "Leadtime"]
             valid_cols = [c for c in cols_review if c in st.session_state.quote_df.columns]
-            # Use TextColumn for nice formatting in Review
             st.dataframe(
                 st.session_state.quote_df[valid_cols], 
                 use_container_width=True, hide_index=True
@@ -740,10 +754,8 @@ with t3:
                 if not cust_name: st.error("Chưa chọn khách hàng!")
                 else:
                     try:
-                        # 1. Tìm file Template AAA-QUOTATION.xlsx (FIX LỖI)
-                        # Thay vì tìm chính xác, tải toàn bộ list và dùng pandas filter
+                        # 1. Tìm file Template AAA-QUOTATION.xlsx
                         df_tmpl = load_data("crm_templates")
-                        # Tìm dòng có tên chứa AAA-QUOTATION
                         match_tmpl = df_tmpl[df_tmpl['template_name'].astype(str).str.contains("AAA-QUOTATION", case=False, na=False)]
                         
                         if match_tmpl.empty:
@@ -756,14 +768,11 @@ with t3:
                                 # 2. Fill Data
                                 wb = load_workbook(fh); ws = wb.active
                                 start_row = 10
-                                
-                                # Lấy Leadtime dòng đầu tiên (hoặc max) để điền vào H8
                                 first_leadtime = st.session_state.quote_df.iloc[0]['Leadtime'] if not st.session_state.quote_df.empty else ""
                                 ws['H8'] = safe_str(first_leadtime)
 
                                 for idx, row in st.session_state.quote_df.iterrows():
                                     r = start_row + idx
-                                    # Mapping: No->A, Code->C, Name->D, Specs->E, Qty->F, Unit->G, Total->H
                                     ws[f'A{r}'] = row['No']
                                     ws[f'C{r}'] = row['Item code']
                                     ws[f'D{r}'] = row['Item name']
@@ -783,6 +792,10 @@ with t3:
                                 lnk, _ = upload_to_drive_structured(out, path_list, fname)
                                 st.success(f"✅ Đã xuất báo giá: {fname}")
                                 st.markdown(f"📂 [Mở Folder]({lnk})", unsafe_allow_html=True)
+                                
+                                # Download Button
+                                st.download_button(label="📥 Tải File Về Máy", data=out, file_name=fname, mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
                     except Exception as e: st.error(f"Lỗi xuất Excel: {e}")
             st.markdown('</div>', unsafe_allow_html=True)
 
@@ -803,17 +816,22 @@ with t3:
                         })
                     supabase.table("crm_shared_history").insert(recs).execute()
                     
-                    # 2. Save CSV History to Drive
+                    # 2. Save CSV History to Drive with NEW STRUCTURE
                     try:
                         csv_buffer = io.BytesIO()
-                        # Lưu toàn bộ DF bao gồm các cột % chi phí
                         st.session_state.quote_df.to_csv(csv_buffer, index=False, encoding='utf-8-sig')
                         csv_buffer.seek(0)
                         
                         csv_name = f"HIST_{quote_no}_{cust_name}_{int(time.time())}.csv"
-                        # Upload vào folder QUOTATION_HISTORY
-                        lnk, _ = upload_to_drive_structured(csv_buffer, ["QUOTATION_HISTORY"], csv_name)
+                        
+                        # Structure: QUOTATION_HISTORY \ KHACH \ NAM \ THANG
+                        curr_year = datetime.now().strftime("%Y")
+                        curr_month = datetime.now().strftime("%b").upper()
+                        path_list_hist = ["QUOTATION_HISTORY", cust_name, curr_year, curr_month]
+                        
+                        lnk, _ = upload_to_drive_structured(csv_buffer, path_list_hist, csv_name)
                         st.success("✅ Đã lưu lịch sử DB & CSV!")
+                        st.markdown(f"📂 [Folder Lịch Sử]({lnk})", unsafe_allow_html=True)
                     except Exception as e: st.error(f"Lỗi lưu CSV: {e}")
                     
                 else: st.error("Chọn khách!")
