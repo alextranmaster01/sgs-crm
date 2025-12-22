@@ -12,7 +12,7 @@ import numpy as np
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO
 # =============================================================================
-APP_VERSION = "V5900 - FINAL FIXED (EXPORT & FORMULA)"
+APP_VERSION = "V6000 - FIX MATCHING (CODE OR NAME)"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # CSS UI
@@ -356,7 +356,7 @@ with t3:
     quote_no = c2.text_input("Số Báo Giá", key="q_no")
     if c3.button("🔄 Reset Quote"): 
         st.session_state.quote_df = pd.DataFrame()
-        st.session_state.show_review = False # Reset trạng thái review
+        st.session_state.show_review = False 
         for k in ["end","buy","tax","vat","pay","mgmt","trans"]:
              if f"pct_{k}" in st.session_state: del st.session_state[f"pct_{k}"]
         st.rerun()
@@ -372,7 +372,7 @@ with t3:
             st.session_state[f"pct_{k}"] = val
             params[k] = to_float(val)
 
-    # Matching RFQ
+    # Matching RFQ (LOGIC MỚI: TÌM THEO CODE TRƯỚC, NẾU KHÔNG THẤY THÌ TÌM THEO TÊN)
     cf1, cf2 = st.columns([1, 2])
     rfq = cf1.file_uploader("Upload RFQ (xlsx)", type=["xlsx"])
     if rfq and cf2.button("🔍 Matching"):
@@ -381,31 +381,49 @@ with t3:
         db = load_data("crm_purchases")
         if db.empty: st.error("Kho rỗng!")
         else:
-            lookup = {clean_key(r['item_code']): r for r in db.to_dict('records')}
+            # Tạo 2 bộ từ điển để tra cứu: 1 theo Code, 1 theo Name
+            lookup_code = {clean_key(r['item_code']): r for r in db.to_dict('records')}
+            lookup_name = {clean_key(r['item_name']): r for r in db.to_dict('records')}
+            
             df_rfq = pd.read_excel(rfq, dtype=str).fillna("")
             res = []
             hn = {normalize_header(c): c for c in df_rfq.columns}
             
             for i, r in df_rfq.iterrows():
-                # Fix: Tìm nhiều biến thể của header
-                code = safe_str(r.get(hn.get("itemcode") or hn.get("code") or hn.get("mã") or hn.get("ma")))
+                # Lấy dữ liệu từ Excel
+                code_excel = safe_str(r.get(hn.get("itemcode") or hn.get("code") or hn.get("mã") or hn.get("ma")))
+                name_excel = safe_str(r.get(hn.get("itemname") or hn.get("name") or hn.get("tên")))
+                specs_excel = safe_str(r.get(hn.get("specs") or hn.get("quycach")))
                 qty = to_float(r.get(hn.get("qty") or hn.get("q'ty") or hn.get("quantity") or hn.get("soluong") or hn.get("sốlượng")))
-                
-                # Logic: Nếu file excel không có cột Qty chuẩn, user có thể nhập tay sau, mặc định là 1 nếu không tìm thấy
                 if qty == 0: qty = 1.0 
 
-                match = lookup.get(clean_key(code))
+                # --- LOGIC MATCHING MỚI ---
+                match = None
                 
+                # 1. Tìm theo CODE trước
+                if code_excel:
+                    match = lookup_code.get(clean_key(code_excel))
+                
+                # 2. Nếu không tìm thấy bằng CODE (hoặc không có Code), tìm bằng NAME
+                if not match and name_excel:
+                    match = lookup_name.get(clean_key(name_excel))
+                
+                # Lấy dữ liệu nếu khớp
                 buy_rmb = to_float(match.get('buying_price_rmb')) if match else 0
                 buy_vnd = to_float(match.get('buying_price_vnd')) if match else 0
                 ex_rate = to_float(match.get('exchange_rate')) if match else 0
                 
+                # Ưu tiên lấy Code/Name/Specs từ DB nếu khớp, nếu không thì lấy từ Excel
+                final_code = match.get('item_code') if match else code_excel
+                final_name = match.get('item_name') if match else name_excel
+                final_specs = match.get('specs') if match else specs_excel
+
                 item = {
                     "No": i+1,
                     "Cảnh báo": "",
-                    "Item code": code,
-                    "Item name": match.get('item_name') if match else safe_str(r.get(hn.get("itemname") or hn.get("name") or hn.get("tên"))),
-                    "Specs": match.get('specs') if match else safe_str(r.get(hn.get("specs") or hn.get("quycach"))),
+                    "Item code": final_code,
+                    "Item name": final_name,
+                    "Specs": final_specs,
                     "Q'ty": qty, 
                     "Buying price(RMB)": fmt_num(buy_rmb),
                     "Total buying price(rmb)": fmt_num(buy_rmb * qty),
@@ -501,14 +519,12 @@ with t3:
         if st.session_state.get('show_review', False):
             st.write("### 📋 BẢNG REVIEW TRƯỚC KHI XUẤT")
             cols_review = ["No", "Item code", "Item name", "Specs", "Q'ty", "Unit price(VND)", "Total price(VND)", "Leadtime"]
-            # Đảm bảo các cột tồn tại
             valid_cols = [c for c in cols_review if c in st.session_state.quote_df.columns]
             st.dataframe(st.session_state.quote_df[valid_cols], use_container_width=True)
             
-            # 2. EXPORT BUTTON (Chỉ hiện khi đang review hoặc luôn hiện tùy ý, ở đây để cạnh nút review)
+            # 2. EXPORT BUTTON
             if st.button("📤 XUẤT FILE BÁO GIÁ (EXCEL)"):
                 tmps = load_data("crm_templates")
-                # Tìm template AAA-QUOTATION
                 aaa_temp = tmps[tmps['template_name'].str.contains("AAA-QUOTATION", case=False, na=False)]
                 
                 if aaa_temp.empty:
@@ -520,52 +536,38 @@ with t3:
                         try:
                             wb = load_workbook(bio); ws = wb.active
                             
-                            # Điền thông tin chung
-                            # Giả sử Customer Name điền vào ô nào đó, ví dụ B5
                             safe_write_merged(ws, 5, 2, cust_name) # B5
                             safe_write_merged(ws, 5, 7, quote_no)  # G5
                             safe_write_merged(ws, 6, 7, datetime.now().strftime("%d/%m/%Y")) # G6
                             
-                            # STYLE
                             thin = Side(border_style="thin", color="000000")
                             border = Border(top=thin, left=thin, right=thin, bottom=thin)
                             
-                            # LOOP ROWS
-                            # Dữ liệu bắt đầu từ dòng 10 (theo yêu cầu A10, C10...)
                             start_row = 10
-                            
                             for idx, r in st.session_state.quote_df.iterrows():
                                 current_row = start_row + idx
                                 
-                                # No: A10 (Col 1) - Giữ nguyên số No từ phần mềm
                                 safe_write_merged(ws, current_row, 1, r["No"])
                                 ws.cell(row=current_row, column=1).border = border
                                 
-                                # Item code: C10 (Col 3)
                                 safe_write_merged(ws, current_row, 3, r["Item code"])
                                 ws.cell(row=current_row, column=3).border = border
                                 
-                                # Item name: D10 (Col 4)
                                 safe_write_merged(ws, current_row, 4, r["Item name"])
                                 ws.cell(row=current_row, column=4).border = border
                                 
-                                # Specs: E10 (Col 5)
                                 safe_write_merged(ws, current_row, 5, r["Specs"])
                                 ws.cell(row=current_row, column=5).border = border
                                 
-                                # Q'ty: F10 (Col 6)
                                 safe_write_merged(ws, current_row, 6, to_float(r["Q'ty"]))
                                 ws.cell(row=current_row, column=6).border = border
                                 
-                                # Unit price: G10 (Col 7)
                                 safe_write_merged(ws, current_row, 7, to_float(r["Unit price(VND)"]))
                                 ws.cell(row=current_row, column=7).border = border
                                 
-                                # Total price: H10 (Col 8)
                                 safe_write_merged(ws, current_row, 8, to_float(r["Total price(VND)"]))
                                 ws.cell(row=current_row, column=8).border = border
                                 
-                            # Leadtime: H8 (Lấy dòng đầu tiên hoặc gộp)
                             if not st.session_state.quote_df.empty:
                                 lt_val = st.session_state.quote_df.iloc[0]["Leadtime"]
                                 safe_write_merged(ws, 8, 8, lt_val)
