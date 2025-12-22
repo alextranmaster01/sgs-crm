@@ -12,7 +12,7 @@ import numpy as np
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO
 # =============================================================================
-APP_VERSION = "V6002 - FIX MATCHING PRICE"
+APP_VERSION = "V6003 - FINAL FIX MAPPING RMB"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # CSS UI
@@ -121,9 +121,8 @@ def to_float(val):
 
 def fmt_num(x): return "{:,.0f}".format(x) if x else "0"
 
-# --- FIX QUAN TRỌNG: SỬA HÀM CLEAN KEY ĐỂ HỖ TRỢ TIẾNG VIỆT ---
+# --- FIX: HÀM CLEAN KEY GIỮ NGUYÊN TIẾNG VIỆT ---
 def clean_key(s): 
-    # Chỉ lowercase và strip, KHÔNG dùng regex xóa ký tự lạ để giữ tiếng Việt
     return safe_str(s).lower()
 
 def normalize_header(h): return re.sub(r'[^a-zA-Z0-9]', '', str(h).lower())
@@ -216,12 +215,14 @@ def recalculate_quote_logic(df, params):
     
     return df
 
+# --- CẬP NHẬT MAPPING CHUẨN ĐỂ BẮT ĐÚNG CỘT GIÁ RMB ---
 MAP_PURCHASE = {
     "item_code": ["Item code", "Mã hàng", "Code", "Mã"], 
     "item_name": ["Item name", "Tên hàng", "Name", "Tên"],
     "specs": ["Specs", "Quy cách", "Thông số"], 
     "qty": ["Q'ty", "Qty", "Số lượng"],
-    "buying_price_rmb": ["Buying price (RMB)", "Giá RMB", "Buying RMB"], 
+    # Thêm "Buying(RMB)" và "Buying price(RMB)" để khớp chính xác file Excel
+    "buying_price_rmb": ["Buying(RMB)", "Buying price(RMB)", "Buying price (RMB)", "Giá RMB", "Buying RMB"], 
     "exchange_rate": ["Exchange rate", "Tỷ giá"],
     "buying_price_vnd": ["Buying price (VND)", "Giá VND", "Buying VND"], 
     "leadtime": ["Leadtime", "Thời gian giao hàng"],
@@ -249,7 +250,7 @@ with t1:
     c2.markdown(f"<div class='card-3d bg-cost'><h3>CHI PHÍ NCC</h3><h1>{fmt_num(cost)}</h1></div>", unsafe_allow_html=True)
     c3.markdown(f"<div class='card-3d bg-profit'><h3>LỢI NHUẬN GỘP</h3><h1>{fmt_num(profit)}</h1></div>", unsafe_allow_html=True)
 
-# --- TAB 2: KHO HÀNG ---
+# --- TAB 2: KHO HÀNG (IMPORT CHUẨN MAPPING) ---
 with t2:
     st.subheader("QUẢN LÝ KHO HÀNG")
     c_imp, c_view = st.columns([1, 2])
@@ -286,6 +287,7 @@ with t2:
                 
                 for i, r in df.iterrows():
                     d = {}
+                    # Logic Mapping chặt chẽ theo MAP_PURCHASE
                     for db_col, list_ex in MAP_PURCHASE.items():
                         val = ""
                         for kw in list_ex:
@@ -297,8 +299,9 @@ with t2:
                     if not d.get('image_path'): d['image_path'] = img_map.get(i+2, "")
                     d['row_order'] = i + 1 
                     
+                    # Chuyển đổi số liệu
                     qty = to_float(d.get('qty', 0))
-                    p_rmb = to_float(d.get('buying_price_rmb', 0))
+                    p_rmb = to_float(d.get('buying_price_rmb', 0)) # Lấy đúng cột RMB
                     p_vnd = to_float(d.get('buying_price_vnd', 0))
                     
                     d['qty'] = qty
@@ -335,7 +338,7 @@ with t2:
                 df_pur = df_pur[mask]
             st.dataframe(df_pur, column_config={"image_path": st.column_config.ImageColumn("Ảnh")}, use_container_width=True, height=600)
 
-# --- TAB 3: BÁO GIÁ (ĐÃ FIX MATCHING) ---
+# --- TAB 3: BÁO GIÁ (LOGIC LẤY GIÁ TRỰC TIẾP TỪ DB) ---
 with t3:
     if 'quote_df' not in st.session_state: st.session_state.quote_df = pd.DataFrame()
     st.subheader("TÍNH TOÁN & LÀM BÁO GIÁ")
@@ -363,7 +366,7 @@ with t3:
             st.session_state[f"pct_{k}"] = val
             params[k] = to_float(val)
 
-    # --- LOGIC MATCHING ĐÃ SỬA ---
+    # --- MATCHING LOGIC ---
     cf1, cf2 = st.columns([1, 2])
     rfq = cf1.file_uploader("Upload RFQ (xlsx)", type=["xlsx"])
     if rfq and cf2.button("🔍 Matching"):
@@ -372,7 +375,6 @@ with t3:
         
         if db.empty: st.error("Kho rỗng!")
         else:
-            # Tạo Dictionary tra cứu (Dùng hàm clean_key mới hỗ trợ tiếng Việt)
             lookup_code = {clean_key(r['item_code']): r for r in db.to_dict('records')}
             lookup_name = {clean_key(r['item_name']): r for r in db.to_dict('records')}
             
@@ -388,16 +390,12 @@ with t3:
                 if qty == 0: qty = 1.0 
 
                 match = None
-                # 1. Tra cứu theo Code
-                if code_excel:
-                    match = lookup_code.get(clean_key(code_excel))
-                # 2. Tra cứu theo Name (nếu không có Code)
-                if not match and name_excel:
-                    match = lookup_name.get(clean_key(name_excel))
+                if code_excel: match = lookup_code.get(clean_key(code_excel))
+                if not match and name_excel: match = lookup_name.get(clean_key(name_excel))
                 
-                # Lấy dữ liệu (Nếu tìm thấy)
+                # Logic lấy Data: Nếu khớp, lấy thẳng từ DB ra
                 if match:
-                    # Đảm bảo lấy đúng tên cột trong DB
+                    # Lấy giá trị Buying RMB từ DB (đã được import đúng ở Tab 2)
                     buy_rmb = to_float(match.get('buying_price_rmb', 0))
                     buy_vnd = to_float(match.get('buying_price_vnd', 0))
                     ex_rate = to_float(match.get('exchange_rate', 0))
@@ -408,9 +406,8 @@ with t3:
                     image = match.get('image_path', '')
                     leadtime = match.get('leadtime', '')
                 else:
-                    # Nếu không tìm thấy
                     buy_rmb = 0; buy_vnd = 0; ex_rate = 0
-                    final_code = code_excel # Giữ nguyên cái user nhập để biết
+                    final_code = code_excel
                     final_name = name_excel
                     final_specs = specs_excel
                     supplier = ""; image = ""; leadtime = ""
