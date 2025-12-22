@@ -12,7 +12,7 @@ import numpy as np
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO
 # =============================================================================
-APP_VERSION = "V5700 - FINAL UPDATE (FULL COLUMNS & QUOTE LOGIC)"
+APP_VERSION = "V5701 - FINAL FIXED (KEY ERROR FIX)"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # CSS UI
@@ -263,7 +263,6 @@ with t3:
     
     c1, c2, c3 = st.columns([2, 2, 1])
     
-    # 1. Khách hàng
     cust_db = load_data("crm_customers")
     cust_list = cust_db["short_name"].tolist() if not cust_db.empty else []
     cust_name = c1.selectbox("Chọn Khách Hàng", [""] + cust_list)
@@ -280,11 +279,11 @@ with t3:
             st.session_state[f"pct_{k}"] = val
             params[k] = to_float(val)
 
-    # Matching (CLEAR OLD DATA LOGIC)
+    # Matching (CLEAR OLD DATA)
     cf1, cf2 = st.columns([1, 2])
     rfq = cf1.file_uploader("Upload RFQ (xlsx)", type=["xlsx"])
     if rfq and cf2.button("🔍 Matching"):
-        # CLEAR DATA CŨ TRƯỚC KHI MATCHING
+        # CLEAR OLD
         st.session_state.quote_df = pd.DataFrame()
         
         db = load_data("crm_purchases")
@@ -304,7 +303,7 @@ with t3:
                 buy_vnd = to_float(match.get('buying_price_vnd')) if match else 0
                 ex_rate = to_float(match.get('exchange_rate')) if match else 0
                 
-                # CẤU TRÚC FULL CỘT THEO YÊU CẦU
+                # STANDARDIZED KEYS
                 item = {
                     "No": i+1,
                     "Item code": code,
@@ -312,7 +311,7 @@ with t3:
                     "Specs": match.get('specs') if match else "",
                     "Q'ty": fmt_num(qty),
                     "Buying price(RMB)": fmt_num(buy_rmb),
-                    "Total buying price (rmb)": fmt_num(buy_rmb * qty),
+                    "Total buying price(rmb)": fmt_num(buy_rmb * qty),
                     "Exchange rate": fmt_num(ex_rate),
                     "Buying price(VND)": fmt_num(buy_vnd),
                     "Total buying price(VND)": fmt_num(buy_vnd * qty),
@@ -342,14 +341,14 @@ with t3:
     ap_f = f1.text_input("Formula AP (vd: =BUY*1.1)")
     unit_f = f2.text_input("Formula Unit (vd: =AP*1.2)")
     
-    # CALCULATION LOOP (TỰ ĐỘNG TÍNH KHI ENTER)
+    # CALCULATION LOOP
     if not st.session_state.quote_df.empty:
         df = st.session_state.quote_df.copy()
         low_profit_idx = []
         for i, r in df.iterrows():
-            # Get Base Values
-            buy = to_float(r["Buying price(VND)"])
-            qty = to_float(r["Q'ty"])
+            # KEY MATCHING MUST BE EXACT
+            buy = to_float(r.get("Buying price(VND)", 0))
+            qty = to_float(r.get("Q'ty", 0))
             ap = to_float(r.get("AP price(VND)", 0))
             
             # Apply Formula (AP & Unit)
@@ -367,7 +366,6 @@ with t3:
                     df.at[i, "Unit price(VND)"] = fmt_num(unit)
                 except: pass
             
-            # Re-read after formula
             unit = to_float(df.at[i, "Unit price(VND)"])
             ap = to_float(df.at[i, "AP price(VND)"])
             
@@ -379,7 +377,7 @@ with t3:
             df.at[i, "AP total price(VND)"] = fmt_num(ap_total)
             df.at[i, "Total price(VND)"] = fmt_num(total_sell)
             
-            # Calculate Costs (Logic V4800)
+            # Calculate Costs
             gap = total_sell - ap_total
             df.at[i, "GAP"] = fmt_num(gap)
             
@@ -391,7 +389,6 @@ with t3:
             v_trans = params['trans'] * qty
             v_pay = gap * params['pay']/100
             
-            # Fill Columns
             df.at[i, "End user(%)"] = fmt_num(v_end)
             df.at[i, "Buyer(%)"] = fmt_num(v_buy)
             df.at[i, "Import tax(%)"] = fmt_num(v_tax)
@@ -400,7 +397,6 @@ with t3:
             df.at[i, "Management fee(%)"] = fmt_num(v_mgmt)
             df.at[i, "Payback(%)"] = fmt_num(v_pay)
 
-            # Profit
             cost_ops = (gap*0.6 if gap>0 else 0) + v_end + v_buy + v_tax + v_vat + v_mgmt + v_trans
             profit = total_sell - total_buy - cost_ops + v_pay
             pct = (profit / total_sell * 100) if total_sell > 0 else 0
@@ -421,13 +417,12 @@ with t3:
             },
             use_container_width=True, height=400
         )
-        # Đồng bộ ngược nếu sửa tay
         if not edited.equals(st.session_state.quote_df):
             st.session_state.quote_df = edited
             st.rerun()
         
-        # --- TÁCH BIỆT REVIEW ---
-        st.markdown("<br><br><br><br>", unsafe_allow_html=True) # Cách 4 dòng
+        # --- REVIEW ---
+        st.markdown("<br><br><br><br>", unsafe_allow_html=True) 
         st.divider()
         st.header("🔎 REVIEW BÁO GIÁ & LỢI NHUẬN")
         
@@ -442,7 +437,6 @@ with t3:
             column_config={"Image": st.column_config.ImageColumn("Ảnh")}, 
             use_container_width=True, height=500
         )
-        
         if low_profit_idx: st.error(f"⚠️ CẢNH BÁO: Có {len(low_profit_idx)} sản phẩm lợi nhuận < 10%")
 
         # EXPORT & SAVE
@@ -480,7 +474,7 @@ with t3:
 
         with c_sv:
             csv = st.session_state.quote_df.to_csv(index=False).encode('utf-8-sig')
-            st.download_button("⬇️ Tải file CSV (Thô)", csv, f"Quote_{quote_no}.csv", "text/csv")
+            st.download_button("⬇️ Tải file CSV", csv, f"Quote_{quote_no}.csv", "text/csv")
             
             if st.button("💾 Lưu Lịch sử (Cloud)"):
                 if cust_name:
