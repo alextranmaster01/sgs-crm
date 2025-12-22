@@ -169,7 +169,6 @@ def search_file_in_drive_by_name(name_contains):
         q = f"name contains '{name_contains}' and trashed=false"
         results = srv.files().list(q=q, fields="files(id, name, parents)").execute().get('files', [])
         if results:
-            # Trả về ID, Name và Parent ID (để tạo link folder)
             return results[0]['id'], results[0]['name'], (results[0]['parents'][0] if 'parents' in results[0] else None)
         return None, None, None
     except: return None, None, None
@@ -251,7 +250,7 @@ def recalculate_quote_logic(df, params):
     pend = params['end']/100; pbuy = params['buy']/100
     ptax = params['tax']/100; pvat = params['vat']/100
     ppay = params['pay']/100; pmgmt = params['mgmt']/100
-    val_trans = params['trans'] # Đây là giá trị Transportation nhập vào
+    val_trans = params['trans']
 
     df["Total buying price(VND)"] = df["Buying price(VND)"] * df["Q'ty"]
     df["Total buying price(rmb)"] = df["Buying price(RMB)"] * df["Q'ty"]
@@ -266,7 +265,6 @@ def recalculate_quote_logic(df, params):
     df["Management fee(%)"] = df["Total price(VND)"] * pmgmt
     df["Payback(%)"] = df["GAP"] * ppay
     
-    # --- FIX LOGIC TRANSPORTATION ---
     # Input 10000 -> Hiện 10000 (Gán trực tiếp giá trị input)
     df["Transportation"] = val_trans 
 
@@ -542,8 +540,6 @@ with t3:
                         match = pd.DataFrame()
                         if not df_hist.empty:
                             if code: match = df_hist[df_hist['item_code'].str.contains(code, case=False, na=False)]
-                            # Search by Name using Map lookup is hard efficiently without loop, skipping for now or use fuzzy?
-                            # Stick to code/direct match for Excel bulk check usually
                         
                         if not match.empty:
                             for _, m in match.iterrows():
@@ -972,6 +968,14 @@ with t4:
                         
                         st.success("✅ Đặt hàng thành công! Đã link sang Tracking.")
                         st.markdown(f"📂 **[Mở Folder PO NCC: {s_name}/{curr_month}]({folder_link})**", unsafe_allow_html=True)
+                        
+                        # Add Download Button for PO NCC
+                        st.download_button(
+                             label="📥 Tải File PO NCC",
+                             data=out,
+                             file_name=file_name,
+                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        )
 
     # ---------------- PO KHÁCH HÀNG ----------------
     with c_kh:
@@ -995,53 +999,56 @@ with t4:
             custs = load_data("crm_customers")
             c_name = st.selectbox("Chọn Khách", [""] + custs['short_name'].tolist() if not custs.empty else [], key="sel_cust_po")
             
-            up_c = st.file_uploader("Upload File PO Khách (Excel)", key="upc")
+            # --- UPDATED UPLOAD: Accept multiple files (Excel, PDF) ---
+            uploaded_files = st.file_uploader("Upload File PO Khách (Excel/PDF)", type=['xlsx', 'pdf'], accept_multiple_files=True, key="upc")
             
-            if up_c and st.button("Load PO Khách"):
+            if uploaded_files and st.button("Load PO Khách"):
                 if not c_name: st.error("Vui lòng chọn khách trước để lấy giá!")
                 else:
-                    # Load Excel PO (Mapping A-E)
-                    df_up = pd.read_excel(up_c, header=None, skiprows=1, dtype=str).fillna("")
+                    # Process only Excel files for Data Loading
+                    excel_files = [f for f in uploaded_files if f.name.endswith('.xlsx')]
                     
-                    # QUAN TRỌNG: Lấy giá từ lịch sử báo giá của CHÍNH KHÁCH HÀNG NÀY
-                    hist = load_data("crm_shared_history") 
-                    # Filter khách & Sort mới nhất
-                    cust_hist = hist[hist['customer'] == c_name].sort_values(by='date', ascending=False)
-                    
-                    # Tạo Map: Code -> Unit Price
-                    price_lookup = {}
-                    for _, h in cust_hist.iterrows():
-                        c_code = clean_key(h['item_code'])
-                        if c_code not in price_lookup:
-                            price_lookup[c_code] = to_float(h['unit_price'])
-                    
-                    # Load DB for Leadtime -> ETA
-                    db_items = load_data("crm_purchases")
-                    lt_lookup = {clean_key(r['item_code']): r['leadtime'] for r in db_items.to_dict('records')}
-
-                    recs = []
-                    for i, r in df_up.iterrows():
-                        # Map Cols: A(No), B(Code), C(Name), D(Specs), E(Qty)
-                        code = safe_str(r.iloc[1])
-                        qty = to_float(r.iloc[4])
+                    if excel_files:
+                        all_recs = []
+                        # Load History to get Price
+                        hist = load_data("crm_shared_history") 
+                        cust_hist = hist[hist['customer'] == c_name].sort_values(by='date', ascending=False)
                         
-                        # Unit Price (From specific customer history)
-                        unit_price = price_lookup.get(clean_key(code), 0)
-                        total = unit_price * qty
+                        price_lookup = {}
+                        for _, h in cust_hist.iterrows():
+                            c_code = clean_key(h['item_code'])
+                            if c_code not in price_lookup:
+                                price_lookup[c_code] = to_float(h['unit_price'])
                         
-                        # ETA calculation
-                        leadtime = lt_lookup.get(clean_key(code), "0")
-                        eta = calc_eta(datetime.now(), leadtime)
+                        db_items = load_data("crm_purchases")
+                        lt_lookup = {clean_key(r['item_code']): r['leadtime'] for r in db_items.to_dict('records')}
 
-                        if code:
-                            recs.append({
-                                "No.": safe_str(r.iloc[0]), "Item code": code, "Item name": safe_str(r.iloc[2]),
-                                "Specs": safe_str(r.iloc[3]), "Q'ty": qty,
-                                "Unit price(VND)": fmt_num(unit_price), "Total price(VND)": fmt_num(total),
-                                "Customer": c_name, "ETA": eta
-                            })
-                    st.session_state.po_cust_df = pd.DataFrame(recs)
-            
+                        for f in excel_files:
+                            try:
+                                df_up = pd.read_excel(f, header=None, skiprows=1, dtype=str).fillna("")
+                                for i, r in df_up.iterrows():
+                                    code = safe_str(r.iloc[1])
+                                    qty = to_float(r.iloc[4])
+                                    
+                                    # Fix: Unit price retrieval
+                                    unit_price = price_lookup.get(clean_key(code), 0)
+                                    total = unit_price * qty
+                                    leadtime = lt_lookup.get(clean_key(code), "0")
+                                    eta = calc_eta(datetime.now(), leadtime)
+
+                                    if code:
+                                        all_recs.append({
+                                            "No.": safe_str(r.iloc[0]), "Item code": code, "Item name": safe_str(r.iloc[2]),
+                                            "Specs": safe_str(r.iloc[3]), "Q'ty": qty,
+                                            "Unit price(VND)": fmt_num(unit_price), "Total price(VND)": fmt_num(total),
+                                            "Customer": c_name, "ETA": eta, "Source File": f.name
+                                        })
+                            except: pass
+                        
+                        st.session_state.po_cust_df = pd.DataFrame(all_recs)
+                    else:
+                        st.info("Chỉ load dữ liệu từ file Excel. Các file PDF sẽ được lưu khi bấm 'Lưu PO'.")
+
             if not st.session_state.po_cust_df.empty:
                 st.dataframe(st.session_state.po_cust_df, use_container_width=True)
                 
@@ -1067,24 +1074,25 @@ with t4:
                         }
                         supabase.table("crm_tracking").insert([track_rec]).execute()
                         
-                        # 3. Save Excel: PO_KHACH_HANG \ NĂM \ KHÁCH \ THÁNG \ FILE
-                        wb = Workbook()
-                        ws = wb.active; ws.title = "PO Customer"
-                        ws.append(["No.", "Item code", "Item name", "Specs", "Q'ty", "Unit price(VND)", "Total price(VND)", "Customer", "ETA"])
-                        for r in st.session_state.po_cust_df.to_dict('records'):
-                            ws.append([r["No."], r["Item code"], r["Item name"], r["Specs"], r["Q'ty"], r["Unit price(VND)"], r["Total price(VND)"], r["Customer"], r["ETA"]])
-                        
-                        out = io.BytesIO(); wb.save(out); out.seek(0)
-                        
+                        # 3. Save Uploaded Files to Drive
+                        # Path: PO_KHACH_HANG \ NĂM \ KHÁCH \ THÁNG
                         curr_year = datetime.now().strftime("%Y")
                         curr_month = datetime.now().strftime("%b").upper()
-                        file_name = f"PO_{po_c_no}_{c_name}.xlsx"
                         path_list = ["PO_KHACH_HANG", curr_year, c_name, curr_month]
                         
-                        folder_link, _ = upload_to_drive_structured(out, path_list, file_name)
+                        saved_links = []
+                        if uploaded_files:
+                            for upf in uploaded_files:
+                                # Reset pointer
+                                upf.seek(0)
+                                # Rename file to include PO No
+                                f_name = f"{po_c_no}_{upf.name}"
+                                lnk, _ = upload_to_drive_structured(upf, path_list, f_name)
+                                saved_links.append(lnk)
                         
                         st.success("✅ Lưu PO Khách thành công! Đã link sang Tracking.")
-                        st.markdown(f"📂 **[Mở Folder PO Khách: {c_name}/{curr_month}]({folder_link})**", unsafe_allow_html=True)
+                        if saved_links:
+                             st.markdown(f"📂 **[Mở Folder PO Khách: {c_name}/{curr_month}]({saved_links[0]})**", unsafe_allow_html=True)
 
 # --- TAB 5: TRACKING ---
 with t5:
