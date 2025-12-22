@@ -161,6 +161,18 @@ def upload_to_drive_simple(file_obj, sub_folder, file_name):
         return f"https://drive.google.com/thumbnail?id={file_id}&sz=w200", file_id
     except: return "", ""
 
+def search_file_in_drive_by_name(name_contains):
+    """Tìm file trong Drive dựa vào tên (Partial match)"""
+    srv = get_drive_service()
+    if not srv: return None, None
+    try:
+        q = f"name contains '{name_contains}' and trashed=false"
+        results = srv.files().list(q=q, fields="files(id, name)").execute().get('files', [])
+        if results:
+            return results[0]['id'], results[0]['name']
+        return None, None
+    except: return None, None
+
 def download_from_drive(file_id):
     srv = get_drive_service()
     if not srv: return None
@@ -455,6 +467,117 @@ with t2:
 # --- TAB 3: BÁO GIÁ ---
 with t3:
     if 'quote_df' not in st.session_state: st.session_state.quote_df = pd.DataFrame()
+    
+    # ------------------ NEW: TRA CỨU LỊCH SỬ ------------------
+    with st.expander("🔎 TRA CỨU & TRẠNG THÁI BÁO GIÁ", expanded=False):
+        c_src1, c_src2 = st.columns(2)
+        search_kw = c_src1.text_input("Nhập từ khóa (Code, Name, Specs)")
+        up_src = c_src2.file_uploader("Hoặc Import Excel kiểm tra", type=["xlsx"], key="src_up")
+        
+        if st.button("Kiểm tra trạng thái"):
+            # Load History & PO Data
+            df_hist = load_data("crm_shared_history")
+            df_po = load_data("db_customer_orders")
+            
+            # Prepare PO Lookup (Customer + Item Code -> PO Number)
+            po_map = {}
+            if not df_po.empty:
+                for r in df_po.to_dict('records'):
+                    k = f"{clean_key(r['customer'])}_{clean_key(r['item_code'])}"
+                    po_map[k] = r['po_number']
+
+            results = []
+            
+            # Logic 1: Search by Text
+            if search_kw and not df_hist.empty:
+                mask = df_hist.astype(str).apply(lambda x: x.str.contains(search_kw, case=False, na=False)).any(axis=1)
+                found = df_hist[mask]
+                for _, r in found.iterrows():
+                    key = f"{clean_key(r['customer'])}_{clean_key(r['item_code'])}"
+                    po_found = po_map.get(key, "")
+                    results.append({
+                        "Trạng thái": "✅ Đã báo giá", "Customer": r['customer'], "Date": r['date'],
+                        "Item Code": r['item_code'], "Unit Price": fmt_num(r['unit_price']),
+                        "Quote No": r['quote_no'], "PO No": po_found if po_found else "---"
+                    })
+            
+            # Logic 2: Search by Excel
+            if up_src:
+                try:
+                    df_check = pd.read_excel(up_src, dtype=str).fillna("")
+                    # Find column headers dynamically
+                    cols_check = {clean_key(c): c for c in df_check.columns}
+                    
+                    for i, r in df_check.iterrows():
+                        # Try to find meaningful columns
+                        code = ""; name = ""; specs = ""
+                        for k, col in cols_check.items():
+                            if "code" in k: code = safe_str(r[col])
+                            elif "name" in k: name = safe_str(r[col])
+                            elif "specs" in k: specs = safe_str(r[col])
+                        
+                        # Check in History
+                        match = pd.DataFrame()
+                        if not df_hist.empty:
+                            if code: match = df_hist[df_hist['item_code'].str.contains(code, case=False, na=False)]
+                            if match.empty and name: match = df_hist[df_hist.astype(str).apply(lambda x: x.str.contains(name, case=False, na=False)).any(axis=1)]
+                        
+                        if not match.empty:
+                            # Found match
+                            for _, m in match.iterrows():
+                                key = f"{clean_key(m['customer'])}_{clean_key(m['item_code'])}"
+                                po_found = po_map.get(key, "")
+                                results.append({
+                                    "Trạng thái": "✅ Đã báo giá", "Customer": m['customer'], "Date": m['date'],
+                                    "Item Code": m['item_code'], "Unit Price": fmt_num(m['unit_price']),
+                                    "Quote No": m['quote_no'], "PO No": po_found
+                                })
+                        else:
+                            # Not found
+                            results.append({
+                                "Trạng thái": "❌ Chưa báo giá", "Item Code": code, "Customer": "---", 
+                                "Date": "---", "Unit Price": "---", "Quote No": "---", "PO No": "---"
+                            })
+                except Exception as e: st.error(f"Lỗi file: {e}")
+
+            if results:
+                st.dataframe(pd.DataFrame(results), use_container_width=True)
+            else:
+                st.info("Không tìm thấy kết quả.")
+
+    # ------------------ NEW: LOAD FILE LỊCH SỬ (CSV) ------------------
+    with st.expander("📂 XEM CHI TIẾT FILE LỊCH SỬ (COST & LỢI NHUẬN)", expanded=False):
+        df_hist_idx = load_data("crm_shared_history", order_by="date")
+        if not df_hist_idx.empty:
+            # Create a list of available quotes to select
+            df_hist_idx['display'] = df_hist_idx.apply(lambda x: f"{x['date']} | {x['customer']} | Quote: {x['quote_no']}", axis=1)
+            unique_quotes = df_hist_idx['display'].unique()
+            sel_quote_hist = st.selectbox("Chọn báo giá cũ để xem chi tiết:", [""] + list(unique_quotes))
+            
+            if sel_quote_hist and st.button("Tải file chi tiết"):
+                # Extract keys
+                parts = sel_quote_hist.split(" | ")
+                if len(parts) >= 3:
+                    q_no = parts[2].replace("Quote: ", "").strip()
+                    cust = parts[1].strip()
+                    
+                    # Search CSV in Drive: HIST_{q_no}_{cust}
+                    search_name = f"HIST_{q_no}_{cust}"
+                    fid, fname = search_file_in_drive_by_name(search_name)
+                    
+                    if fid:
+                        fh = download_from_drive(fid)
+                        if fh:
+                            try:
+                                df_csv = pd.read_csv(fh)
+                                st.success(f"Đã tải: {fname}")
+                                st.dataframe(df_csv, use_container_width=True)
+                            except: st.error("Lỗi đọc file CSV.")
+                        else: st.error("Không tải được file.")
+                    else: st.warning(f"Không tìm thấy file chi tiết cho {q_no} trên Drive.")
+        else: st.info("Chưa có lịch sử.")
+
+    st.divider()
     st.subheader("TÍNH TOÁN & LÀM BÁO GIÁ")
     
     c1, c2, c3 = st.columns([2, 2, 1])
@@ -463,13 +586,15 @@ with t3:
     cust_name = c1.selectbox("Chọn Khách Hàng", [""] + cust_list)
     quote_no = c2.text_input("Số Báo Giá", key="q_no")
     
-    # Nút Reset
+    # Nút Reset màu tối
+    c3.markdown('<div class="dark-btn">', unsafe_allow_html=True)
     if c3.button("🔄 Reset Quote"): 
         st.session_state.quote_df = pd.DataFrame()
         st.session_state.show_review = False 
         for k in ["end","buy","tax","vat","pay","mgmt","trans"]:
              if f"pct_{k}" in st.session_state: del st.session_state[f"pct_{k}"]
         st.rerun()
+    c3.markdown('</div>', unsafe_allow_html=True)
 
     with st.expander("Cấu hình chi phí (%)", expanded=True):
         cols = st.columns(7)
@@ -546,6 +671,7 @@ with t3:
     c_form1, c_form2 = st.columns(2)
     with c_form1:
         ap_f = st.text_input("Formula AP (vd: =BUY*1.1)", key="f_ap")
+        st.markdown('<div class="dark-btn">', unsafe_allow_html=True)
         if st.button("Apply AP Price"):
             if not st.session_state.quote_df.empty:
                 for idx, row in st.session_state.quote_df.iterrows():
@@ -554,8 +680,10 @@ with t3:
                     new_ap = parse_formula(ap_f, buy, ap)
                     st.session_state.quote_df.at[idx, "AP price(VND)"] = fmt_num(new_ap)
                 st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
     with c_form2:
         unit_f = st.text_input("Formula Unit (vd: =AP*1.2)", key="f_unit")
+        st.markdown('<div class="dark-btn">', unsafe_allow_html=True)
         if st.button("Apply Unit Price"):
             if not st.session_state.quote_df.empty:
                 for idx, row in st.session_state.quote_df.iterrows():
@@ -564,6 +692,7 @@ with t3:
                     new_unit = parse_formula(unit_f, buy, ap)
                     st.session_state.quote_df.at[idx, "Unit price(VND)"] = fmt_num(new_unit)
                 st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
     
     if not st.session_state.quote_df.empty:
         # Re-order columns: Cảnh báo trước No
@@ -591,7 +720,9 @@ with t3:
         st.divider()
         c_rev, c_sv = st.columns([1, 1])
         with c_rev:
+            st.markdown('<div class="dark-btn">', unsafe_allow_html=True)
             if st.button("🔍 REVIEW BÁO GIÁ"): st.session_state.show_review = True
+            st.markdown('</div>', unsafe_allow_html=True)
         
         if st.session_state.get('show_review', False):
             st.write("### 📋 BẢNG REVIEW")
@@ -604,18 +735,23 @@ with t3:
             )
             
             # Button Xuất Excel Báo Giá
+            st.markdown('<div class="dark-btn">', unsafe_allow_html=True)
             if st.button("📤 XUẤT BÁO GIÁ (Excel)"):
                 if not cust_name: st.error("Chưa chọn khách hàng!")
                 else:
                     try:
-                        # 1. Tìm file Template AAA-QUOTATION.xlsx
-                        tmpl_res = supabase.table("crm_templates").select("file_id").eq("template_name", "AAA-QUOTATION").execute()
-                        if not tmpl_res.data:
+                        # 1. Tìm file Template AAA-QUOTATION.xlsx (FIX LỖI)
+                        # Thay vì tìm chính xác, tải toàn bộ list và dùng pandas filter
+                        df_tmpl = load_data("crm_templates")
+                        # Tìm dòng có tên chứa AAA-QUOTATION
+                        match_tmpl = df_tmpl[df_tmpl['template_name'].astype(str).str.contains("AAA-QUOTATION", case=False, na=False)]
+                        
+                        if match_tmpl.empty:
                             st.error("Không tìm thấy template 'AAA-QUOTATION' trong Master Data!")
                         else:
-                            tmpl_id = tmpl_res.data[0]['file_id']
+                            tmpl_id = match_tmpl.iloc[0]['file_id']
                             fh = download_from_drive(tmpl_id)
-                            if not fh: st.error("Lỗi tải template!")
+                            if not fh: st.error("Lỗi tải template từ Drive!")
                             else:
                                 # 2. Fill Data
                                 wb = load_workbook(fh); ws = wb.active
@@ -648,8 +784,10 @@ with t3:
                                 st.success(f"✅ Đã xuất báo giá: {fname}")
                                 st.markdown(f"📂 [Mở Folder]({lnk})", unsafe_allow_html=True)
                     except Exception as e: st.error(f"Lỗi xuất Excel: {e}")
+            st.markdown('</div>', unsafe_allow_html=True)
 
         with c_sv:
+            st.markdown('<div class="dark-btn">', unsafe_allow_html=True)
             if st.button("💾 LƯU LỊCH SỬ (QUAN TRỌNG ĐỂ LÀM PO)"):
                 if cust_name:
                     # 1. Save DB (Shared History)
@@ -679,6 +817,7 @@ with t3:
                     except Exception as e: st.error(f"Lỗi lưu CSV: {e}")
                     
                 else: st.error("Chọn khách!")
+            st.markdown('</div>', unsafe_allow_html=True)
 
 # --- TAB 4: PO & ĐẶT HÀNG ---
 with t4:
