@@ -25,18 +25,20 @@ st.markdown("""
     .bg-profit { background: linear-gradient(135deg, #f83600, #f9d423); }
     [data-testid="stDataFrame"] > div { max-height: 750px; }
     .highlight-low { background-color: #ffcccc !important; color: red !important; font-weight: bold; }
-    div.stButton > button { width: 100%; border-radius: 5px; font-weight: bold; background-color: #f0f2f6; }
     
-    /* CSS RIÊNG CHO TAB BÁO GIÁ: NÚT MÀU TỐI - CHỮ SÁNG */
-    .dark-btn > button {
-        background-color: #262730 !important; 
-        color: #ffffff !important; 
-        border: 1px solid #4e4e4e !important;
+    /* CSS CHO CÁC NÚT BẤM: NỀN TỐI - CHỮ SÁNG */
+    div.stButton > button { 
+        width: 100%; 
+        border-radius: 5px; 
+        font-weight: bold; 
+        background-color: #262730; /* Nền tối */
+        color: #ffffff; /* Chữ trắng */
+        border: 1px solid #4e4e4e;
     }
-    .dark-btn > button:hover {
-        background-color: #444444 !important;
-        color: #ffffff !important;
-        border-color: #ffffff !important;
+    div.stButton > button:hover {
+        background-color: #444444;
+        color: #ffffff;
+        border-color: #ffffff;
     }
     </style>""", unsafe_allow_html=True)
 
@@ -461,15 +463,13 @@ with t3:
     cust_name = c1.selectbox("Chọn Khách Hàng", [""] + cust_list)
     quote_no = c2.text_input("Số Báo Giá", key="q_no")
     
-    # Nút Reset màu tối
-    c3.markdown('<div class="dark-btn">', unsafe_allow_html=True)
+    # Nút Reset
     if c3.button("🔄 Reset Quote"): 
         st.session_state.quote_df = pd.DataFrame()
         st.session_state.show_review = False 
         for k in ["end","buy","tax","vat","pay","mgmt","trans"]:
              if f"pct_{k}" in st.session_state: del st.session_state[f"pct_{k}"]
         st.rerun()
-    c3.markdown('</div>', unsafe_allow_html=True)
 
     with st.expander("Cấu hình chi phí (%)", expanded=True):
         cols = st.columns(7)
@@ -546,7 +546,6 @@ with t3:
     c_form1, c_form2 = st.columns(2)
     with c_form1:
         ap_f = st.text_input("Formula AP (vd: =BUY*1.1)", key="f_ap")
-        st.markdown('<div class="dark-btn">', unsafe_allow_html=True)
         if st.button("Apply AP Price"):
             if not st.session_state.quote_df.empty:
                 for idx, row in st.session_state.quote_df.iterrows():
@@ -555,10 +554,8 @@ with t3:
                     new_ap = parse_formula(ap_f, buy, ap)
                     st.session_state.quote_df.at[idx, "AP price(VND)"] = fmt_num(new_ap)
                 st.rerun()
-        st.markdown('</div>', unsafe_allow_html=True)
     with c_form2:
         unit_f = st.text_input("Formula Unit (vd: =AP*1.2)", key="f_unit")
-        st.markdown('<div class="dark-btn">', unsafe_allow_html=True)
         if st.button("Apply Unit Price"):
             if not st.session_state.quote_df.empty:
                 for idx, row in st.session_state.quote_df.iterrows():
@@ -567,7 +564,6 @@ with t3:
                     new_unit = parse_formula(unit_f, buy, ap)
                     st.session_state.quote_df.at[idx, "Unit price(VND)"] = fmt_num(new_unit)
                 st.rerun()
-        st.markdown('</div>', unsafe_allow_html=True)
     
     if not st.session_state.quote_df.empty:
         # Re-order columns: Cảnh báo trước No
@@ -595,9 +591,7 @@ with t3:
         st.divider()
         c_rev, c_sv = st.columns([1, 1])
         with c_rev:
-            st.markdown('<div class="dark-btn">', unsafe_allow_html=True)
             if st.button("🔍 REVIEW BÁO GIÁ"): st.session_state.show_review = True
-            st.markdown('</div>', unsafe_allow_html=True)
         
         if st.session_state.get('show_review', False):
             st.write("### 📋 BẢNG REVIEW")
@@ -610,7 +604,6 @@ with t3:
             )
             
             # Button Xuất Excel Báo Giá
-            st.markdown('<div class="dark-btn">', unsafe_allow_html=True)
             if st.button("📤 XUẤT BÁO GIÁ (Excel)"):
                 if not cust_name: st.error("Chưa chọn khách hàng!")
                 else:
@@ -655,10 +648,8 @@ with t3:
                                 st.success(f"✅ Đã xuất báo giá: {fname}")
                                 st.markdown(f"📂 [Mở Folder]({lnk})", unsafe_allow_html=True)
                     except Exception as e: st.error(f"Lỗi xuất Excel: {e}")
-            st.markdown('</div>', unsafe_allow_html=True)
 
         with c_sv:
-            st.markdown('<div class="dark-btn">', unsafe_allow_html=True)
             if st.button("💾 LƯU LỊCH SỬ (QUAN TRỌNG ĐỂ LÀM PO)"):
                 if cust_name:
                     # 1. Save DB (Shared History)
@@ -688,7 +679,6 @@ with t3:
                     except Exception as e: st.error(f"Lỗi lưu CSV: {e}")
                     
                 else: st.error("Chọn khách!")
-            st.markdown('</div>', unsafe_allow_html=True)
 
 # --- TAB 4: PO & ĐẶT HÀNG ---
 with t4:
