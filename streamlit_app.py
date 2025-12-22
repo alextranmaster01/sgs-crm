@@ -12,7 +12,7 @@ import numpy as np
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO
 # =============================================================================
-APP_VERSION = "V5707 - FINAL FORMULA FIX"
+APP_VERSION = "V5800 - FINAL MERGED LOGIC (V4800 CORE)"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # CSS UI
@@ -28,7 +28,7 @@ st.markdown("""
     div.stButton > button { width: 100%; border-radius: 5px; font-weight: bold; background-color: #f0f2f6; }
     </style>""", unsafe_allow_html=True)
 
-# LIBRARIES
+# LIBRARIES & CONNECTIONS
 try:
     from supabase import create_client, Client
     from google.oauth2.credentials import Credentials
@@ -37,7 +37,7 @@ try:
     from openpyxl import load_workbook
     from openpyxl.styles import Border, Side
 except ImportError:
-    st.error("⚠️ Thiếu thư viện requirements.txt: streamlit, pandas, supabase, google-api-python-client, google-auth-oauthlib, openpyxl")
+    st.error("⚠️ Thiếu thư viện. Vui lòng cài: pip install streamlit pandas supabase google-api-python-client google-auth-oauthlib openpyxl")
     st.stop()
 
 # CONNECT SERVER
@@ -52,7 +52,7 @@ except Exception as e:
     st.error(f"⚠️ Lỗi Config: {e}"); st.stop()
 
 # =============================================================================
-# 2. HÀM HỖ TRỢ
+# 2. HÀM HỖ TRỢ (UTILS)
 # =============================================================================
 
 def get_drive_service():
@@ -130,13 +130,34 @@ def load_data(table, order_by="id", ascending=True):
             query = query.order("row_order", desc=False)
         else:
             query = query.order(order_by, desc=not ascending)
-            
         res = query.execute()
         df = pd.DataFrame(res.data)
         if table != "crm_tracking" and not df.empty and 'id' in df.columns: 
             df = df.drop(columns=['id'])
         return df
     except: return pd.DataFrame()
+
+# HÀM PARSE FORMULA CHUẨN (TỪ V4800)
+def parse_formula(formula, buying_price, ap_price):
+    s = str(formula).strip().upper()
+    # Xử lý ký tự thay thế cho user tiện nhập
+    s = s.replace(",", ".") # 1,1 -> 1.1
+    s = s.replace("%", "/100") # 10% -> /100
+    s = s.replace("X", "*") # X -> *
+    
+    if s.startswith("="): s = s[1:]
+    
+    # Thay thế biến
+    s = s.replace("BUYING PRICE", str(buying_price))
+    s = s.replace("BUY", str(buying_price))
+    s = s.replace("AP PRICE", str(ap_price))
+    s = s.replace("AP", str(ap_price))
+    
+    # Chỉ giữ lại ký tự toán học an toàn
+    s = re.sub(r'[^0-9.+\-*/()]', '', s)
+    
+    try: return float(eval(s))
+    except: return 0.0
 
 # MAPPING
 MAP_PURCHASE = {
@@ -146,59 +167,6 @@ MAP_PURCHASE = {
     "buying_price_vnd": ["Buying price (VND)", "Giá VND"], "leadtime": ["Leadtime"],
     "supplier_name": ["Supplier"], "image_path": ["image_path"], "type": ["Type"], "nuoc": ["NUOC"]
 }
-
-# LOGIC TÍNH TOÁN CORE (THAY THẾ VÒNG LẶP)
-def recalculate_quote_logic(df, params):
-    # 1. Chuyển đổi toàn bộ cột số về float để tính toán
-    cols_to_num = ["Q'ty", "Buying price(VND)", "AP price(VND)", "Unit price(VND)"]
-    for c in cols_to_num:
-        if c in df.columns:
-            df[c] = df[c].apply(to_float)
-            
-    # 2. Tính toán Vectorized (Cả bảng 1 lúc)
-    df["AP total price(VND)"] = df["AP price(VND)"] * df["Q'ty"]
-    df["Total price(VND)"] = df["Unit price(VND)"] * df["Q'ty"]
-    df["Total buying price(VND)"] = df["Buying price(VND)"] * df["Q'ty"]
-    
-    df["GAP"] = df["Total price(VND)"] - df["AP total price(VND)"]
-    
-    # Chi phí
-    df["End user(%)"] = df["AP total price(VND)"] * params['end'] / 100
-    df["Buyer(%)"] = df["Total price(VND)"] * params['buy'] / 100
-    df["Import tax(%)"] = df["Total buying price(VND)"] * params['tax'] / 100
-    df["VAT"] = df["Total price(VND)"] * params['vat'] / 100
-    df["Management fee(%)"] = df["Total price(VND)"] * params['mgmt'] / 100
-    df["Transportation"] = params['trans'] * df["Q'ty"]
-    df["Payback(%)"] = df["GAP"] * params['pay'] / 100
-    
-    # Profit
-    # cost_ops = (gap*0.6 if gap>0 else 0) + v_end + v_buy + v_tax + v_vat + v_mgmt + v_trans
-    gap_positive = df["GAP"].apply(lambda x: x * 0.6 if x > 0 else 0)
-    cost_ops = gap_positive + df["End user(%)"] + df["Buyer(%)"] + df["Import tax(%)"] + df["VAT"] + df["Management fee(%)"] + df["Transportation"]
-    
-    df["Profit(VND)"] = df["Total price(VND)"] - df["Total buying price(VND)"] - cost_ops + df["Payback(%)"]
-    
-    # Profit %
-    df["Profit_Pct_Raw"] = df.apply(lambda row: (row["Profit(VND)"] / row["Total price(VND)"] * 100) if row["Total price(VND)"] > 0 else 0, axis=1)
-    df["Profit(%)"] = df["Profit_Pct_Raw"].apply(lambda x: f"{x:.1f}%")
-    
-    # Cảnh báo
-    df["Cảnh báo"] = df["Profit_Pct_Raw"].apply(lambda x: "⚠️ LOW" if x < 10 else "✅ OK")
-    
-    # 3. Format lại thành chuỗi có dấu phẩy để hiển thị (trừ cột Qty, AP, Unit để edit cho dễ)
-    cols_format = ["AP total price(VND)", "Total price(VND)", "GAP", "End user(%)", "Buyer(%)", 
-                   "Import tax(%)", "VAT", "Management fee(%)", "Transportation", "Payback(%)", "Profit(VND)"]
-    for c in cols_format:
-        df[c] = df[c].apply(fmt_num)
-        
-    # Cột input giữ nguyên dạng số hoặc string tùy ý, nhưng để hiển thị đẹp thì format lại string
-    # Lưu ý: Khi edit, user nhập số, logic to_float ở đầu hàm sẽ xử lý
-    df["Q'ty"] = df["Q'ty"].apply(lambda x: float(x) if x else 0) # Giữ float cho Editor
-    df["Buying price(VND)"] = df["Buying price(VND)"].apply(fmt_num)
-    df["AP price(VND)"] = df["AP price(VND)"].apply(fmt_num)
-    df["Unit price(VND)"] = df["Unit price(VND)"].apply(fmt_num)
-    
-    return df
 
 # =============================================================================
 # 3. GIAO DIỆN CHÍNH
@@ -306,7 +274,7 @@ with t2:
                 df_pur = df_pur[mask]
             st.dataframe(df_pur, column_config={"image_path": st.column_config.ImageColumn("Ảnh")}, use_container_width=True, height=600)
 
-# --- TAB 3: BÁO GIÁ (LOGIC FIXED FINAL) ---
+# --- TAB 3: BÁO GIÁ (LOGIC V4800 MERGED) ---
 with t3:
     if 'quote_df' not in st.session_state: st.session_state.quote_df = pd.DataFrame()
     st.subheader("TÍNH TOÁN & LÀM BÁO GIÁ")
@@ -318,18 +286,25 @@ with t3:
     cust_name = c1.selectbox("Chọn Khách Hàng", [""] + cust_list)
     
     quote_no = c2.text_input("Số Báo Giá", key="q_no")
-    if c3.button("🔄 Reset Quote"): st.session_state.quote_df = pd.DataFrame(); st.rerun()
+    if c3.button("🔄 Reset Quote"): 
+        st.session_state.quote_df = pd.DataFrame()
+        for k in ["end","buy","tax","vat","pay","mgmt","trans"]:
+             if f"pct_{k}" in st.session_state: del st.session_state[f"pct_{k}"]
+        st.rerun()
 
-    with st.expander("Cấu hình chi phí (%)", expanded=False):
+    # THAM SỐ CHI PHÍ
+    with st.expander("Cấu hình chi phí (%)", expanded=True):
         cols = st.columns(7)
         keys = ["end", "buy", "tax", "vat", "pay", "mgmt", "trans"]
         params = {}
         for i, k in enumerate(keys):
-            val = cols[i].text_input(k.upper(), st.session_state.get(f"pct_{k}", "0"))
+            # Lấy giá trị mặc định từ session state nếu có
+            default_val = st.session_state.get(f"pct_{k}", "0")
+            val = cols[i].text_input(k.upper(), default_val, key=f"input_{k}")
             st.session_state[f"pct_{k}"] = val
             params[k] = to_float(val)
 
-    # Matching
+    # Matching RFQ
     cf1, cf2 = st.columns([1, 2])
     rfq = cf1.file_uploader("Upload RFQ (xlsx)", type=["xlsx"])
     if rfq and cf2.button("🔍 Matching"):
@@ -358,7 +333,7 @@ with t3:
                     "Item code": code,
                     "Item name": match.get('item_name') if match else "",
                     "Specs": match.get('specs') if match else "",
-                    "Q'ty": qty, # Giữ float
+                    "Q'ty": qty, 
                     "Buying price(RMB)": fmt_num(buy_rmb),
                     "Total buying price(rmb)": fmt_num(buy_rmb * qty),
                     "Exchange rate": fmt_num(ex_rate),
@@ -384,21 +359,36 @@ with t3:
                 }
                 res.append(item)
             st.session_state.quote_df = pd.DataFrame(res)
-            # Tính toán sơ bộ lần đầu
-            st.session_state.quote_df = recalculate_quote_logic(st.session_state.quote_df, params)
+            st.rerun()
 
     # INPUT FORMULA & BUTTONS
+    # Logic: Button click -> Tính toán vào State -> Rerun -> Editor hiển thị số mới
     c_form1, c_form2 = st.columns(2)
     with c_form1:
         ap_f = st.text_input("Formula AP (vd: =BUY*1.1)", key="f_ap")
-        btn_apply_ap = st.button("Apply AP Price")
+        if st.button("Apply AP Price"):
+            if not st.session_state.quote_df.empty:
+                for idx, row in st.session_state.quote_df.iterrows():
+                    buy = to_float(row["Buying price(VND)"])
+                    ap = to_float(row["AP price(VND)"])
+                    new_ap = parse_formula(ap_f, buy, ap)
+                    st.session_state.quote_df.at[idx, "AP price(VND)"] = fmt_num(new_ap)
+                st.rerun()
+
     with c_form2:
         unit_f = st.text_input("Formula Unit (vd: =AP*1.2)", key="f_unit")
-        btn_apply_unit = st.button("Apply Unit Price")
+        if st.button("Apply Unit Price"):
+            if not st.session_state.quote_df.empty:
+                for idx, row in st.session_state.quote_df.iterrows():
+                    buy = to_float(row["Buying price(VND)"])
+                    ap = to_float(row["AP price(VND)"])
+                    new_unit = parse_formula(unit_f, buy, ap)
+                    st.session_state.quote_df.at[idx, "Unit price(VND)"] = fmt_num(new_unit)
+                st.rerun()
     
-    # HIỂN THỊ EDITOR
+    # DATA EDITOR & AUTO-RECALCULATE LOOP
     if not st.session_state.quote_df.empty:
-        # Cấu hình hiển thị cột cho dễ nhập
+        # 1. Hiển thị Editor
         edited_df = st.data_editor(
             st.session_state.quote_df,
             column_config={
@@ -411,60 +401,81 @@ with t3:
             use_container_width=True, height=600, key="main_editor"
         )
         
-        # LOGIC XỬ LÝ (QUAN TRỌNG: CHẠY SAU KHI DỮ LIỆU ĐƯỢC LOAD VÀ EDIT)
-        should_rerun = False
-        df_work = edited_df.copy() # Làm việc trên bản copy
+        # 2. Logic tính toán tự động (Giống V4800)
+        # Nếu user sửa trên Editor -> edited_df thay đổi -> Tính lại -> Update State -> Rerun
         
-        # 1. APPLY BUTTONS (Đã sửa lỗi invalid decimal literal)
-        if btn_apply_ap and ap_f:
-            try:
-                def apply_ap_row(row):
-                    buy = to_float(row["Buying price(VND)"])
-                    ap = to_float(row["AP price(VND)"])
-                    
-                    # Xử lý chuỗi công thức: Chấp nhận dấu phẩy, dấu %, dấu X
-                    formula = ap_f.strip().upper()
-                    if formula.startswith("="): formula = formula[1:]
-                    formula = formula.replace(",", ".").replace("%", "/100").replace("X", "*")
-                    
-                    expr = formula.replace("BUY", str(buy)).replace("AP", str(ap))
-                    return eval(expr)
-                
-                df_work["AP price(VND)"] = df_work.apply(apply_ap_row, axis=1)
-                should_rerun = True
-                st.success(f"Đã áp dụng: {ap_f}")
-            except Exception as e: st.error(f"Lỗi công thức AP: {e}")
+        # Lấy tham số
+        pend = params['end']/100; pbuy = params['buy']/100
+        ptax = params['tax']/100; pvat = params['vat']/100
+        ppay = params['pay']/100; pmgmt = params['mgmt']/100
+        val_trans = params['trans']
+        
+        df_temp = edited_df.copy()
+        has_change = False
+        
+        for i, r in df_temp.iterrows():
+            # Lấy giá trị (Clean)
+            qty = to_float(r.get("Q'ty", 0))
+            buy_vnd = to_float(r.get("Buying price(VND)", 0))
+            buy_rmb = to_float(r.get("Buying price(RMB)", 0))
+            ap = to_float(r.get("AP price(VND)", 0))
+            unit = to_float(r.get("Unit price(VND)", 0))
+            
+            # Tính toán
+            t_buy = qty * buy_vnd
+            ap_tot = ap * qty
+            total = unit * qty
+            gap = total - ap_tot
+            
+            end_val = ap_tot * pend
+            buyer_val = total * pbuy
+            tax_val = t_buy * ptax
+            vat_val = total * pvat
+            mgmt_val = total * pmgmt
+            pay_val = gap * ppay
+            
+            # Logic Trans: Nếu Global > 0 thì dùng Global, không thì dùng từng dòng (nếu có logic dòng)
+            # Ở đây dùng logic: Trans Global * Qty
+            tot_trans = val_trans * qty
+            
+            # Cost & Profit
+            # Cost = Total Buy + (Gap*0.6 if Gap>0) + End + Buyer + Tax + VAT + Mgmt + Trans
+            gap_share = gap * 0.6 if gap > 0 else 0
+            cost_ops = gap_share + end_val + buyer_val + tax_val + vat_val + mgmt_val + tot_trans
+            
+            prof = total - t_buy - cost_ops + pay_val
+            pct = (prof / total * 100) if total > 0 else 0
+            
+            # Cảnh báo
+            alert = "⚠️ LOW" if pct < 10 else "✅ OK"
+            
+            # Cập nhật lại dòng (Format string)
+            df_temp.at[i, "Transportation"] = fmt_num(tot_trans)
+            df_temp.at[i, "Total buying price(rmb)"] = fmt_num(buy_rmb * qty)
+            df_temp.at[i, "Total buying price(VND)"] = fmt_num(t_buy)
+            df_temp.at[i, "AP total price(VND)"] = fmt_num(ap_tot)
+            df_temp.at[i, "Total price(VND)"] = fmt_num(total)
+            df_temp.at[i, "GAP"] = fmt_num(gap)
+            df_temp.at[i, "End user(%)"] = fmt_num(end_val)
+            df_temp.at[i, "Buyer(%)"] = fmt_num(buyer_val)
+            df_temp.at[i, "Import tax(%)"] = fmt_num(tax_val)
+            df_temp.at[i, "VAT"] = fmt_num(vat_val)
+            df_temp.at[i, "Management fee(%)"] = fmt_num(mgmt_val)
+            df_temp.at[i, "Payback(%)"] = fmt_num(pay_val)
+            df_temp.at[i, "Profit(VND)"] = fmt_num(prof)
+            df_temp.at[i, "Profit(%)"] = f"{pct:.1f}%"
+            df_temp.at[i, "Cảnh báo"] = alert
 
-        if btn_apply_unit and unit_f:
-            try:
-                def apply_unit_row(row):
-                    buy = to_float(row["Buying price(VND)"])
-                    ap = to_float(row["AP price(VND)"])
-                    
-                    # Xử lý chuỗi công thức: Chấp nhận dấu phẩy, dấu %, dấu X
-                    formula = unit_f.strip().upper()
-                    if formula.startswith("="): formula = formula[1:]
-                    formula = formula.replace(",", ".").replace("%", "/100").replace("X", "*")
+        # So sánh xem có thay đổi so với State không
+        # Lưu ý: Convert to dict để so sánh tránh lỗi NaN/Float lệch nhẹ
+        if not df_temp.equals(st.session_state.quote_df):
+             st.session_state.quote_df = df_temp
+             st.rerun()
 
-                    expr = formula.replace("BUY", str(buy)).replace("AP", str(ap))
-                    return eval(expr)
-                    
-                df_work["Unit price(VND)"] = df_work.apply(apply_unit_row, axis=1)
-                should_rerun = True
-                st.success(f"Đã áp dụng: {unit_f}")
-            except Exception as e: st.error(f"Lỗi công thức Unit: {e}")
-
-        # 2. KIỂM TRA THAY ĐỔI (Do User nhập tay hoặc do nút bấm)
-        if should_rerun or not df_work.equals(st.session_state.quote_df):
-            # TÍNH TOÁN LẠI TOÀN BỘ LOGIC
-            df_final = recalculate_quote_logic(df_work, params)
-            st.session_state.quote_df = df_final
-            st.rerun() # Refresh lại trang để hiển thị số mới
-
-        # Cảnh báo Lợi nhuận thấp
+        # Cảnh báo Lợi nhuận thấp UI
         low_profits = st.session_state.quote_df[st.session_state.quote_df["Cảnh báo"] == "⚠️ LOW"]
         if not low_profits.empty:
-            st.error(f"⚠️ CÓ {len(low_profits)} MỤC LỢI NHUẬN THẤP (<10%) - Vui lòng kiểm tra cột Cảnh báo!")
+            st.error(f"⚠️ CÓ {len(low_profits)} MỤC LỢI NHUẬN THẤP (<10%)")
 
         # EXPORT & SAVE
         st.divider()
