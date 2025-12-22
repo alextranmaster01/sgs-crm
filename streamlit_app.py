@@ -26,6 +26,18 @@ st.markdown("""
     [data-testid="stDataFrame"] > div { max-height: 750px; }
     .highlight-low { background-color: #ffcccc !important; color: red !important; font-weight: bold; }
     div.stButton > button { width: 100%; border-radius: 5px; font-weight: bold; background-color: #f0f2f6; }
+    
+    /* CSS RIÊNG CHO TAB BÁO GIÁ: NÚT MÀU TỐI - CHỮ SÁNG */
+    .dark-btn > button {
+        background-color: #262730 !important; 
+        color: #ffffff !important; 
+        border: 1px solid #4e4e4e !important;
+    }
+    .dark-btn > button:hover {
+        background-color: #444444 !important;
+        color: #ffffff !important;
+        border-color: #ffffff !important;
+    }
     </style>""", unsafe_allow_html=True)
 
 # LIBRARIES & CONNECTIONS
@@ -449,12 +461,15 @@ with t3:
     cust_name = c1.selectbox("Chọn Khách Hàng", [""] + cust_list)
     quote_no = c2.text_input("Số Báo Giá", key="q_no")
     
+    # Nút Reset màu tối
+    c3.markdown('<div class="dark-btn">', unsafe_allow_html=True)
     if c3.button("🔄 Reset Quote"): 
         st.session_state.quote_df = pd.DataFrame()
         st.session_state.show_review = False 
         for k in ["end","buy","tax","vat","pay","mgmt","trans"]:
              if f"pct_{k}" in st.session_state: del st.session_state[f"pct_{k}"]
         st.rerun()
+    c3.markdown('</div>', unsafe_allow_html=True)
 
     with st.expander("Cấu hình chi phí (%)", expanded=True):
         cols = st.columns(7)
@@ -531,6 +546,7 @@ with t3:
     c_form1, c_form2 = st.columns(2)
     with c_form1:
         ap_f = st.text_input("Formula AP (vd: =BUY*1.1)", key="f_ap")
+        st.markdown('<div class="dark-btn">', unsafe_allow_html=True)
         if st.button("Apply AP Price"):
             if not st.session_state.quote_df.empty:
                 for idx, row in st.session_state.quote_df.iterrows():
@@ -539,8 +555,10 @@ with t3:
                     new_ap = parse_formula(ap_f, buy, ap)
                     st.session_state.quote_df.at[idx, "AP price(VND)"] = fmt_num(new_ap)
                 st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
     with c_form2:
         unit_f = st.text_input("Formula Unit (vd: =AP*1.2)", key="f_unit")
+        st.markdown('<div class="dark-btn">', unsafe_allow_html=True)
         if st.button("Apply Unit Price"):
             if not st.session_state.quote_df.empty:
                 for idx, row in st.session_state.quote_df.iterrows():
@@ -549,8 +567,13 @@ with t3:
                     new_unit = parse_formula(unit_f, buy, ap)
                     st.session_state.quote_df.at[idx, "Unit price(VND)"] = fmt_num(new_unit)
                 st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
     
     if not st.session_state.quote_df.empty:
+        # Re-order columns: Cảnh báo trước No
+        cols_order = ["Cảnh báo", "No"] + [c for c in st.session_state.quote_df.columns if c not in ["Cảnh báo", "No"]]
+        st.session_state.quote_df = st.session_state.quote_df[cols_order]
+
         edited_df = st.data_editor(
             st.session_state.quote_df,
             column_config={
@@ -560,7 +583,8 @@ with t3:
                 "Cảnh báo": st.column_config.TextColumn("Cảnh báo", width="small", disabled=True),
                 "Q'ty": st.column_config.NumberColumn("Q'ty", format="%d"),
             },
-            use_container_width=True, height=600, key="main_editor"
+            use_container_width=True, height=600, key="main_editor",
+            hide_index=True # Bỏ cột index 0,1,2...
         )
         
         df_temp = edited_df.copy()
@@ -571,17 +595,73 @@ with t3:
         st.divider()
         c_rev, c_sv = st.columns([1, 1])
         with c_rev:
+            st.markdown('<div class="dark-btn">', unsafe_allow_html=True)
             if st.button("🔍 REVIEW BÁO GIÁ"): st.session_state.show_review = True
+            st.markdown('</div>', unsafe_allow_html=True)
         
         if st.session_state.get('show_review', False):
             st.write("### 📋 BẢNG REVIEW")
             cols_review = ["No", "Item code", "Item name", "Specs", "Q'ty", "Unit price(VND)", "Total price(VND)", "Leadtime"]
             valid_cols = [c for c in cols_review if c in st.session_state.quote_df.columns]
-            st.dataframe(st.session_state.quote_df[valid_cols], use_container_width=True)
+            # Use TextColumn for nice formatting in Review
+            st.dataframe(
+                st.session_state.quote_df[valid_cols], 
+                use_container_width=True, hide_index=True
+            )
+            
+            # Button Xuất Excel Báo Giá
+            st.markdown('<div class="dark-btn">', unsafe_allow_html=True)
+            if st.button("📤 XUẤT BÁO GIÁ (Excel)"):
+                if not cust_name: st.error("Chưa chọn khách hàng!")
+                else:
+                    try:
+                        # 1. Tìm file Template AAA-QUOTATION.xlsx
+                        tmpl_res = supabase.table("crm_templates").select("file_id").eq("template_name", "AAA-QUOTATION").execute()
+                        if not tmpl_res.data:
+                            st.error("Không tìm thấy template 'AAA-QUOTATION' trong Master Data!")
+                        else:
+                            tmpl_id = tmpl_res.data[0]['file_id']
+                            fh = download_from_drive(tmpl_id)
+                            if not fh: st.error("Lỗi tải template!")
+                            else:
+                                # 2. Fill Data
+                                wb = load_workbook(fh); ws = wb.active
+                                start_row = 10
+                                
+                                # Lấy Leadtime dòng đầu tiên (hoặc max) để điền vào H8
+                                first_leadtime = st.session_state.quote_df.iloc[0]['Leadtime'] if not st.session_state.quote_df.empty else ""
+                                ws['H8'] = safe_str(first_leadtime)
+
+                                for idx, row in st.session_state.quote_df.iterrows():
+                                    r = start_row + idx
+                                    # Mapping: No->A, Code->C, Name->D, Specs->E, Qty->F, Unit->G, Total->H
+                                    ws[f'A{r}'] = row['No']
+                                    ws[f'C{r}'] = row['Item code']
+                                    ws[f'D{r}'] = row['Item name']
+                                    ws[f'E{r}'] = row['Specs']
+                                    ws[f'F{r}'] = to_float(row["Q'ty"])
+                                    ws[f'G{r}'] = to_float(row["Unit price(VND)"])
+                                    ws[f'H{r}'] = to_float(row["Total price(VND)"])
+                                
+                                out = io.BytesIO(); wb.save(out); out.seek(0)
+                                
+                                # 3. Upload to Drive: QUOTATION_HISTORY\KHACH\YEAR\MONTH
+                                curr_year = datetime.now().strftime("%Y")
+                                curr_month = datetime.now().strftime("%b").upper()
+                                fname = f"QUOTE_{quote_no}_{cust_name}_{int(time.time())}.xlsx"
+                                path_list = ["QUOTATION_HISTORY", cust_name, curr_year, curr_month]
+                                
+                                lnk, _ = upload_to_drive_structured(out, path_list, fname)
+                                st.success(f"✅ Đã xuất báo giá: {fname}")
+                                st.markdown(f"📂 [Mở Folder]({lnk})", unsafe_allow_html=True)
+                    except Exception as e: st.error(f"Lỗi xuất Excel: {e}")
+            st.markdown('</div>', unsafe_allow_html=True)
 
         with c_sv:
+            st.markdown('<div class="dark-btn">', unsafe_allow_html=True)
             if st.button("💾 LƯU LỊCH SỬ (QUAN TRỌNG ĐỂ LÀM PO)"):
                 if cust_name:
+                    # 1. Save DB (Shared History)
                     recs = []
                     for r in st.session_state.quote_df.to_dict('records'):
                         recs.append({
@@ -592,8 +672,23 @@ with t3:
                             "total_price_vnd": to_float(r["Total price(VND)"]),
                             "profit_vnd": to_float(r["Profit(VND)"])
                         })
-                    supabase.table("crm_shared_history").insert(recs).execute(); st.success("Đã lưu lịch sử báo giá! Dữ liệu này sẽ dùng cho PO Khách hàng.")
+                    supabase.table("crm_shared_history").insert(recs).execute()
+                    
+                    # 2. Save CSV History to Drive
+                    try:
+                        csv_buffer = io.BytesIO()
+                        # Lưu toàn bộ DF bao gồm các cột % chi phí
+                        st.session_state.quote_df.to_csv(csv_buffer, index=False, encoding='utf-8-sig')
+                        csv_buffer.seek(0)
+                        
+                        csv_name = f"HIST_{quote_no}_{cust_name}_{int(time.time())}.csv"
+                        # Upload vào folder QUOTATION_HISTORY
+                        lnk, _ = upload_to_drive_structured(csv_buffer, ["QUOTATION_HISTORY"], csv_name)
+                        st.success("✅ Đã lưu lịch sử DB & CSV!")
+                    except Exception as e: st.error(f"Lỗi lưu CSV: {e}")
+                    
                 else: st.error("Chọn khách!")
+            st.markdown('</div>', unsafe_allow_html=True)
 
 # --- TAB 4: PO & ĐẶT HÀNG ---
 with t4:
