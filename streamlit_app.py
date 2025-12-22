@@ -12,7 +12,7 @@ import numpy as np
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO
 # =============================================================================
-APP_VERSION = "V5703 - FINAL BUTTON UPDATE (EXPLICIT CALCULATION)"
+APP_VERSION = "V5704 - FINAL FIXED (CALCULATION LOGIC OPTIMIZED)"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # CSS UI
@@ -26,7 +26,7 @@ st.markdown("""
     [data-testid="stDataFrame"] > div { max-height: 750px; }
     .highlight-low { background-color: #ffcccc !important; color: red !important; font-weight: bold; }
     /* Button Style */
-    div.stButton > button { width: 100%; border-radius: 5px; font-weight: bold; }
+    div.stButton > button { width: 100%; border-radius: 5px; font-weight: bold; background-color: #f0f2f6; }
     </style>""", unsafe_allow_html=True)
 
 # LIBRARIES
@@ -258,7 +258,7 @@ with t2:
                 df_pur = df_pur[mask]
             st.dataframe(df_pur, column_config={"image_path": st.column_config.ImageColumn("Ảnh")}, use_container_width=True, height=600)
 
-# --- TAB 3: BÁO GIÁ (FULL BUTTONS ADDED) ---
+# --- TAB 3: BÁO GIÁ (FULL UPGRADE + FIXED BUTTONS) ---
 with t3:
     if 'quote_df' not in st.session_state: st.session_state.quote_df = pd.DataFrame()
     st.subheader("TÍNH TOÁN & LÀM BÁO GIÁ")
@@ -281,7 +281,7 @@ with t3:
             st.session_state[f"pct_{k}"] = val
             params[k] = to_float(val)
 
-    # Matching (CLEAR OLD DATA)
+    # Matching
     cf1, cf2 = st.columns([1, 2])
     rfq = cf1.file_uploader("Upload RFQ (xlsx)", type=["xlsx"])
     if rfq and cf2.button("🔍 Matching"):
@@ -305,7 +305,6 @@ with t3:
                 buy_vnd = to_float(match.get('buying_price_vnd')) if match else 0
                 ex_rate = to_float(match.get('exchange_rate')) if match else 0
                 
-                # STANDARDIZED KEYS
                 item = {
                     "No": i+1,
                     "Item code": code,
@@ -341,45 +340,50 @@ with t3:
     # INPUT FORMULA & BUTTONS
     c_form1, c_form2 = st.columns(2)
     with c_form1:
-        ap_f = st.text_input("Formula AP (vd: =BUY*1.1)")
+        ap_f = st.text_input("Formula AP (vd: =BUY*1.1)", key="f_ap")
         btn_apply_ap = st.button("Apply AP Price")
     with c_form2:
-        unit_f = st.text_input("Formula Unit (vd: =AP*1.2)")
+        unit_f = st.text_input("Formula Unit (vd: =AP*1.2)", key="f_unit")
         btn_apply_unit = st.button("Apply Unit Price")
     
-    # CALCULATION LOOP
+    # CALCULATION LOOP (ACTIVATED BY BUTTON)
     if not st.session_state.quote_df.empty:
+        # Check if button clicked to trigger recalc
+        is_recalc = False
         df = st.session_state.quote_df.copy()
         low_profit_idx = []
+        
+        # Chỉ chạy tính toán nếu có thay đổi hoặc nút bấm
+        # Logic Loop
         for i, r in df.iterrows():
-            # Get Base Values
             buy = to_float(r.get("Buying price(VND)", 0))
             qty = to_float(r.get("Q'ty", 0))
             ap = to_float(r.get("AP price(VND)", 0))
             
-            # 1. APPLY AP FORMULA (ONLY IF BUTTON CLICKED)
-            if btn_apply_ap and ap_f and ap_f.startswith("=") and len(ap_f) > 1: 
+            # 1. APPLY AP
+            if btn_apply_ap and ap_f and ap_f.startswith("="):
                 try:
                     expr = ap_f[1:].upper().replace("BUY", str(buy)).replace("AP", str(ap))
                     ap = eval(expr)
                     df.at[i, "AP price(VND)"] = fmt_num(ap)
+                    is_recalc = True
                 except: pass
 
-            # 2. APPLY UNIT FORMULA (ONLY IF BUTTON CLICKED)
-            if btn_apply_unit and unit_f and unit_f.startswith("=") and len(unit_f) > 1:
+            # 2. APPLY UNIT
+            if btn_apply_unit and unit_f and unit_f.startswith("="):
                 try:
-                    # Update AP for Calculation first
+                    # Update AP current value
                     ap = to_float(df.at[i, "AP price(VND)"])
                     expr = unit_f[1:].upper().replace("BUY", str(buy)).replace("AP", str(ap))
                     unit = eval(expr)
                     df.at[i, "Unit price(VND)"] = fmt_num(unit)
+                    is_recalc = True
                 except: pass
             
-            # Re-read values for Totals
+            # Recalculate Totals & Profits (Always run to keep sync)
             unit = to_float(df.at[i, "Unit price(VND)"])
             ap = to_float(df.at[i, "AP price(VND)"])
             
-            # Calculate Totals
             ap_total = ap * qty
             total_sell = unit * qty
             total_buy = buy * qty
@@ -387,7 +391,6 @@ with t3:
             df.at[i, "AP total price(VND)"] = fmt_num(ap_total)
             df.at[i, "Total price(VND)"] = fmt_num(total_sell)
             
-            # Calculate Costs
             gap = total_sell - ap_total
             df.at[i, "GAP"] = fmt_num(gap)
             
@@ -417,6 +420,10 @@ with t3:
 
         st.session_state.quote_df = df
         
+        # Nếu vừa bấm nút Apply -> Rerun để hiện số mới
+        if is_recalc:
+            st.rerun()
+
         # EDITOR (INPUT TAY)
         edited = st.data_editor(
             st.session_state.quote_df,
