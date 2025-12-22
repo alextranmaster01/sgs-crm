@@ -410,20 +410,27 @@ with t2:
                 mask = df_pur.astype(str).apply(lambda x: x.str.contains(search, case=False, na=False)).any(axis=1)
                 df_pur = df_pur[mask]
             
+            # --- FIX: FORMAT MONEY & DISPLAY ---
+            # Chuyển đổi số sang chuỗi có dấu phẩy để tránh lỗi SyntaxError của NumberColumn
+            cols_money = ["buying_price_vnd", "total_buying_price_vnd", "buying_price_rmb", "total_buying_price_rmb"]
+            for c in cols_money:
+                if c in df_pur.columns:
+                    df_pur[c] = df_pur[c].apply(lambda x: "{:,.0f}".format(float(x)) if x else "0")
+
             st.dataframe(
                 df_pur, 
                 column_config={
                     "image_path": st.column_config.ImageColumn("Images"),
-                    # Text Columns - Added Width for wrapping visibility
+                    # Text Columns - Added Width for better wrapping/visibility
                     "item_code": st.column_config.TextColumn("Code", width="medium"),
                     "item_name": st.column_config.TextColumn("Name", width="medium"),
                     "specs": st.column_config.TextColumn("Specs", width="large"),
-                    # Cấu hình hiển thị tiền tệ có dấu phân cách (1,000,000) using format="%,.0f"
-                    "buying_price_vnd": st.column_config.NumberColumn("Buying (VND)", format="%,.0f"),
-                    "total_buying_price_vnd": st.column_config.NumberColumn("Total (VND)", format="%,.0f"),
-                    "buying_price_rmb": st.column_config.NumberColumn("Buying (RMB)", format="%,.0f"),
-                    "total_buying_price_rmb": st.column_config.NumberColumn("Total (RMB)", format="%,.0f"),
-                    "qty": st.column_config.NumberColumn("Qty", format="%,.0f"),
+                    # Chuyển sang TextColumn vì đã format string ở trên (để có dấu phẩy)
+                    "buying_price_vnd": st.column_config.TextColumn("Buying (VND)"),
+                    "total_buying_price_vnd": st.column_config.TextColumn("Total (VND)"),
+                    "buying_price_rmb": st.column_config.TextColumn("Buying (RMB)"),
+                    "total_buying_price_rmb": st.column_config.TextColumn("Total (RMB)"),
+                    "qty": st.column_config.NumberColumn("Qty", format="%d"),
                 }, 
                 use_container_width=True, # Tự động căn chỉnh vừa màn hình
                 height=700,
