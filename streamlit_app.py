@@ -12,7 +12,7 @@ import numpy as np
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO
 # =============================================================================
-APP_VERSION = "V6010 - QUOTE TAB ADVANCED FIX"
+APP_VERSION = "V6011 - QUOTE TOTAL VIEW & DECIMAL FIX"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # CSS UI
@@ -39,6 +39,17 @@ st.markdown("""
         background-color: #444444;
         color: #ffffff;
         border-color: #ffffff;
+    }
+    .total-view {
+        font-size: 20px;
+        font-weight: bold;
+        color: #00FF00; /* Màu xanh lá nổi bật */
+        background-color: #262730;
+        padding: 10px;
+        border-radius: 8px;
+        text-align: right;
+        margin-top: 10px;
+        border: 1px solid #4e4e4e;
     }
     </style>""", unsafe_allow_html=True)
 
@@ -192,6 +203,14 @@ def fmt_num(x):
             return s.rstrip('0').rstrip('.')
     except: return "0"
 
+# --- NEW: FORMAT 2 DECIMAL PLACES (FOR QUOTE TAB) ---
+def fmt_float_2(x):
+    try:
+        if x is None: return "0.00"
+        val = float(x)
+        return "{:,.2f}".format(val)
+    except: return "0.00"
+
 def clean_key(s): return safe_str(s).lower()
 
 def calc_eta(order_date_str, leadtime_val):
@@ -258,16 +277,14 @@ def recalculate_quote_logic(df, params):
         return "⚠️ LOW" if row["Profit_Pct_Raw"] < 10 else "✅ OK"
     df["Cảnh báo"] = df.apply(set_warning, axis=1)
 
+    # --- UPDATE: USE fmt_float_2 FOR ALL MONEY COLUMNS ---
     cols_format = ["AP total price(VND)", "Total price(VND)", "GAP", "End user(%)", "Buyer(%)", 
                    "Import tax(%)", "VAT", "Management fee(%)", "Transportation", "Payback(%)", "Profit(VND)",
-                   "Total buying price(VND)", "Total buying price(rmb)"]
+                   "Total buying price(VND)", "Total buying price(rmb)",
+                   "Buying price(VND)", "Buying price(RMB)", "AP price(VND)", "Unit price(VND)"]
     for c in cols_format:
-        if c in df.columns: df[c] = df[c].apply(fmt_num)
+        if c in df.columns: df[c] = df[c].apply(fmt_float_2)
     
-    df["Buying price(VND)"] = df["Buying price(VND)"].apply(fmt_num)
-    df["Buying price(RMB)"] = df["Buying price(RMB)"].apply(fmt_num)
-    df["AP price(VND)"] = df["AP price(VND)"].apply(fmt_num)
-    df["Unit price(VND)"] = df["Unit price(VND)"].apply(fmt_num)
     return df
 
 def parse_formula(formula, buying_price, ap_price):
@@ -400,7 +417,7 @@ with t2:
             )
         else: st.info("Kho hàng trống.")
 
-# --- TAB 3: BÁO GIÁ (ĐÃ FIX: Realtime Update, Search History, Formula) ---
+# --- TAB 3: BÁO GIÁ (ĐÃ FIX: Realtime Update, Search History, Formula, Total View) ---
 with t3:
     if 'quote_df' not in st.session_state: st.session_state.quote_df = pd.DataFrame()
     
@@ -431,12 +448,10 @@ with t3:
             if search_kw and not df_hist.empty:
                 def check_row(row):
                     kw = search_kw.lower()
-                    # Cải tiến: Tìm trong nhiều trường thông tin
                     if kw in str(row.get('customer','')).lower(): return True
                     if kw in str(row.get('quote_no','')).lower(): return True
                     if kw in str(row.get('item_code','')).lower(): return True
                     if kw in str(row.get('date','')).lower(): return True
-                    
                     code = clean_key(row['item_code'])
                     info = item_map.get(code, "").lower()
                     if kw in info: return True
@@ -451,7 +466,7 @@ with t3:
                     results.append({
                         "Trạng thái": "✅ Đã báo giá", "Customer": r['customer'], "Date": r['date'],
                         "Item Code": r['item_code'], "Info": code_info, 
-                        "Unit Price": fmt_num(r['unit_price']),
+                        "Unit Price": fmt_float_2(r['unit_price']),
                         "Quote No": r['quote_no'], "PO No": po_found if po_found else "---"
                     })
             
@@ -475,7 +490,7 @@ with t3:
                                 results.append({
                                     "Trạng thái": "✅ Đã báo giá", "Customer": m['customer'], "Date": m['date'],
                                     "Item Code": m['item_code'], "Info": item_map.get(clean_key(m['item_code']), ""),
-                                    "Unit Price": fmt_num(m['unit_price']), "Quote No": m['quote_no'], "PO No": po_found
+                                    "Unit Price": fmt_float_2(m['unit_price']), "Quote No": m['quote_no'], "PO No": po_found
                                 })
                         else:
                             results.append({
@@ -491,13 +506,9 @@ with t3:
         df_hist_idx = load_data("crm_shared_history", order_by="date")
         if not df_hist_idx.empty:
             df_hist_idx['display'] = df_hist_idx.apply(lambda x: f"{x['date']} | {x['customer']} | Quote: {x['quote_no']}", axis=1)
-            
-            # Filter dropdown options if user typed in search box above
             unique_quotes = df_hist_idx['display'].unique()
             filtered_quotes = unique_quotes
-            if search_kw:
-                filtered_quotes = [q for q in unique_quotes if search_kw.lower() in q.lower()]
-                
+            if search_kw: filtered_quotes = [q for q in unique_quotes if search_kw.lower() in q.lower()]
             sel_quote_hist = st.selectbox("Chọn báo giá cũ để xem chi tiết:", [""] + list(filtered_quotes))
             
             if sel_quote_hist:
@@ -514,7 +525,6 @@ with t3:
                          fh = download_from_drive(fid)
                          if fh:
                              try:
-                                 # Fix lỗi đọc file CSV: thêm encoding và on_bad_lines
                                  df_csv = pd.read_csv(fh, encoding='utf-8-sig', on_bad_lines='skip')
                                  st.success("Đã tải xong!")
                                  st.dataframe(df_csv, use_container_width=True)
@@ -608,17 +618,16 @@ with t3:
                 item = {
                     "No": i+1, "Cảnh báo": warning_msg, 
                     "Item code": code_excel, "Item name": name_excel, "Specs": specs_excel, "Q'ty": qty, 
-                    "Buying price(RMB)": fmt_num(buy_rmb), "Total buying price(rmb)": fmt_num(buy_rmb * qty),
-                    "Exchange rate": fmt_num(ex_rate), "Buying price(VND)": fmt_num(buy_vnd), "Total buying price(VND)": fmt_num(buy_vnd * qty),
-                    "AP price(VND)": "0", "AP total price(VND)": "0", "Unit price(VND)": "0", "Total price(VND)": "0",
-                    "GAP": "0", "End user(%)": "0", "Buyer(%)": "0", "Import tax(%)": "0", "VAT": "0", "Transportation": "0",
-                    "Management fee(%)": "0", "Payback(%)": "0", "Profit(VND)": "0", "Profit(%)": "0%",
+                    "Buying price(RMB)": fmt_float_2(buy_rmb), "Total buying price(rmb)": fmt_float_2(buy_rmb * qty),
+                    "Exchange rate": fmt_float_2(ex_rate), "Buying price(VND)": fmt_float_2(buy_vnd), "Total buying price(VND)": fmt_float_2(buy_vnd * qty),
+                    "AP price(VND)": "0.00", "AP total price(VND)": "0.00", "Unit price(VND)": "0.00", "Total price(VND)": "0.00",
+                    "GAP": "0.00", "End user(%)": "0.00", "Buyer(%)": "0.00", "Import tax(%)": "0.00", "VAT": "0.00", "Transportation": "0.00",
+                    "Management fee(%)": "0.00", "Payback(%)": "0.00", "Profit(VND)": "0.00", "Profit(%)": "0.0%",
                     "Supplier": supplier, "Image": image, "Leadtime": leadtime
                 }
                 res.append(item)
             
             st.session_state.quote_df = pd.DataFrame(res)
-            # Không cần rerun ở đây, vì sẽ render dataframe ở dưới
     
     # --- FORMULA BUTTONS (ONE CLICK FIX) ---
     c_form1, c_form2 = st.columns(2)
@@ -631,11 +640,9 @@ with t3:
                     buy = to_float(row["Buying price(VND)"])
                     ap = to_float(row["AP price(VND)"])
                     new_ap = parse_formula(ap_f, buy, ap)
-                    st.session_state.quote_df.at[idx, "AP price(VND)"] = fmt_num(new_ap)
-                
-                # RECALCULATE IMMEDIATELY
+                    st.session_state.quote_df.at[idx, "AP price(VND)"] = fmt_float_2(new_ap)
                 st.session_state.quote_df = recalculate_quote_logic(st.session_state.quote_df, params)
-                st.rerun() # Refresh to show results immediately
+                st.rerun() 
         st.markdown('</div>', unsafe_allow_html=True)
     with c_form2:
         unit_f = st.text_input("Formula Unit (vd: =AP*1.2)", key="f_unit")
@@ -646,11 +653,9 @@ with t3:
                     buy = to_float(row["Buying price(VND)"])
                     ap = to_float(row["AP price(VND)"])
                     new_unit = parse_formula(unit_f, buy, ap)
-                    st.session_state.quote_df.at[idx, "Unit price(VND)"] = fmt_num(new_unit)
-                
-                # RECALCULATE IMMEDIATELY
+                    st.session_state.quote_df.at[idx, "Unit price(VND)"] = fmt_float_2(new_unit)
                 st.session_state.quote_df = recalculate_quote_logic(st.session_state.quote_df, params)
-                st.rerun() # Refresh to show results immediately
+                st.rerun() 
         st.markdown('</div>', unsafe_allow_html=True)
     
     if not st.session_state.quote_df.empty:
@@ -677,6 +682,10 @@ with t3:
         
         # Sync edits back
         for c in edited_df.columns: st.session_state.quote_df[c] = edited_df[c]
+        
+        # --- VIEW TOTAL PRICE (FEATURE ADDED) ---
+        total_q = st.session_state.quote_df["Total price(VND)"].apply(to_float).sum()
+        st.markdown(f'<div class="total-view">💰 TỔNG GIÁ TRỊ BÁO GIÁ (TOTAL VIEW): {fmt_float_2(total_q)} VND</div>', unsafe_allow_html=True)
 
         st.divider()
         c_rev, c_sv = st.columns([1, 1])
@@ -690,6 +699,9 @@ with t3:
             cols_review = ["No", "Item code", "Item name", "Specs", "Q'ty", "Unit price(VND)", "Total price(VND)", "Leadtime"]
             valid_cols = [c for c in cols_review if c in st.session_state.quote_df.columns]
             st.dataframe(st.session_state.quote_df[valid_cols], use_container_width=True, hide_index=True)
+            
+            # Show Total in Review as well
+            st.markdown(f'<div class="total-view">💰 TỔNG CỘNG: {fmt_float_2(total_q)} VND</div>', unsafe_allow_html=True)
             
             st.markdown('<div class="dark-btn">', unsafe_allow_html=True)
             if st.button("📤 XUẤT BÁO GIÁ (Excel)"):
