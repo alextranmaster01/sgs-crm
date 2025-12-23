@@ -12,7 +12,7 @@ import numpy as np
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO
 # =============================================================================
-APP_VERSION = "V6006 - STRICT MAPPING & FOLDER STRUCTURE"
+APP_VERSION = "V6007 - STRICT PRICE MATCHING & DECIMAL FIX"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # CSS UI
@@ -201,9 +201,18 @@ def to_float(val):
         return float(nums[0]) if nums else 0.0
     except: return 0.0
 
+# --- FIX: CẢI TIẾN FORMAT NUM ĐỂ KHÔNG MẤT SỐ LẺ (34.375) ---
 def fmt_num(x): 
     try:
-        return "{:,.0f}".format(float(x)) if x else "0"
+        if x is None: return "0"
+        val = float(x)
+        # Nếu là số nguyên thì không hiện số lẻ
+        if val.is_integer():
+            return "{:,.0f}".format(val)
+        else:
+            # Nếu có số lẻ, hiện tối đa 3 số lẻ và cắt số 0 thừa
+            s = "{:,.3f}".format(val)
+            return s.rstrip('0').rstrip('.')
     except:
         return "0"
 
@@ -444,7 +453,8 @@ with t2:
             cols_money = ["buying_price_vnd", "total_buying_price_vnd", "buying_price_rmb", "total_buying_price_rmb"]
             for c in cols_money:
                 if c in df_pur.columns:
-                    df_pur[c] = df_pur[c].apply(lambda x: "{:,.0f}".format(float(x)) if x else "0")
+                    # Sử dụng fmt_num mới để không mất số lẻ
+                    df_pur[c] = df_pur[c].apply(fmt_num)
 
             st.dataframe(
                 df_pur, 
@@ -583,8 +593,8 @@ with t3:
                     fid, fname, pid = search_file_in_drive_by_name(search_name)
                     
                     if pid:
-                         folder_link = f"https://drive.google.com/drive/folders/{pid}"
-                         st.markdown(f"👉 **[Mở Folder chứa file này trên Google Drive]({folder_link})**", unsafe_allow_html=True)
+                          folder_link = f"https://drive.google.com/drive/folders/{pid}"
+                          st.markdown(f"👉 **[Mở Folder chứa file này trên Google Drive]({folder_link})**", unsafe_allow_html=True)
                     
                     if fid and st.button(f"Tải file chi tiết: {fname}"):
                          fh = download_from_drive(fid)
@@ -637,8 +647,9 @@ with t3:
         db = load_data("crm_purchases")
         if db.empty: st.error("Kho rỗng!")
         else:
-            lookup_code = {clean_key(r['item_code']): r for r in db.to_dict('records')}
-            lookup_name = {clean_key(r['item_name']): r for r in db.to_dict('records')}
+            # --- FIX LOGIC MATCHING ĐỂ KHẮC PHỤC LỖI TRÙNG MÃ & SAI GIÁ ---
+            # Thay vì Dictionary (làm mất mã trùng), ta giữ lại toàn bộ records
+            db_records = db.to_dict('records')
             
             df_rfq = pd.read_excel(rfq, dtype=str).fillna("")
             res = []
@@ -658,9 +669,34 @@ with t3:
                 qty = to_float(qty_raw) if qty_raw else 1.0
 
                 match = None
-                if code_excel: match = lookup_code.get(clean_key(code_excel))
-                if not match and name_excel: match = lookup_name.get(clean_key(name_excel))
                 
+                # 1. Lọc tất cả các dòng trong DB có Item Code trùng với Excel
+                candidates = [rec for rec in db_records if clean_key(rec['item_code']) == clean_key(code_excel)]
+                
+                if not candidates:
+                    # Nếu không thấy theo Code, thử tìm theo Tên
+                    if name_excel:
+                        candidates = [rec for rec in db_records if clean_key(name_excel) in clean_key(rec['item_name'])]
+
+                if candidates:
+                    # NẾU CÓ NHIỀU KẾT QUẢ (TRÙNG MÃ), PHẢI CHỌN DÒNG ĐÚNG NHẤT
+                    if len(candidates) == 1:
+                        match = candidates[0]
+                    else:
+                        # Ưu tiên 1: Khớp Specs (Quy cách) - Giải quyết vụ (air) vs thường
+                        spec_match = [c for c in candidates if clean_key(specs_excel) in clean_key(c['specs'])]
+                        if spec_match:
+                             match = spec_match[0] # Lấy dòng đầu tiên khớp Specs
+                        else:
+                             # Ưu tiên 2: Khớp Tên
+                             name_match = [c for c in candidates if clean_key(name_excel) in clean_key(c['item_name'])]
+                             if name_match:
+                                 match = name_match[0]
+                             else:
+                                 # Fallback: Lấy dòng mới nhất (hoặc dòng có giá cao nhất để an toàn?)
+                                 # Ở đây lấy dòng cuối cùng trong list candidates (thường là mới nhất import vào)
+                                 match = candidates[-1]
+
                 if match:
                     buy_rmb = to_float(match.get('buying_price_rmb', 0))
                     buy_vnd = to_float(match.get('buying_price_vnd', 0))
@@ -989,8 +1025,8 @@ with t4:
                             ws.append(headers)
                             for r in group.to_dict('records'):
                                 ws.append([r["No"], r["Item code"], r["Item name"], r["Specs"], r["Q'ty"], 
-                                           r["Buying price(RMB)"], r["Total buying price(RMB)"], r["Exchange rate"],
-                                           r["Buying price(VND)"], r["Total buying price(VND)"], r["Supplier"], r["ETA"]])
+                                             r["Buying price(RMB)"], r["Total buying price(RMB)"], r["Exchange rate"],
+                                             r["Buying price(VND)"], r["Total buying price(VND)"], r["Supplier"], r["ETA"]])
                             
                             out = io.BytesIO(); wb.save(out); out.seek(0)
                             
