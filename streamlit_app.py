@@ -12,7 +12,7 @@ import numpy as np
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO
 # =============================================================================
-APP_VERSION = "V6011 - QUOTE TOTAL VIEW & DECIMAL FIX"
+APP_VERSION = "V6013 - FIXED CSV SEEK ERROR"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # CSS UI
@@ -40,6 +40,8 @@ st.markdown("""
         color: #ffffff;
         border-color: #ffffff;
     }
+    
+    /* STYLE CHO TOTAL VIEW */
     .total-view {
         font-size: 20px;
         font-weight: bold;
@@ -175,6 +177,9 @@ def download_from_drive(file_id):
         downloader = MediaIoBaseDownload(fh, request)
         done = False
         while done is False: status, done = downloader.next_chunk()
+        
+        # --- FIX QUAN TRỌNG: Đưa con trỏ về đầu file để pandas đọc được ---
+        fh.seek(0) 
         return fh
     except: return None
 
@@ -417,7 +422,7 @@ with t2:
             )
         else: st.info("Kho hàng trống.")
 
-# --- TAB 3: BÁO GIÁ (ĐÃ FIX: Realtime Update, Search History, Formula, Total View) ---
+# --- TAB 3: BÁO GIÁ (ĐÃ FIX: Realtime Update, Search History, Formula, Total View, Decimal 2, Seek Error) ---
 with t3:
     if 'quote_df' not in st.session_state: st.session_state.quote_df = pd.DataFrame()
     
@@ -525,6 +530,7 @@ with t3:
                          fh = download_from_drive(fid)
                          if fh:
                              try:
+                                 # Fix lỗi đọc file CSV: thêm encoding và on_bad_lines
                                  df_csv = pd.read_csv(fh, encoding='utf-8-sig', on_bad_lines='skip')
                                  st.success("Đã tải xong!")
                                  st.dataframe(df_csv, use_container_width=True)
