@@ -12,7 +12,7 @@ import numpy as np
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO
 # =============================================================================
-APP_VERSION = "V6009 - FINAL STRICT MATCHING"
+APP_VERSION = "V6010 - QUOTE TAB ADVANCED FIX"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # CSS UI
@@ -400,13 +400,14 @@ with t2:
             )
         else: st.info("Kho hàng trống.")
 
-# --- TAB 3: BÁO GIÁ (LOGIC MATCHING 3 LỚP) ---
+# --- TAB 3: BÁO GIÁ (ĐÃ FIX: Realtime Update, Search History, Formula) ---
 with t3:
     if 'quote_df' not in st.session_state: st.session_state.quote_df = pd.DataFrame()
     
+    # ------------------ TRA CỨU LỊCH SỬ ------------------
     with st.expander("🔎 TRA CỨU & TRẠNG THÁI BÁO GIÁ", expanded=False):
         c_src1, c_src2 = st.columns(2)
-        search_kw = c_src1.text_input("Nhập từ khóa (Code, Name, Specs)")
+        search_kw = c_src1.text_input("Nhập từ khóa (Tên Khách, Quote No, Code, Name, Date)", help="Tìm kiếm trong lịch sử")
         up_src = c_src2.file_uploader("Hoặc Import Excel kiểm tra", type=["xlsx"], key="src_up")
         
         if st.button("Kiểm tra trạng thái"):
@@ -429,11 +430,18 @@ with t3:
             results = []
             if search_kw and not df_hist.empty:
                 def check_row(row):
-                    if search_kw.lower() in str(row.values).lower(): return True
+                    kw = search_kw.lower()
+                    # Cải tiến: Tìm trong nhiều trường thông tin
+                    if kw in str(row.get('customer','')).lower(): return True
+                    if kw in str(row.get('quote_no','')).lower(): return True
+                    if kw in str(row.get('item_code','')).lower(): return True
+                    if kw in str(row.get('date','')).lower(): return True
+                    
                     code = clean_key(row['item_code'])
                     info = item_map.get(code, "").lower()
-                    if search_kw.lower() in info: return True
+                    if kw in info: return True
                     return False
+                
                 mask = df_hist.apply(check_row, axis=1)
                 found = df_hist[mask]
                 for _, r in found.iterrows():
@@ -483,8 +491,14 @@ with t3:
         df_hist_idx = load_data("crm_shared_history", order_by="date")
         if not df_hist_idx.empty:
             df_hist_idx['display'] = df_hist_idx.apply(lambda x: f"{x['date']} | {x['customer']} | Quote: {x['quote_no']}", axis=1)
+            
+            # Filter dropdown options if user typed in search box above
             unique_quotes = df_hist_idx['display'].unique()
-            sel_quote_hist = st.selectbox("Chọn báo giá cũ để xem chi tiết:", [""] + list(unique_quotes))
+            filtered_quotes = unique_quotes
+            if search_kw:
+                filtered_quotes = [q for q in unique_quotes if search_kw.lower() in q.lower()]
+                
+            sel_quote_hist = st.selectbox("Chọn báo giá cũ để xem chi tiết:", [""] + list(filtered_quotes))
             
             if sel_quote_hist:
                 parts = sel_quote_hist.split(" | ")
@@ -500,10 +514,11 @@ with t3:
                          fh = download_from_drive(fid)
                          if fh:
                              try:
-                                 df_csv = pd.read_csv(fh)
+                                 # Fix lỗi đọc file CSV: thêm encoding và on_bad_lines
+                                 df_csv = pd.read_csv(fh, encoding='utf-8-sig', on_bad_lines='skip')
                                  st.success("Đã tải xong!")
                                  st.dataframe(df_csv, use_container_width=True)
-                             except: st.error("Lỗi đọc file CSV.")
+                             except Exception as e: st.error(f"Lỗi đọc file CSV: {e}")
                          else: st.error("Không tải được file.")
                     elif not fid: st.warning(f"Không tìm thấy file chi tiết trên Drive (HIST_{q_no}...).")
         else: st.info("Chưa có lịch sử.")
@@ -526,7 +541,7 @@ with t3:
         st.rerun()
     c3.markdown('</div>', unsafe_allow_html=True)
 
-    with st.expander("Cấu hình chi phí (%)", expanded=True):
+    with st.expander("Cấu hình chi phí (%) & Vận chuyển", expanded=True):
         cols = st.columns(7)
         keys = ["end", "buy", "tax", "vat", "pay", "mgmt", "trans"]
         params = {}
@@ -603,9 +618,9 @@ with t3:
                 res.append(item)
             
             st.session_state.quote_df = pd.DataFrame(res)
-            st.session_state.quote_df = recalculate_quote_logic(st.session_state.quote_df, params)
-            st.rerun()
-
+            # Không cần rerun ở đây, vì sẽ render dataframe ở dưới
+    
+    # --- FORMULA BUTTONS (ONE CLICK FIX) ---
     c_form1, c_form2 = st.columns(2)
     with c_form1:
         ap_f = st.text_input("Formula AP (vd: =BUY*1.1)", key="f_ap")
@@ -617,7 +632,10 @@ with t3:
                     ap = to_float(row["AP price(VND)"])
                     new_ap = parse_formula(ap_f, buy, ap)
                     st.session_state.quote_df.at[idx, "AP price(VND)"] = fmt_num(new_ap)
-                st.rerun()
+                
+                # RECALCULATE IMMEDIATELY
+                st.session_state.quote_df = recalculate_quote_logic(st.session_state.quote_df, params)
+                st.rerun() # Refresh to show results immediately
         st.markdown('</div>', unsafe_allow_html=True)
     with c_form2:
         unit_f = st.text_input("Formula Unit (vd: =AP*1.2)", key="f_unit")
@@ -629,10 +647,16 @@ with t3:
                     ap = to_float(row["AP price(VND)"])
                     new_unit = parse_formula(unit_f, buy, ap)
                     st.session_state.quote_df.at[idx, "Unit price(VND)"] = fmt_num(new_unit)
-                st.rerun()
+                
+                # RECALCULATE IMMEDIATELY
+                st.session_state.quote_df = recalculate_quote_logic(st.session_state.quote_df, params)
+                st.rerun() # Refresh to show results immediately
         st.markdown('</div>', unsafe_allow_html=True)
     
     if not st.session_state.quote_df.empty:
+        # REAL-TIME CALCULATION BEFORE DISPLAY (Fixes Transportation lag)
+        st.session_state.quote_df = recalculate_quote_logic(st.session_state.quote_df, params)
+
         cols_order = ["Cảnh báo", "No"] + [c for c in st.session_state.quote_df.columns if c not in ["Cảnh báo", "No"]]
         st.session_state.quote_df = st.session_state.quote_df[cols_order]
 
@@ -651,11 +675,8 @@ with t3:
             hide_index=True 
         )
         
+        # Sync edits back
         for c in edited_df.columns: st.session_state.quote_df[c] = edited_df[c]
-
-        df_recalc = recalculate_quote_logic(st.session_state.quote_df, params)
-        if not df_recalc.equals(st.session_state.quote_df):
-             st.session_state.quote_df = df_recalc; st.rerun()
 
         st.divider()
         c_rev, c_sv = st.columns([1, 1])
