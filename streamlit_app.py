@@ -12,7 +12,7 @@ import numpy as np
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO
 # =============================================================================
-APP_VERSION = "V6013 - FIXED CSV SEEK ERROR"
+APP_VERSION = "V6014 - HISTORY CONFIG VIEW"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # CSS UI
@@ -422,7 +422,7 @@ with t2:
             )
         else: st.info("Kho hàng trống.")
 
-# --- TAB 3: BÁO GIÁ (ĐÃ FIX: Realtime Update, Search History, Formula, Total View, Decimal 2, Seek Error) ---
+# --- TAB 3: BÁO GIÁ (ĐÃ FIX: Realtime Update, Search History, Formula, Total View, Decimal 2, Seek Error, History Config View) ---
 with t3:
     if 'quote_df' not in st.session_state: st.session_state.quote_df = pd.DataFrame()
     
@@ -521,6 +521,27 @@ with t3:
                 if len(parts) >= 3:
                     q_no = parts[2].replace("Quote: ", "").strip()
                     cust = parts[1].strip()
+                    
+                    # --- NEW: DISPLAY SAVED CONFIG FROM HISTORY ---
+                    # Tìm dòng đầu tiên trong lịch sử khớp với quote_no và customer này để lấy config
+                    hist_config_row = df_hist_idx[
+                        (df_hist_idx['quote_no'] == q_no) & 
+                        (df_hist_idx['customer'] == cust)
+                    ].iloc[0] if not df_hist_idx.empty else None
+                    
+                    if hist_config_row is not None and 'config_data' in hist_config_row and hist_config_row['config_data']:
+                        try:
+                            # Parse JSON config string
+                            cfg = json.loads(hist_config_row['config_data'])
+                            st.info(f"📊 **CẤU HÌNH CHI PHÍ CỦA BÁO GIÁ NÀY:** "
+                                    f"End User: {cfg.get('end')}% | Buyer: {cfg.get('buy')}% | "
+                                    f"Tax: {cfg.get('tax')}% | VAT: {cfg.get('vat')}% | "
+                                    f"Payback: {cfg.get('pay')}% | Mgmt: {cfg.get('mgmt')}% | "
+                                    f"Trans: {fmt_num(cfg.get('trans'))}")
+                        except: pass
+                    else:
+                        st.warning("⚠️ Báo giá này được tạo từ phiên bản cũ, chưa lưu cấu hình chi phí.")
+
                     search_name = f"HIST_{q_no}_{cust}"
                     fid, fname, pid = search_file_in_drive_by_name(search_name)
                     if pid:
@@ -530,7 +551,6 @@ with t3:
                          fh = download_from_drive(fid)
                          if fh:
                              try:
-                                 # Fix lỗi đọc file CSV: thêm encoding và on_bad_lines
                                  df_csv = pd.read_csv(fh, encoding='utf-8-sig', on_bad_lines='skip')
                                  st.success("Đã tải xong!")
                                  st.dataframe(df_csv, use_container_width=True)
@@ -751,6 +771,9 @@ with t3:
             st.markdown('<div class="dark-btn">', unsafe_allow_html=True)
             if st.button("💾 LƯU LỊCH SỬ (QUAN TRỌNG ĐỂ LÀM PO)"):
                 if cust_name:
+                    # 1. Save DB with CONFIG
+                    config_json = json.dumps(params) # Serialize config dict to JSON string
+                    
                     recs = []
                     for r in st.session_state.quote_df.to_dict('records'):
                         recs.append({
@@ -759,11 +782,15 @@ with t3:
                             "item_code": r["Item code"], "qty": to_float(r["Q'ty"]),
                             "unit_price": to_float(r["Unit price(VND)"]),
                             "total_price_vnd": to_float(r["Total price(VND)"]),
-                            "profit_vnd": to_float(r["Profit(VND)"])
+                            "profit_vnd": to_float(r["Profit(VND)"]),
+                            "config_data": config_json # Save config here
                         })
                     supabase.table("crm_shared_history").insert(recs).execute()
+                    
                     try:
                         csv_buffer = io.BytesIO()
+                        # Add Config Info to CSV metadata (optional) or just save dataframe
+                        # To keep it simple, we save the DF as usual. The DB holds the config.
                         st.session_state.quote_df.to_csv(csv_buffer, index=False, encoding='utf-8-sig')
                         csv_buffer.seek(0)
                         csv_name = f"HIST_{quote_no}_{cust_name}_{int(time.time())}.csv"
@@ -771,7 +798,7 @@ with t3:
                         curr_month = datetime.now().strftime("%b").upper()
                         path_list_hist = ["QUOTATION_HISTORY", cust_name, curr_year, curr_month]
                         lnk, _ = upload_to_drive_structured(csv_buffer, path_list_hist, csv_name)
-                        st.success("✅ Đã lưu lịch sử DB & CSV!")
+                        st.success("✅ Đã lưu lịch sử DB (kèm cấu hình) & CSV!")
                         st.markdown(f"📂 [Folder Lịch Sử]({lnk})", unsafe_allow_html=True)
                     except Exception as e: st.error(f"Lỗi lưu CSV: {e}")
                 else: st.error("Chọn khách!")
