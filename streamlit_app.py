@@ -12,7 +12,7 @@ import numpy as np
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO
 # =============================================================================
-APP_VERSION = "V6020 - FIXED CONFIG DISPLAY ON LOAD"
+APP_VERSION = "V6021 - HOTFIX CONFIG RELOAD"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # CSS UI
@@ -514,7 +514,10 @@ with t3:
                     q_no = parts[2].replace("Quote: ", "").strip()
                     cust = parts[1].strip()
                     
-                    # --- NEW: DISPLAY SAVED CONFIG FROM HISTORY ---
+                    # --- HOTFIX: FORCE RELOAD CONFIG ---
+                    # Check if new quote selected to force RERUN
+                    if 'loaded_quote_id' not in st.session_state: st.session_state.loaded_quote_id = None
+                    
                     hist_config_row = df_hist_idx[
                         (df_hist_idx['quote_no'] == q_no) & 
                         (df_hist_idx['customer'] == cust)
@@ -523,22 +526,35 @@ with t3:
                     if hist_config_row is not None and 'config_data' in hist_config_row and hist_config_row['config_data']:
                         try:
                             cfg = json.loads(hist_config_row['config_data'])
-                            
-                            # --- FIX QUAN TRỌNG: UPDATE UI WIDGET KEYS ---
-                            # Cần update trực tiếp vào key của widget (input_...) để hiển thị ra màn hình
-                            keys_load = ["end", "buy", "tax", "vat", "pay", "mgmt", "trans"]
-                            for k in keys_load:
-                                val_str = str(cfg.get(k, 0))
-                                st.session_state[f"pct_{k}"] = val_str      # Cập nhật biến logic
-                                st.session_state[f"input_{k}"] = val_str    # Cập nhật widget hiển thị
-                            
-                            st.toast("✅ Đã tự động load cấu hình % từ lịch sử!", icon="✅")
-                            
-                            st.info(f"📊 **CẤU HÌNH CHI PHÍ (ĐÃ LOAD VÀO FORM):** "
+                            st.info(f"📊 **CẤU HÌNH CHI PHÍ (TỪ LỊCH SỬ):** "
                                     f"End User: {cfg.get('end')}% | Buyer: {cfg.get('buy')}% | "
                                     f"Tax: {cfg.get('tax')}% | VAT: {cfg.get('vat')}% | "
                                     f"Payback: {cfg.get('pay')}% | Mgmt: {cfg.get('mgmt')}% | "
                                     f"Trans: {fmt_num(cfg.get('trans'))}")
+                            
+                            # --- CRITICAL FIX: TRIGGER RERUN TO UPDATE INPUT WIDGETS ---
+                            if sel_quote_hist != st.session_state.loaded_quote_id:
+                                # Update logic variables
+                                st.session_state['pct_end'] = str(cfg.get('end', 0))
+                                st.session_state['pct_buy'] = str(cfg.get('buy', 0))
+                                st.session_state['pct_tax'] = str(cfg.get('tax', 0))
+                                st.session_state['pct_vat'] = str(cfg.get('vat', 0))
+                                st.session_state['pct_pay'] = str(cfg.get('pay', 0))
+                                st.session_state['pct_mgmt'] = str(cfg.get('mgmt', 0))
+                                st.session_state['pct_trans'] = str(cfg.get('trans', 0))
+                                
+                                # Update WIDGET KEYS directly
+                                st.session_state['input_end'] = str(cfg.get('end', 0))
+                                st.session_state['input_buy'] = str(cfg.get('buy', 0))
+                                st.session_state['input_tax'] = str(cfg.get('tax', 0))
+                                st.session_state['input_vat'] = str(cfg.get('vat', 0))
+                                st.session_state['input_pay'] = str(cfg.get('pay', 0))
+                                st.session_state['input_mgmt'] = str(cfg.get('mgmt', 0))
+                                st.session_state['input_trans'] = str(cfg.get('trans', 0))
+                                
+                                st.session_state.loaded_quote_id = sel_quote_hist
+                                st.rerun() # FORCE RERUN TO REFRESH UI INPUTS
+                                
                         except: pass
                     else:
                         st.warning("⚠️ Báo giá này được tạo từ phiên bản cũ, chưa lưu cấu hình chi phí.")
