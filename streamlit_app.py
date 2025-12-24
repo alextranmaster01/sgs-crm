@@ -12,7 +12,7 @@ import numpy as np
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO
 # =============================================================================
-APP_VERSION = "V6021 - HOTFIX CONFIG RELOAD"
+APP_VERSION = "V6022 - FIXED FORMULA & DRIVE CONFIG FALLBACK"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # CSS UI
@@ -284,13 +284,34 @@ def recalculate_quote_logic(df, params):
 
     return df
 
+# --- IMPROVED FORMULA PARSER ---
 def parse_formula(formula, buying_price, ap_price):
-    s = str(formula).strip().upper().replace(",", ".").replace("%", "/100").replace("X", "*")
+    if not formula: return 0.0
+    
+    # 1. Normalize: Uppercase and Strip
+    s = str(formula).strip().upper()
+    
+    # 2. Handle '='
     if s.startswith("="): s = s[1:]
-    s = s.replace("BUYING PRICE", str(buying_price)).replace("BUY", str(buying_price))
-    s = s.replace("AP PRICE", str(ap_price)).replace("AP", str(ap_price))
+    
+    # 3. Replace Keywords (Longer first)
+    # Handle 'AP PRICE' explicitly before 'AP'
+    s = s.replace("AP PRICE", str(ap_price))
+    s = s.replace("BUYING PRICE", str(buying_price))
+    
+    # Handle shorthands
+    s = s.replace("AP", str(ap_price))
+    s = s.replace("BUY", str(buying_price))
+    
+    # 4. Cleanup Syntax
+    s = s.replace(",", ".").replace("%", "/100").replace("X", "*")
+    
+    # 5. Filter Unsafe Characters (Only digits, dots, math ops)
     s = re.sub(r'[^0-9.+\-*/()]', '', s)
-    try: return float(eval(s))
+    
+    try: 
+        if not s: return 0.0
+        return float(eval(s))
     except: return 0.0
 
 # =============================================================================
@@ -514,7 +535,7 @@ with t3:
                     q_no = parts[2].replace("Quote: ", "").strip()
                     cust = parts[1].strip()
                     
-                    # --- HOTFIX: FORCE RELOAD CONFIG ---
+                    # --- HOTFIX: FORCE RELOAD CONFIG FROM EXCEL FALLBACK OR DB ---
                     # Check if new quote selected to force RERUN
                     if 'loaded_quote_id' not in st.session_state: st.session_state.loaded_quote_id = None
                     
@@ -523,39 +544,47 @@ with t3:
                         (df_hist_idx['customer'] == cust)
                     ].iloc[0] if not df_hist_idx.empty else None
                     
+                    config_loaded = {}
+                    
+                    # 1. Try DB
                     if hist_config_row is not None and 'config_data' in hist_config_row and hist_config_row['config_data']:
                         try:
-                            cfg = json.loads(hist_config_row['config_data'])
-                            st.info(f"📊 **CẤU HÌNH CHI PHÍ (TỪ LỊCH SỬ):** "
-                                    f"End User: {cfg.get('end')}% | Buyer: {cfg.get('buy')}% | "
-                                    f"Tax: {cfg.get('tax')}% | VAT: {cfg.get('vat')}% | "
-                                    f"Payback: {cfg.get('pay')}% | Mgmt: {cfg.get('mgmt')}% | "
-                                    f"Trans: {fmt_num(cfg.get('trans'))}")
-                            
-                            # --- CRITICAL FIX: TRIGGER RERUN TO UPDATE INPUT WIDGETS ---
-                            if sel_quote_hist != st.session_state.loaded_quote_id:
-                                # Update logic variables
-                                st.session_state['pct_end'] = str(cfg.get('end', 0))
-                                st.session_state['pct_buy'] = str(cfg.get('buy', 0))
-                                st.session_state['pct_tax'] = str(cfg.get('tax', 0))
-                                st.session_state['pct_vat'] = str(cfg.get('vat', 0))
-                                st.session_state['pct_pay'] = str(cfg.get('pay', 0))
-                                st.session_state['pct_mgmt'] = str(cfg.get('mgmt', 0))
-                                st.session_state['pct_trans'] = str(cfg.get('trans', 0))
-                                
-                                # Update WIDGET KEYS directly
-                                st.session_state['input_end'] = str(cfg.get('end', 0))
-                                st.session_state['input_buy'] = str(cfg.get('buy', 0))
-                                st.session_state['input_tax'] = str(cfg.get('tax', 0))
-                                st.session_state['input_vat'] = str(cfg.get('vat', 0))
-                                st.session_state['input_pay'] = str(cfg.get('pay', 0))
-                                st.session_state['input_mgmt'] = str(cfg.get('mgmt', 0))
-                                st.session_state['input_trans'] = str(cfg.get('trans', 0))
-                                
-                                st.session_state.loaded_quote_id = sel_quote_hist
-                                st.rerun() # FORCE RERUN TO REFRESH UI INPUTS
-                                
+                            config_loaded = json.loads(hist_config_row['config_data'])
                         except: pass
+                    
+                    # 2. If DB empty, Try Drive (Fallback)
+                    if not config_loaded:
+                         cfg_search_name = f"CONFIG_{q_no}_{cust}"
+                         fid_cfg, _, _ = search_file_in_drive_by_name(cfg_search_name)
+                         if fid_cfg:
+                             fh_cfg = download_from_drive(fid_cfg)
+                             if fh_cfg:
+                                 try:
+                                     df_cfg = pd.read_excel(fh_cfg)
+                                     if not df_cfg.empty:
+                                         config_loaded = df_cfg.iloc[0].to_dict()
+                                 except: pass
+
+                    # 3. Apply Config
+                    if config_loaded:
+                        st.info(f"📊 **CẤU HÌNH CHI PHÍ (ĐÃ LOAD):** "
+                                f"End User: {config_loaded.get('end')}% | Buyer: {config_loaded.get('buy')}% | "
+                                f"Tax: {config_loaded.get('tax')}% | VAT: {config_loaded.get('vat')}% | "
+                                f"Payback: {config_loaded.get('pay')}% | Mgmt: {config_loaded.get('mgmt')}% | "
+                                f"Trans: {fmt_num(config_loaded.get('trans'))}")
+                        
+                        # Trigger RERUN if switching quotes to update widgets
+                        if sel_quote_hist != st.session_state.loaded_quote_id:
+                            keys_load = ["end", "buy", "tax", "vat", "pay", "mgmt", "trans"]
+                            for k in keys_load:
+                                val_str = str(config_loaded.get(k, 0))
+                                st.session_state[f"pct_{k}"] = val_str
+                                st.session_state[f"input_{k}"] = val_str # Force Widget Key
+                            
+                            st.session_state.loaded_quote_id = sel_quote_hist
+                            st.toast("✅ Đã load cấu hình thành công!", icon="✅")
+                            time.sleep(0.5)
+                            st.rerun()
                     else:
                         st.warning("⚠️ Báo giá này được tạo từ phiên bản cũ, chưa lưu cấu hình chi phí.")
 
