@@ -12,7 +12,7 @@ import numpy as np
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO
 # =============================================================================
-APP_VERSION = "V6015 - QUOTE TOTAL ROW & HISTORY CONFIG"
+APP_VERSION = "V6016 - FIXED API ERROR NaN"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # CSS UI
@@ -785,23 +785,42 @@ with t3:
             st.markdown('<div class="dark-btn">', unsafe_allow_html=True)
             if st.button("💾 LƯU LỊCH SỬ (QUAN TRỌNG ĐỂ LÀM PO)"):
                 if cust_name:
-                    # 1. Save DB with CONFIG
-                    config_json = json.dumps(params) 
+                    # 1. CLEAN PARAMS BEFORE JSON DUMP (AVOID NaN IN CONFIG)
+                    clean_params = {}
+                    for k, v in params.items():
+                        if isinstance(v, float) and (np.isnan(v) or np.isinf(v)): clean_params[k] = 0.0
+                        else: clean_params[k] = v
+                    config_json = json.dumps(clean_params) 
                     
                     recs = []
                     for r in st.session_state.quote_df.to_dict('records'):
+                        # --- FIX: DATA CLEANING (NaN -> 0.0) ---
+                        val_qty = to_float(r["Q'ty"])
+                        val_unit = to_float(r["Unit price(VND)"])
+                        val_total = to_float(r["Total price(VND)"])
+                        val_profit = to_float(r["Profit(VND)"])
+                        
+                        # Ensure no NaNs exist (Supabase API Error fix)
+                        if np.isnan(val_qty) or np.isinf(val_qty): val_qty = 0.0
+                        if np.isnan(val_unit) or np.isinf(val_unit): val_unit = 0.0
+                        if np.isnan(val_total) or np.isinf(val_total): val_total = 0.0
+                        if np.isnan(val_profit) or np.isinf(val_profit): val_profit = 0.0
+
                         recs.append({
                             "history_id": f"{cust_name}_{int(time.time())}", "date": datetime.now().strftime("%Y-%m-%d"),
                             "quote_no": quote_no, "customer": cust_name,
-                            "item_code": r["Item code"], "qty": to_float(r["Q'ty"]),
-                            "unit_price": to_float(r["Unit price(VND)"]),
-                            "total_price_vnd": to_float(r["Total price(VND)"]),
-                            "profit_vnd": to_float(r["Profit(VND)"]),
-                            "config_data": config_json # Save config here
+                            "item_code": r["Item code"], "qty": val_qty,
+                            "unit_price": val_unit,
+                            "total_price_vnd": val_total,
+                            "profit_vnd": val_profit,
+                            "config_data": config_json 
                         })
-                    supabase.table("crm_shared_history").insert(recs).execute()
                     
                     try:
+                        # --- EXECUTING INSERT WITH CLEANED DATA ---
+                        supabase.table("crm_shared_history").insert(recs).execute()
+                        
+                        # Save CSV Backup
                         csv_buffer = io.BytesIO()
                         st.session_state.quote_df.to_csv(csv_buffer, index=False, encoding='utf-8-sig')
                         csv_buffer.seek(0)
@@ -812,7 +831,7 @@ with t3:
                         lnk, _ = upload_to_drive_structured(csv_buffer, path_list_hist, csv_name)
                         st.success("✅ Đã lưu lịch sử DB (kèm cấu hình) & CSV!")
                         st.markdown(f"📂 [Folder Lịch Sử]({lnk})", unsafe_allow_html=True)
-                    except Exception as e: st.error(f"Lỗi lưu CSV: {e}")
+                    except Exception as e: st.error(f"Lỗi lưu Supabase/Drive: {e}")
                 else: st.error("Chọn khách!")
             st.markdown('</div>', unsafe_allow_html=True)
 
