@@ -12,7 +12,7 @@ import numpy as np
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO
 # =============================================================================
-APP_VERSION = "V6014 - HISTORY CONFIG VIEW"
+APP_VERSION = "V6015 - QUOTE TOTAL ROW & HISTORY CONFIG"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # CSS UI
@@ -282,14 +282,6 @@ def recalculate_quote_logic(df, params):
         return "⚠️ LOW" if row["Profit_Pct_Raw"] < 10 else "✅ OK"
     df["Cảnh báo"] = df.apply(set_warning, axis=1)
 
-    # --- UPDATE: USE fmt_float_2 FOR ALL MONEY COLUMNS ---
-    cols_format = ["AP total price(VND)", "Total price(VND)", "GAP", "End user(%)", "Buyer(%)", 
-                   "Import tax(%)", "VAT", "Management fee(%)", "Transportation", "Payback(%)", "Profit(VND)",
-                   "Total buying price(VND)", "Total buying price(rmb)",
-                   "Buying price(VND)", "Buying price(RMB)", "AP price(VND)", "Unit price(VND)"]
-    for c in cols_format:
-        if c in df.columns: df[c] = df[c].apply(fmt_float_2)
-    
     return df
 
 def parse_formula(formula, buying_price, ap_price):
@@ -422,7 +414,7 @@ with t2:
             )
         else: st.info("Kho hàng trống.")
 
-# --- TAB 3: BÁO GIÁ (ĐÃ FIX: Realtime Update, Search History, Formula, Total View, Decimal 2, Seek Error, History Config View) ---
+# --- TAB 3: BÁO GIÁ ---
 with t3:
     if 'quote_df' not in st.session_state: st.session_state.quote_df = pd.DataFrame()
     
@@ -523,7 +515,6 @@ with t3:
                     cust = parts[1].strip()
                     
                     # --- NEW: DISPLAY SAVED CONFIG FROM HISTORY ---
-                    # Tìm dòng đầu tiên trong lịch sử khớp với quote_no và customer này để lấy config
                     hist_config_row = df_hist_idx[
                         (df_hist_idx['quote_no'] == q_no) & 
                         (df_hist_idx['customer'] == cust)
@@ -531,9 +522,8 @@ with t3:
                     
                     if hist_config_row is not None and 'config_data' in hist_config_row and hist_config_row['config_data']:
                         try:
-                            # Parse JSON config string
                             cfg = json.loads(hist_config_row['config_data'])
-                            st.info(f"📊 **CẤU HÌNH CHI PHÍ CỦA BÁO GIÁ NÀY:** "
+                            st.info(f"📊 **CẤU HÌNH CHI PHÍ:** "
                                     f"End User: {cfg.get('end')}% | Buyer: {cfg.get('buy')}% | "
                                     f"Tax: {cfg.get('tax')}% | VAT: {cfg.get('vat')}% | "
                                     f"Payback: {cfg.get('pay')}% | Mgmt: {cfg.get('mgmt')}% | "
@@ -694,8 +684,26 @@ with t3:
         cols_to_hide = ["Image", "Profit_Pct_Raw"]
         df_show = st.session_state.quote_df.drop(columns=[c for c in cols_to_hide if c in st.session_state.quote_df.columns], errors='ignore')
 
+        # --- ADD TOTAL ROW LOGIC ---
+        df_display = df_show.copy()
+        
+        # Calculate sums for relevant columns
+        cols_to_sum = ["Buying price(RMB)", "Total buying price(rmb)", "Buying price(VND)", 
+                       "Total buying price(VND)", "AP price(VND)", "AP total price(VND)", 
+                       "Unit price(VND)", "Total price(VND)", "GAP", "End user(%)", "Buyer(%)", 
+                       "Import tax(%)", "VAT", "Transportation", "Management fee(%)", "Payback(%)", "Profit(VND)"]
+        
+        total_row = {"No": "TOTAL", "Cảnh báo": "", "Item code": "", "Item name": "", "Specs": "", "Q'ty": 0}
+        for c in cols_to_sum:
+            if c in df_display.columns:
+                total_val = df_display[c].apply(to_float).sum()
+                total_row[c] = fmt_float_2(total_val)
+        
+        # Append Total Row to dataframe for display
+        df_display = pd.concat([df_display, pd.DataFrame([total_row])], ignore_index=True)
+
         edited_df = st.data_editor(
-            df_show,
+            df_display,
             column_config={
                 "Buying price(RMB)": st.column_config.TextColumn("Buying(RMB)", disabled=True),
                 "Buying price(VND)": st.column_config.TextColumn("Buying(VND)", disabled=True),
@@ -706,8 +714,14 @@ with t3:
             hide_index=True 
         )
         
-        # Sync edits back
-        for c in edited_df.columns: st.session_state.quote_df[c] = edited_df[c]
+        # Sync edits back (Exclude Total Row)
+        df_data_only = edited_df[edited_df["No"] != "TOTAL"]
+        # Update main dataframe with edited values (mapped back)
+        for idx, row in df_data_only.iterrows():
+             if idx < len(st.session_state.quote_df):
+                 for c in df_data_only.columns:
+                     if c in st.session_state.quote_df.columns:
+                        st.session_state.quote_df.at[idx, c] = row[c]
         
         # --- VIEW TOTAL PRICE (FEATURE ADDED) ---
         total_q = st.session_state.quote_df["Total price(VND)"].apply(to_float).sum()
@@ -772,7 +786,7 @@ with t3:
             if st.button("💾 LƯU LỊCH SỬ (QUAN TRỌNG ĐỂ LÀM PO)"):
                 if cust_name:
                     # 1. Save DB with CONFIG
-                    config_json = json.dumps(params) # Serialize config dict to JSON string
+                    config_json = json.dumps(params) 
                     
                     recs = []
                     for r in st.session_state.quote_df.to_dict('records'):
@@ -789,8 +803,6 @@ with t3:
                     
                     try:
                         csv_buffer = io.BytesIO()
-                        # Add Config Info to CSV metadata (optional) or just save dataframe
-                        # To keep it simple, we save the DF as usual. The DB holds the config.
                         st.session_state.quote_df.to_csv(csv_buffer, index=False, encoding='utf-8-sig')
                         csv_buffer.seek(0)
                         csv_name = f"HIST_{quote_no}_{cust_name}_{int(time.time())}.csv"
