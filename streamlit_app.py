@@ -12,7 +12,7 @@ import numpy as np
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO
 # =============================================================================
-APP_VERSION = "V6019 - AUTO LOAD CONFIG & SAVE CONFIG FILE"
+APP_VERSION = "V6020 - FIXED CONFIG DISPLAY ON LOAD"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # CSS UI
@@ -524,14 +524,13 @@ with t3:
                         try:
                             cfg = json.loads(hist_config_row['config_data'])
                             
-                            # --- AUTO FILL INPUTS FROM HISTORY ---
-                            st.session_state['pct_end'] = str(cfg.get('end', 0))
-                            st.session_state['pct_buy'] = str(cfg.get('buy', 0))
-                            st.session_state['pct_tax'] = str(cfg.get('tax', 0))
-                            st.session_state['pct_vat'] = str(cfg.get('vat', 0))
-                            st.session_state['pct_pay'] = str(cfg.get('pay', 0))
-                            st.session_state['pct_mgmt'] = str(cfg.get('mgmt', 0))
-                            st.session_state['pct_trans'] = str(cfg.get('trans', 0))
+                            # --- FIX QUAN TRỌNG: UPDATE UI WIDGET KEYS ---
+                            # Cần update trực tiếp vào key của widget (input_...) để hiển thị ra màn hình
+                            keys_load = ["end", "buy", "tax", "vat", "pay", "mgmt", "trans"]
+                            for k in keys_load:
+                                val_str = str(cfg.get(k, 0))
+                                st.session_state[f"pct_{k}"] = val_str      # Cập nhật biến logic
+                                st.session_state[f"input_{k}"] = val_str    # Cập nhật widget hiển thị
                             
                             st.toast("✅ Đã tự động load cấu hình % từ lịch sử!", icon="✅")
                             
@@ -585,7 +584,9 @@ with t3:
         params = {}
         for i, k in enumerate(keys):
             default_val = st.session_state.get(f"pct_{k}", "0")
-            val = cols[i].text_input(k.upper(), default_val, key=f"input_{k}")
+            # --- WIDGET INPUT ---
+            # Quan trọng: key=f"input_{k}" để khớp với logic load lịch sử
+            val = cols[i].text_input(k.upper(), value=default_val, key=f"input_{k}")
             st.session_state[f"pct_{k}"] = val
             params[k] = to_float(val)
 
