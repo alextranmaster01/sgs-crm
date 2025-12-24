@@ -12,7 +12,7 @@ import numpy as np
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO
 # =============================================================================
-APP_VERSION = "V6023 - FINAL FIX CONFIG & FORMULA"
+APP_VERSION = "V6024 - EXCEL EXPORT TEMPLATE MAPPING UPDATE"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # CSS UI
@@ -815,7 +815,7 @@ with t3:
                             if not fh: st.error("Lỗi tải template!")
                             else:
                                 wb = load_workbook(fh); ws = wb.active
-                                start_row = 10
+                                start_row = 11
                                 first_leadtime = st.session_state.quote_df.iloc[0]['Leadtime'] if not st.session_state.quote_df.empty else ""
                                 ws['H8'] = safe_str(first_leadtime)
                                 for idx, row in st.session_state.quote_df.iterrows():
