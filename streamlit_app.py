@@ -12,7 +12,7 @@ import numpy as np
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO
 # =============================================================================
-APP_VERSION = "V6026 - TRACKING FIXED API ERROR"
+APP_VERSION = "V6027 - TRACKING & PAYMENT FULLY AUTOMATED"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # CSS UI
@@ -177,6 +177,8 @@ def download_from_drive(file_id):
         downloader = MediaIoBaseDownload(fh, request)
         done = False
         while done is False: status, done = downloader.next_chunk()
+        
+        # --- FIX QUAN TRỌNG: Đưa con trỏ về đầu file để pandas đọc được ---
         fh.seek(0) 
         return fh
     except: return None
@@ -284,14 +286,28 @@ def recalculate_quote_logic(df, params):
 # --- IMPROVED FORMULA PARSER ---
 def parse_formula(formula, buying_price, ap_price):
     if not formula: return 0.0
+    
+    # 1. Normalize: Uppercase and Strip
     s = str(formula).strip().upper()
+    
+    # 2. Handle '='
     if s.startswith("="): s = s[1:]
+    
+    # 3. Replace Keywords (Longer first to avoid substrings issue)
+    # Handle 'AP PRICE' explicitly before 'AP'
     s = s.replace("AP PRICE", str(ap_price))
     s = s.replace("BUYING PRICE", str(buying_price))
+    
+    # Handle shorthands
     s = s.replace("AP", str(ap_price))
     s = s.replace("BUY", str(buying_price))
+    
+    # 4. Cleanup Syntax
     s = s.replace(",", ".").replace("%", "/100").replace("X", "*")
+    
+    # 5. Filter Unsafe Characters (Only digits, dots, math ops)
     s = re.sub(r'[^0-9.+\-*/()]', '', s)
+    
     try: 
         if not s: return 0.0
         return float(eval(s))
@@ -422,6 +438,7 @@ with t2:
 with t3:
     if 'quote_df' not in st.session_state: st.session_state.quote_df = pd.DataFrame()
     
+    # ------------------ TRA CỨU LỊCH SỬ ------------------
     with st.expander("🔎 TRA CỨU & TRẠNG THÁI BÁO GIÁ", expanded=False):
         c_src1, c_src2 = st.columns(2)
         search_kw = c_src1.text_input("Nhập từ khóa (Tên Khách, Quote No, Code, Name, Date)", help="Tìm kiếm trong lịch sử")
@@ -517,6 +534,8 @@ with t3:
                     q_no = parts[2].replace("Quote: ", "").strip()
                     cust = parts[1].strip()
                     
+                    # --- HOTFIX: FORCE RELOAD CONFIG FROM EXCEL FALLBACK OR DB ---
+                    # Check if new quote selected to force RERUN
                     if 'loaded_quote_id' not in st.session_state: st.session_state.loaded_quote_id = None
                     
                     hist_config_row = df_hist_idx[
@@ -525,11 +544,14 @@ with t3:
                     ].iloc[0] if not df_hist_idx.empty else None
                     
                     config_loaded = {}
+                    
+                    # 1. Try DB
                     if hist_config_row is not None and 'config_data' in hist_config_row and hist_config_row['config_data']:
                         try:
                             config_loaded = json.loads(hist_config_row['config_data'])
                         except: pass
                     
+                    # 2. If DB empty, Try Drive (Fallback)
                     if not config_loaded:
                          cfg_search_name = f"CONFIG_{q_no}_{cust}"
                          fid_cfg, _, _ = search_file_in_drive_by_name(cfg_search_name)
@@ -542,6 +564,7 @@ with t3:
                                          config_loaded = df_cfg.iloc[0].to_dict()
                                  except: pass
 
+                    # 3. Apply Config
                     if config_loaded:
                         st.info(f"📊 **CẤU HÌNH CHI PHÍ (ĐÃ LOAD):** "
                                 f"End User: {config_loaded.get('end')}% | Buyer: {config_loaded.get('buy')}% | "
@@ -549,12 +572,14 @@ with t3:
                                 f"Payback: {config_loaded.get('pay')}% | Mgmt: {config_loaded.get('mgmt')}% | "
                                 f"Trans: {fmt_num(config_loaded.get('trans'))}")
                         
+                        # Trigger RERUN if switching quotes to update widgets
                         if sel_quote_hist != st.session_state.loaded_quote_id:
                             keys_load = ["end", "buy", "tax", "vat", "pay", "mgmt", "trans"]
                             for k in keys_load:
                                 val_str = str(config_loaded.get(k, 0))
                                 st.session_state[f"pct_{k}"] = val_str
-                                st.session_state[f"input_{k}"] = val_str 
+                                st.session_state[f"input_{k}"] = val_str # Force Widget Key
+                            
                             st.session_state.loaded_quote_id = sel_quote_hist
                             st.toast("✅ Đã load cấu hình thành công!", icon="✅")
                             time.sleep(0.5)
@@ -603,6 +628,8 @@ with t3:
         params = {}
         for i, k in enumerate(keys):
             default_val = st.session_state.get(f"pct_{k}", "0")
+            # --- WIDGET INPUT ---
+            # Quan trọng: key=f"input_{k}" để khớp với logic load lịch sử
             val = cols[i].text_input(k.upper(), value=default_val, key=f"input_{k}")
             st.session_state[f"pct_{k}"] = val
             params[k] = to_float(val)
@@ -627,12 +654,14 @@ with t3:
                         if real_col: return safe_str(r[real_col])
                     return ""
 
+                # 1. LẤY DỮ LIỆU TỪ EXCEL (SOURCE OF TRUTH)
                 code_excel = get_val(["item code", "code", "mã", "part number"])
                 name_excel = get_val(["item name", "name", "tên", "description"])
                 specs_excel = get_val(["specs", "quy cách", "thông số"])
                 qty_raw = get_val(["q'ty", "qty", "quantity", "số lượng"])
                 qty = to_float(qty_raw) if qty_raw else 1.0
 
+                # 2. MATCHING LOGIC (Khớp 3 thông số: Code, Name, Specs)
                 match = None
                 warning_msg = ""
                 
@@ -673,6 +702,7 @@ with t3:
             
             st.session_state.quote_df = pd.DataFrame(res)
     
+    # --- FORMULA BUTTONS (ONE CLICK FIX) ---
     c_form1, c_form2 = st.columns(2)
     with c_form1:
         ap_f = st.text_input("Formula AP (vd: =BUY*1.1)", key="f_ap")
@@ -702,22 +732,31 @@ with t3:
         st.markdown('</div>', unsafe_allow_html=True)
     
     if not st.session_state.quote_df.empty:
+        # REAL-TIME CALCULATION BEFORE DISPLAY (Fixes Transportation lag)
         st.session_state.quote_df = recalculate_quote_logic(st.session_state.quote_df, params)
+
         cols_order = ["Cảnh báo", "No"] + [c for c in st.session_state.quote_df.columns if c not in ["Cảnh báo", "No"]]
         st.session_state.quote_df = st.session_state.quote_df[cols_order]
+
         cols_to_hide = ["Image", "Profit_Pct_Raw"]
         df_show = st.session_state.quote_df.drop(columns=[c for c in cols_to_hide if c in st.session_state.quote_df.columns], errors='ignore')
-        
+
+        # --- ADD TOTAL ROW LOGIC ---
         df_display = df_show.copy()
+        
+        # Calculate sums for relevant columns
         cols_to_sum = ["Buying price(RMB)", "Total buying price(rmb)", "Buying price(VND)", 
                        "Total buying price(VND)", "AP price(VND)", "AP total price(VND)", 
                        "Unit price(VND)", "Total price(VND)", "GAP", "End user(%)", "Buyer(%)", 
                        "Import tax(%)", "VAT", "Transportation", "Management fee(%)", "Payback(%)", "Profit(VND)"]
+        
         total_row = {"No": "TOTAL", "Cảnh báo": "", "Item code": "", "Item name": "", "Specs": "", "Q'ty": 0}
         for c in cols_to_sum:
             if c in df_display.columns:
                 total_val = df_display[c].apply(to_float).sum()
                 total_row[c] = fmt_float_2(total_val)
+        
+        # Append Total Row to dataframe for display
         df_display = pd.concat([df_display, pd.DataFrame([total_row])], ignore_index=True)
 
         edited_df = st.data_editor(
@@ -728,16 +767,20 @@ with t3:
                 "Cảnh báo": st.column_config.TextColumn("Cảnh báo", width="small", disabled=True),
                 "Q'ty": st.column_config.NumberColumn("Q'ty", format="%d"),
             },
-            use_container_width=True, height=600, key="main_editor", hide_index=True 
+            use_container_width=True, height=600, key="main_editor",
+            hide_index=True 
         )
         
+        # Sync edits back (Exclude Total Row)
         df_data_only = edited_df[edited_df["No"] != "TOTAL"]
+        # Update main dataframe with edited values (mapped back)
         for idx, row in df_data_only.iterrows():
              if idx < len(st.session_state.quote_df):
                  for c in df_data_only.columns:
                      if c in st.session_state.quote_df.columns:
                         st.session_state.quote_df.at[idx, c] = row[c]
         
+        # --- VIEW TOTAL PRICE (FEATURE ADDED) ---
         total_q = st.session_state.quote_df["Total price(VND)"].apply(to_float).sum()
         st.markdown(f'<div class="total-view">💰 TỔNG GIÁ TRỊ BÁO GIÁ (TOTAL VIEW): {fmt_float_2(total_q)} VND</div>', unsafe_allow_html=True)
 
@@ -753,6 +796,8 @@ with t3:
             cols_review = ["No", "Item code", "Item name", "Specs", "Q'ty", "Unit price(VND)", "Total price(VND)", "Leadtime"]
             valid_cols = [c for c in cols_review if c in st.session_state.quote_df.columns]
             st.dataframe(st.session_state.quote_df[valid_cols], use_container_width=True, hide_index=True)
+            
+            # Show Total in Review as well
             st.markdown(f'<div class="total-view">💰 TỔNG CỘNG: {fmt_float_2(total_q)} VND</div>', unsafe_allow_html=True)
             
             st.markdown('<div class="dark-btn">', unsafe_allow_html=True)
@@ -797,21 +842,27 @@ with t3:
             st.markdown('<div class="dark-btn">', unsafe_allow_html=True)
             if st.button("💾 LƯU LỊCH SỬ (QUAN TRỌNG ĐỂ LÀM PO)"):
                 if cust_name:
+                    # 1. CLEAN PARAMS BEFORE JSON DUMP (AVOID NaN IN CONFIG)
                     clean_params = {}
                     for k, v in params.items():
                         if isinstance(v, float) and (np.isnan(v) or np.isinf(v)): clean_params[k] = 0.0
                         else: clean_params[k] = v
                     config_json = json.dumps(clean_params) 
+                    
                     recs = []
                     for r in st.session_state.quote_df.to_dict('records'):
+                        # --- FIX: DATA CLEANING (NaN -> 0.0) ---
                         val_qty = to_float(r["Q'ty"])
                         val_unit = to_float(r["Unit price(VND)"])
                         val_total = to_float(r["Total price(VND)"])
                         val_profit = to_float(r["Profit(VND)"])
+                        
+                        # Ensure no NaNs exist (Supabase API Error fix)
                         if np.isnan(val_qty) or np.isinf(val_qty): val_qty = 0.0
                         if np.isnan(val_unit) or np.isinf(val_unit): val_unit = 0.0
                         if np.isnan(val_total) or np.isinf(val_total): val_total = 0.0
                         if np.isnan(val_profit) or np.isinf(val_profit): val_profit = 0.0
+
                         recs.append({
                             "history_id": f"{cust_name}_{int(time.time())}", "date": datetime.now().strftime("%Y-%m-%d"),
                             "quote_no": quote_no, "customer": cust_name,
@@ -821,18 +872,26 @@ with t3:
                             "profit_vnd": val_profit,
                             "config_data": config_json 
                         })
+                    
                     try:
+                        # --- TRY INSERT WITH config_data ---
                         supabase.table("crm_shared_history").insert(recs).execute()
                     except Exception as e:
+                        # --- FALLBACK IF DB SCHEMA IS MISSING 'config_data' COLUMN ---
                         if "config_data" in str(e) or "PGRST204" in str(e):
+                             # Remove 'config_data' key and retry insert
                              recs_fallback = [{k: v for k, v in r.items() if k != 'config_data'} for r in recs]
                              try:
                                  supabase.table("crm_shared_history").insert(recs_fallback).execute()
                                  st.warning("⚠️ Đã lưu thành công (Chế độ tương thích: Bỏ qua cấu hình chi phí do Database cũ).")
                              except Exception as e2:
-                                 st.error(f"Lỗi Fatal sau khi retry: {e2}"); st.stop()
+                                 st.error(f"Lỗi Fatal sau khi retry: {e2}")
+                                 st.stop()
                         else:
-                             st.error(f"Lỗi lưu Supabase: {e}"); st.stop()
+                             st.error(f"Lỗi lưu Supabase: {e}")
+                             st.stop()
+
+                    # Save CSV Backup
                     try:
                         csv_buffer = io.BytesIO()
                         st.session_state.quote_df.to_csv(csv_buffer, index=False, encoding='utf-8-sig')
@@ -843,6 +902,8 @@ with t3:
                         path_list_hist = ["QUOTATION_HISTORY", cust_name, curr_year, curr_month]
                         lnk, _ = upload_to_drive_structured(csv_buffer, path_list_hist, csv_name)
                         
+                        # --- NEW FEATURE: SAVE CONFIG FILE SEPARATELY TO DRIVE ---
+                        # Creates an Excel file with the percentage configuration
                         df_cfg = pd.DataFrame([clean_params])
                         cfg_buffer = io.BytesIO()
                         df_cfg.to_excel(cfg_buffer, index=False)
