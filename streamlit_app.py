@@ -12,7 +12,7 @@ import numpy as np
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO
 # =============================================================================
-APP_VERSION = "V6017 - HOTFIX SCHEMA ERROR"
+APP_VERSION = "V6019 - AUTO LOAD CONFIG & SAVE CONFIG FILE"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # CSS UI
@@ -523,7 +523,19 @@ with t3:
                     if hist_config_row is not None and 'config_data' in hist_config_row and hist_config_row['config_data']:
                         try:
                             cfg = json.loads(hist_config_row['config_data'])
-                            st.info(f"📊 **CẤU HÌNH CHI PHÍ:** "
+                            
+                            # --- AUTO FILL INPUTS FROM HISTORY ---
+                            st.session_state['pct_end'] = str(cfg.get('end', 0))
+                            st.session_state['pct_buy'] = str(cfg.get('buy', 0))
+                            st.session_state['pct_tax'] = str(cfg.get('tax', 0))
+                            st.session_state['pct_vat'] = str(cfg.get('vat', 0))
+                            st.session_state['pct_pay'] = str(cfg.get('pay', 0))
+                            st.session_state['pct_mgmt'] = str(cfg.get('mgmt', 0))
+                            st.session_state['pct_trans'] = str(cfg.get('trans', 0))
+                            
+                            st.toast("✅ Đã tự động load cấu hình % từ lịch sử!", icon="✅")
+                            
+                            st.info(f"📊 **CẤU HÌNH CHI PHÍ (ĐÃ LOAD VÀO FORM):** "
                                     f"End User: {cfg.get('end')}% | Buyer: {cfg.get('buy')}% | "
                                     f"Tax: {cfg.get('tax')}% | VAT: {cfg.get('vat')}% | "
                                     f"Payback: {cfg.get('pay')}% | Mgmt: {cfg.get('mgmt')}% | "
@@ -822,11 +834,11 @@ with t3:
                     except Exception as e:
                         # --- FALLBACK IF DB SCHEMA IS MISSING 'config_data' COLUMN ---
                         if "config_data" in str(e) or "PGRST204" in str(e):
-                             st.warning("⚠️ Database chưa có cột 'config_data', hệ thống sẽ lưu dữ liệu cơ bản và bỏ qua cấu hình chi phí.")
                              # Remove 'config_data' key and retry insert
                              recs_fallback = [{k: v for k, v in r.items() if k != 'config_data'} for r in recs]
                              try:
                                  supabase.table("crm_shared_history").insert(recs_fallback).execute()
+                                 st.warning("⚠️ Đã lưu thành công (Chế độ tương thích: Bỏ qua cấu hình chi phí do Database cũ).")
                              except Exception as e2:
                                  st.error(f"Lỗi Fatal sau khi retry: {e2}")
                                  st.stop()
@@ -844,7 +856,17 @@ with t3:
                         curr_month = datetime.now().strftime("%b").upper()
                         path_list_hist = ["QUOTATION_HISTORY", cust_name, curr_year, curr_month]
                         lnk, _ = upload_to_drive_structured(csv_buffer, path_list_hist, csv_name)
-                        st.success("✅ Đã lưu lịch sử DB (kèm cấu hình nếu DB hỗ trợ) & CSV!")
+                        
+                        # --- NEW FEATURE: SAVE CONFIG FILE SEPARATELY TO DRIVE ---
+                        # Creates an Excel file with the percentage configuration
+                        df_cfg = pd.DataFrame([clean_params])
+                        cfg_buffer = io.BytesIO()
+                        df_cfg.to_excel(cfg_buffer, index=False)
+                        cfg_buffer.seek(0)
+                        cfg_name = f"CONFIG_{quote_no}_{cust_name}_{int(time.time())}.xlsx"
+                        upload_to_drive_structured(cfg_buffer, path_list_hist, cfg_name)
+                        
+                        st.success("✅ Đã lưu lịch sử DB & CSV (Kèm file cấu hình % riêng)!")
                         st.markdown(f"📂 [Folder Lịch Sử]({lnk})", unsafe_allow_html=True)
                     except Exception as e: st.error(f"Lỗi lưu Drive: {e}")
                 else: st.error("Chọn khách!")
