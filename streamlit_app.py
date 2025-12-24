@@ -12,7 +12,7 @@ import numpy as np
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO
 # =============================================================================
-APP_VERSION = "V6022 - FIXED FORMULA & DRIVE CONFIG FALLBACK"
+APP_VERSION = "V6023 - FINAL FIX CONFIG & FORMULA"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # CSS UI
@@ -294,7 +294,7 @@ def parse_formula(formula, buying_price, ap_price):
     # 2. Handle '='
     if s.startswith("="): s = s[1:]
     
-    # 3. Replace Keywords (Longer first)
+    # 3. Replace Keywords (Longer first to avoid substrings issue)
     # Handle 'AP PRICE' explicitly before 'AP'
     s = s.replace("AP PRICE", str(ap_price))
     s = s.replace("BUYING PRICE", str(buying_price))
