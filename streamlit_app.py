@@ -12,7 +12,7 @@ import numpy as np
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO
 # =============================================================================
-APP_VERSION = "V6024 - EXCEL EXPORT TEMPLATE MAPPING UPDATE"
+APP_VERSION = "V6025 - PO TOTAL ROWS ADDED"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # CSS UI
@@ -1129,61 +1129,61 @@ with t4:
 
 # --- TAB 5: TRACKING ---
 with t5:
-    st.subheader("THEO DÕI ĐƠN HÀNG (TRACKING)")
-    if st.button("🔄 Refresh Tracking"): st.cache_data.clear(); st.rerun()
-    df_track = load_data("crm_tracking", order_by="id")
-    if not df_track.empty:
-        c1, c2 = st.columns([1, 2])
-        with c1:
-            st.markdown("#### Cập nhật trạng thái / Ảnh")
-            po_list = df_track['po_no'].unique()
-            sel_po = st.selectbox("Chọn PO", po_list, key="tr_po")
-            new_status = st.selectbox("Trạng thái mới", ["Ordered", "Shipping", "Arrived", "Delivered", "Waiting"], key="tr_st")
-            proof_img = st.file_uploader("Upload Ảnh Proof", type=['png', 'jpg'], key="tr_img")
-            if st.button("Cập nhật Tracking"):
-                upd_data = {"status": new_status, "last_update": datetime.now().strftime("%d/%m/%Y")}
-                if proof_img:
-                    lnk, _ = upload_to_drive_simple(proof_img, "CRM_PROOF", f"PRF_{sel_po}_{int(time.time())}.png")
-                    upd_data["proof_image"] = lnk
-                supabase.table("crm_tracking").update(upd_data).eq("po_no", sel_po).execute()
-                st.success("Updated!"); time.sleep(1); st.rerun()
-        with c2:
-            st.markdown("#### Danh sách đơn hàng")
-            st.dataframe(
-                df_track, 
-                column_config={
-                    "proof_image": st.column_config.ImageColumn("Proof"), 
-                    "status": st.column_config.TextColumn("Status"),
-                    "po_no": "PO No.", "partner": "Partner", "eta": "ETA"
-                }, 
-                use_container_width=True, hide_index=True
-            )
-    else: st.info("Chưa có dữ liệu Tracking. Hãy tạo PO ở Tab 4.")
+    st.subheader("THEO DÕI ĐƠN HÀNG (TRACKING)")
+    if st.button("🔄 Refresh Tracking"): st.cache_data.clear(); st.rerun()
+    df_track = load_data("crm_tracking", order_by="id")
+    if not df_track.empty:
+        c1, c2 = st.columns([1, 2])
+        with c1:
+            st.markdown("#### Cập nhật trạng thái / Ảnh")
+            po_list = df_track['po_no'].unique()
+            sel_po = st.selectbox("Chọn PO", po_list, key="tr_po")
+            new_status = st.selectbox("Trạng thái mới", ["Ordered", "Shipping", "Arrived", "Delivered", "Waiting"], key="tr_st")
+            proof_img = st.file_uploader("Upload Ảnh Proof", type=['png', 'jpg'], key="tr_img")
+            if st.button("Cập nhật Tracking"):
+                upd_data = {"status": new_status, "last_update": datetime.now().strftime("%d/%m/%Y")}
+                if proof_img:
+                    lnk, _ = upload_to_drive_simple(proof_img, "CRM_PROOF", f"PRF_{sel_po}_{int(time.time())}.png")
+                    upd_data["proof_image"] = lnk
+                supabase.table("crm_tracking").update(upd_data).eq("po_no", sel_po).execute()
+                st.success("Updated!"); time.sleep(1); st.rerun()
+        with c2:
+            st.markdown("#### Danh sách đơn hàng")
+            st.dataframe(
+                df_track, 
+                column_config={
+                    "proof_image": st.column_config.ImageColumn("Proof"), 
+                    "status": st.column_config.TextColumn("Status"),
+                    "po_no": "PO No.", "partner": "Partner", "eta": "ETA"
+                }, 
+                use_container_width=True, hide_index=True
+            )
+    else: st.info("Chưa có dữ liệu Tracking. Hãy tạo PO ở Tab 4.")
 
 # --- TAB 6: MASTER DATA ---
 with t6:
-    tc, ts, tt = st.tabs(["KHÁCH HÀNG", "NHÀ CUNG CẤP", "TEMPLATE"])
-    with tc:
-        df = load_data("crm_customers"); st.data_editor(df, num_rows="dynamic", use_container_width=True)
-        up = st.file_uploader("Import KH", key="uck")
-        if up and st.button("Import KH"):
-            d = pd.read_excel(up, dtype=str).fillna("")
-            recs = []
-            for i,r in d.iterrows(): recs.append({"short_name": safe_str(r.iloc[0]), "full_name": safe_str(r.iloc[1]), "address": safe_str(r.iloc[2])})
-            supabase.table("crm_customers").insert(recs).execute(); st.rerun()
-    with ts:
-        df = load_data("crm_suppliers"); st.data_editor(df, num_rows="dynamic", use_container_width=True)
-        up = st.file_uploader("Import NCC", key="usn")
-        if up and st.button("Import NCC"):
-            d = pd.read_excel(up, dtype=str).fillna("")
-            recs = []
-            for i,r in d.iterrows(): recs.append({"short_name": safe_str(r.iloc[0]), "full_name": safe_str(r.iloc[1]), "address": safe_str(r.iloc[2])})
-            supabase.table("crm_suppliers").insert(recs).execute(); st.rerun()
-    with tt:
-        st.write("Upload Template Excel")
-        up_t = st.file_uploader("File Template (.xlsx)", type=["xlsx"])
-        t_name = st.text_input("Tên Template (Nhập: AAA-QUOTATION)")
-        if up_t and t_name and st.button("Lưu Template"):
-            lnk, fid = upload_to_drive_simple(up_t, "CRM_TEMPLATES", f"TMP_{t_name}.xlsx")
-            if fid: supabase.table("crm_templates").insert([{"template_name": t_name, "file_id": fid, "last_updated": datetime.now().strftime("%d/%m/%Y")}]).execute(); st.success("OK"); st.rerun()
-        st.dataframe(load_data("crm_templates"))
+    tc, ts, tt = st.tabs(["KHÁCH HÀNG", "NHÀ CUNG CẤP", "TEMPLATE"])
+    with tc:
+        df = load_data("crm_customers"); st.data_editor(df, num_rows="dynamic", use_container_width=True)
+        up = st.file_uploader("Import KH", key="uck")
+        if up and st.button("Import KH"):
+            d = pd.read_excel(up, dtype=str).fillna("")
+            recs = []
+            for i,r in d.iterrows(): recs.append({"short_name": safe_str(r.iloc[0]), "full_name": safe_str(r.iloc[1]), "address": safe_str(r.iloc[2])})
+            supabase.table("crm_customers").insert(recs).execute(); st.rerun()
+    with ts:
+        df = load_data("crm_suppliers"); st.data_editor(df, num_rows="dynamic", use_container_width=True)
+        up = st.file_uploader("Import NCC", key="usn")
+        if up and st.button("Import NCC"):
+            d = pd.read_excel(up, dtype=str).fillna("")
+            recs = []
+            for i,r in d.iterrows(): recs.append({"short_name": safe_str(r.iloc[0]), "full_name": safe_str(r.iloc[1]), "address": safe_str(r.iloc[2])})
+            supabase.table("crm_suppliers").insert(recs).execute(); st.rerun()
+    with tt:
+        st.write("Upload Template Excel")
+        up_t = st.file_uploader("File Template (.xlsx)", type=["xlsx"])
+        t_name = st.text_input("Tên Template (Nhập: AAA-QUOTATION)")
+        if up_t and t_name and st.button("Lưu Template"):
+            lnk, fid = upload_to_drive_simple(up_t, "CRM_TEMPLATES", f"TMP_{t_name}.xlsx")
+            if fid: supabase.table("crm_templates").insert([{"template_name": t_name, "file_id": fid, "last_updated": datetime.now().strftime("%d/%m/%Y")}]).execute(); st.success("OK"); st.rerun()
+        st.dataframe(load_data("crm_templates"))"
