@@ -12,7 +12,7 @@ import numpy as np
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO
 # =============================================================================
-APP_VERSION = "V6016 - FIXED API ERROR NaN"
+APP_VERSION = "V6017 - HOTFIX SCHEMA ERROR"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # CSS UI
@@ -817,10 +817,25 @@ with t3:
                         })
                     
                     try:
-                        # --- EXECUTING INSERT WITH CLEANED DATA ---
+                        # --- TRY INSERT WITH config_data ---
                         supabase.table("crm_shared_history").insert(recs).execute()
-                        
-                        # Save CSV Backup
+                    except Exception as e:
+                        # --- FALLBACK IF DB SCHEMA IS MISSING 'config_data' COLUMN ---
+                        if "config_data" in str(e) or "PGRST204" in str(e):
+                             st.warning("⚠️ Database chưa có cột 'config_data', hệ thống sẽ lưu dữ liệu cơ bản và bỏ qua cấu hình chi phí.")
+                             # Remove 'config_data' key and retry insert
+                             recs_fallback = [{k: v for k, v in r.items() if k != 'config_data'} for r in recs]
+                             try:
+                                 supabase.table("crm_shared_history").insert(recs_fallback).execute()
+                             except Exception as e2:
+                                 st.error(f"Lỗi Fatal sau khi retry: {e2}")
+                                 st.stop()
+                        else:
+                             st.error(f"Lỗi lưu Supabase: {e}")
+                             st.stop()
+
+                    # Save CSV Backup
+                    try:
                         csv_buffer = io.BytesIO()
                         st.session_state.quote_df.to_csv(csv_buffer, index=False, encoding='utf-8-sig')
                         csv_buffer.seek(0)
@@ -829,9 +844,9 @@ with t3:
                         curr_month = datetime.now().strftime("%b").upper()
                         path_list_hist = ["QUOTATION_HISTORY", cust_name, curr_year, curr_month]
                         lnk, _ = upload_to_drive_structured(csv_buffer, path_list_hist, csv_name)
-                        st.success("✅ Đã lưu lịch sử DB (kèm cấu hình) & CSV!")
+                        st.success("✅ Đã lưu lịch sử DB (kèm cấu hình nếu DB hỗ trợ) & CSV!")
                         st.markdown(f"📂 [Folder Lịch Sử]({lnk})", unsafe_allow_html=True)
-                    except Exception as e: st.error(f"Lỗi lưu Supabase/Drive: {e}")
+                    except Exception as e: st.error(f"Lỗi lưu Drive: {e}")
                 else: st.error("Chọn khách!")
             st.markdown('</div>', unsafe_allow_html=True)
 
