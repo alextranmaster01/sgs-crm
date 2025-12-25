@@ -12,7 +12,7 @@ import numpy as np
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO
 # =============================================================================
-APP_VERSION = "V6037 - TRACKING PERFECTED"
+APP_VERSION = "V6038 - TRACKING UI/UX PERFECTED"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # CSS UI
@@ -1317,7 +1317,7 @@ with t5:
             st.dataframe(
                 df_active.style.applymap(highlight_partner, subset=['partner']),
                 column_config={
-                    "proof_image": st.column_config.ImageColumn("Ảnh thanh toán/đã nhận hàng"),
+                    "proof_image": st.column_config.ImageColumn("Ảnh thanh toán/đã giao hàng"),
                     "status_display": st.column_config.TextColumn("status"),
                     "po_no": "po_no", "partner": "Customer/Partner",
                     "actual_date": "Ngày nhận/giao hàng",
@@ -1405,7 +1405,7 @@ with t5:
             df_pay['No'] = df_pay.index + 1
             
             # Select Columns to Show (Exclude eta_payment, payment_date, include No)
-            cols_show = ['No', 'po_no', 'customer', 'invoice_no', 'status', 'created_at']
+            cols_show = ['No', 'po_no', 'customer', 'invoice_no', 'status', 'created_at', 'payment_date']
             # Ensure exist
             cols_show = [c for c in cols_show if c in df_pay.columns]
             
