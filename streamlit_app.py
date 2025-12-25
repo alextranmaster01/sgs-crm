@@ -12,7 +12,7 @@ import numpy as np
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO
 # =============================================================================
-APP_VERSION = "V6029 - PO MANAGEMENT FIXED"
+APP_VERSION = "V6030 - PO MATCHING UPGRADED 3-FIELDS"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # CSS UI
@@ -216,6 +216,18 @@ def fmt_float_2(x):
     except: return "0.00"
 
 def clean_key(s): return safe_str(s).lower()
+
+# --- MỚI: HÀM LÀM SẠCH TUYỆT ĐỐI ĐỂ MATCHING ---
+def strict_match_key(val):
+    """
+    Loại bỏ mọi khoảng trắng (space, tab, newline), 
+    chuyển về lowercase để so sánh tuyệt đối.
+    Dùng cho việc matching 3 trường: Code, Name, Specs.
+    """
+    if val is None: return ""
+    s = str(val).lower()
+    # Loại bỏ toàn bộ whitespace
+    return re.sub(r'\s+', '', s)
 
 def calc_eta(order_date_str, leadtime_val):
     try:
@@ -968,18 +980,27 @@ with t4:
             if up_s and st.button("Load Items NCC"):
                 df_up = pd.read_excel(up_s, dtype=str).fillna("")
                 db = load_data("crm_purchases")
-                lookup = {clean_key(r['item_code']): r for r in db.to_dict('records')}
+                
+                # --- [LOGIC MỚI] 3-FIELDS MATCHING ---
+                # Build lookup dictionary với key là tuple (clean_code, clean_name, clean_specs)
+                lookup = {}
+                for r in db.to_dict('records'):
+                    k = (strict_match_key(r['item_code']), strict_match_key(r['item_name']), strict_match_key(r['specs']))
+                    lookup[k] = r
                 
                 recs = []
                 for i, r in df_up.iterrows():
-                    # --- NEW LOGIC: PRIORITY TO EXCEL ---
+                    # Lấy dữ liệu từ Excel
                     no_val = safe_str(r.iloc[0]) 
                     code_raw = safe_str(r.iloc[1])
                     name_excel = safe_str(r.iloc[2])
                     specs_excel = safe_str(r.iloc[3])
                     qty_val = to_float(r.iloc[4])
 
-                    match = lookup.get(clean_key(code_raw))
+                    # Tạo key chuẩn hóa từ Excel để so sánh
+                    key_check = (strict_match_key(code_raw), strict_match_key(name_excel), strict_match_key(specs_excel))
+                    
+                    match = lookup.get(key_check)
                     
                     # Fill missing info from DB (Price, Supplier, Leadtime)
                     if match:
@@ -1101,16 +1122,17 @@ with t4:
                     if excel_files:
                         all_recs = []
                         hist = load_data("crm_shared_history") 
-                        # --- STRICT FILTER: ONLY THIS CUSTOMER'S HISTORY ---
                         cust_hist = hist[hist['customer'] == c_name].sort_values(by='date', ascending=False)
                         
+                        # Price Lookup (Use Code only as History table schema implies)
                         price_lookup = {}
                         for _, h in cust_hist.iterrows():
-                            c_code = clean_key(h['item_code'])
+                            c_code = strict_match_key(h['item_code'])
                             if c_code not in price_lookup: price_lookup[c_code] = to_float(h['unit_price'])
                         
                         db_items = load_data("crm_purchases")
-                        lt_lookup = {clean_key(r['item_code']): r['leadtime'] for r in db_items.to_dict('records')}
+                        # --- [LOGIC MỚI] 3-FIELDS MATCHING AGAINST PRODUCT DB FOR VALIDATION ---
+                        db_lookup = { (strict_match_key(r['item_code']), strict_match_key(r['item_name']), strict_match_key(r['specs'])): r for r in db_items.to_dict('records') }
                         
                         for f in excel_files:
                             try:
@@ -1118,33 +1140,43 @@ with t4:
                                 for i, r in df_up.iterrows():
                                     no_val = safe_str(r.iloc[0]) 
                                     code = safe_str(r.iloc[1])
+                                    name_e = safe_str(r.iloc[2])
+                                    specs_e = safe_str(r.iloc[3])
                                     qty = to_float(r.iloc[4])
                                     
-                                    # --- UPDATED PRICE LOGIC ---
-                                    # 1. Look up in SPECIFIC customer history
-                                    c_key = clean_key(code)
-                                    unit_price = 0
-                                    note_status = ""
+                                    # --- UPDATED LOGIC ---
+                                    # 1. Matching tuyệt đối 3 trường với Database sản phẩm để lấy Leadtime & Confirm đúng hàng
+                                    k_check = (strict_match_key(code), strict_match_key(name_e), strict_match_key(specs_e))
+                                    match_item = db_lookup.get(k_check)
                                     
-                                    if c_key in price_lookup:
-                                        unit_price = price_lookup[c_key]
+                                    note_status = ""
+                                    unit_price = 0
+                                    leadtime = "0"
+                                    
+                                    if match_item:
+                                        # Có trong DB khớp cả 3 trường
+                                        leadtime = match_item['leadtime']
                                     else:
-                                        # Not found in THIS customer's history.
-                                        # Do NOT fallback to other customers.
-                                        # Fallback to File value if exists, but flag warning.
+                                        note_status = "chưa có trong database"
+                                    
+                                    # 2. Lấy giá từ lịch sử khách hàng (dựa vào Code đã chuẩn hóa)
+                                    c_key_price = strict_match_key(code)
+                                    if c_key_price in price_lookup:
+                                        unit_price = price_lookup[c_key_price]
+                                    else:
+                                        # Nếu ko có trong lịch sử, lấy từ file excel nếu có cột giá
                                         if len(r) > 5:
                                              try: unit_price = to_float(r.iloc[5])
                                              except: unit_price = 0
-                                        note_status = "chưa có lịch sử báo giá"
+                                        if not note_status: note_status = "chưa có lịch sử báo giá"
                                     
                                     total = unit_price * qty
-                                    leadtime = lt_lookup.get(clean_key(code), "0")
                                     eta = calc_eta(datetime.now(), leadtime)
                                     
                                     if code:
                                         all_recs.append({
-                                            "No.": no_val, "Item code": code, "Item name": safe_str(r.iloc[2]),
-                                            "Specs": safe_str(r.iloc[3]), "Q'ty": qty,
+                                            "No.": no_val, "Item code": code, "Item name": name_e,
+                                            "Specs": specs_e, "Q'ty": qty,
                                             "Unit price(VND)": fmt_num(unit_price), "Total price(VND)": fmt_num(total),
                                             "Customer": c_name, "ETA": eta, "Ghi chú": note_status
                                         })
