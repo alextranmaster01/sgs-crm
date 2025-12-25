@@ -12,7 +12,7 @@ import numpy as np
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO
 # =============================================================================
-APP_VERSION = "V6030 - PO MATCHING UPGRADED 3-FIELDS"
+APP_VERSION = "V6031 - TRACKING UPDATE FIX"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # CSS UI
@@ -1308,8 +1308,8 @@ with t5:
                                      # Get Customer Name from Tracking
                                      cust_name = df_track[df_track['po_no'] == sel_po]['partner'].iloc[0]
                                      pay_rec = {
-                                         "po_no": sel_po, "customer": cust_name, "status": "Đợi xuất hóa đơn",
-                                         "created_at": str(datetime.now())
+                                         "po_no": sel_po, "customer": cust_name, "status": "Đợi xuất hóa đơn"
+                                         # REMOVED created_at to avoid schema error. DB should handle this.
                                      }
                                      supabase.table("crm_payments").insert(pay_rec).execute()
                                      st.success("Đã tự động chuyển sang theo dõi thanh toán!")
