@@ -12,7 +12,7 @@ import numpy as np
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO
 # =============================================================================
-APP_VERSION = "V6034 - PAYMENT UPDATE FULL FEATURES"
+APP_VERSION = "V6035 - TRACKING FILTER & PAYMENT FIX"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # CSS UI
@@ -1200,7 +1200,7 @@ with t4:
                 df_cust_show = pd.concat([df_cust_show, pd.DataFrame([total_row_c])], ignore_index=True)
                 def highlight_total_c(row):
                     return ['background-color: #ffffcc; font-weight: bold; color: black'] * len(row) if row['No.'] == 'TOTAL' else [''] * len(row)
-                st.dataframe(df_cust_show.style.apply(highlight_total_c, axis=1), use_container_width=True, hide_index=True)
+                st.dataframe(df_cust_show.style.apply(highlight_total, axis=1), use_container_width=True, hide_index=True)
 
                 if st.button("💾 LƯU PO KHÁCH HÀNG"):
                     if not po_c_no: st.error("Thiếu số PO")
@@ -1340,6 +1340,13 @@ with t5:
         except:
             df_pay = pd.DataFrame(columns=["po_no", "customer", "invoice_no", "eta_payment", "payment_date", "status"])
         
+        # Filter Customers Only
+        cust_df = load_data("crm_customers")
+        valid_customers = cust_df['short_name'].tolist() if not cust_df.empty else []
+        
+        if not df_pay.empty and valid_customers:
+             df_pay = df_pay[df_pay['customer'].isin(valid_customers)]
+
         # Search
         search_pay = st.text_input("🔍 Tìm thanh toán", key="search_py")
         if not df_pay.empty and search_pay:
@@ -1347,7 +1354,22 @@ with t5:
              df_pay = df_pay[mask]
         
         if not df_pay.empty:
-            st.dataframe(df_pay, use_container_width=True, hide_index=True)
+            # Customize Display Columns (Remove ID/No, Due Date, Paid Date from VIEW)
+            cols_to_show = ["po_no", "customer", "invoice_no", "status", "created_at"]
+            # Ensure columns exist before selecting
+            existing_cols = [c for c in cols_to_show if c in df_pay.columns]
+            
+            st.dataframe(
+                df_pay[existing_cols], 
+                column_config={
+                    "po_no": st.column_config.TextColumn("PO Number"),
+                    "customer": st.column_config.TextColumn("Customer"),
+                    "invoice_no": st.column_config.TextColumn("Invoice No"),
+                    "status": st.column_config.TextColumn("Status"),
+                    "created_at": st.column_config.DatetimeColumn("Created At", format="DD/MM/YYYY")
+                },
+                use_container_width=True, hide_index=True
+            )
             
             with st.form("update_payment_form"):
                 st.write("Cập nhật thanh toán:")
@@ -1375,7 +1397,6 @@ with t5:
                             st.success("Updated Payment Info!")
                             st.rerun()
                         except Exception as e:
-                            # --- FALLBACK LOGIC: Try to detect SQL ERROR and GUIDE USER ---
                             if "eta_payment" in str(e) or "PGRST204" in str(e):
                                 st.error("⚠️ Lỗi: Database thiếu cột 'eta_payment'.")
                                 st.code("ALTER TABLE crm_payments ADD COLUMN IF NOT EXISTS eta_payment TEXT;", language="sql")
