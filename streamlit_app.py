@@ -12,7 +12,7 @@ import numpy as np
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO
 # =============================================================================
-APP_VERSION = "V6038 - TRACKING UI/UX PERFECTED"
+APP_VERSION = "V6040 - TRACKING DELETE & RESET"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # CSS UI
@@ -1250,8 +1250,20 @@ with t5:
 
     # 1. ORDER TRACKING (Includes Payment Info joined)
     with t5_1:
-        if st.button("🔄 Refresh Tracking"): st.cache_data.clear(); st.rerun()
+        c_act1, c_act2 = st.columns([4, 1])
+        with c_act1:
+             if st.button("🔄 Refresh Tracking"): st.cache_data.clear(); st.rerun()
         
+        # --- RESET FUNCTIONALITY ---
+        with c_act2:
+             with st.expander("🛠️ Reset Đơn Hàng"):
+                 adm_p1 = st.text_input("Pass", type="password", key="adm_t1")
+                 if st.button("Xóa Tất Cả"):
+                     if adm_p1 == "admin":
+                         supabase.table("crm_tracking").delete().neq("id", 0).execute()
+                         st.success("Deleted!"); time.sleep(1); st.rerun()
+                     else: st.error("Sai pass")
+
         df_track = load_data("crm_tracking", order_by="id")
         df_pay = load_data("crm_payments")
         
@@ -1287,6 +1299,8 @@ with t5:
                 "Arrived": "Đã nhận hàng", "Delivered": "Đã giao hàng", "Waiting": "Đang đợi PO"
             }
             r['status_display'] = status_map_rev.get(status, status)
+            # Add checkbox placeholder
+            r['Xóa'] = False
 
             if move_to_hist: history_rows.append(r)
             else: active_rows.append(r)
@@ -1296,54 +1310,46 @@ with t5:
 
         # Show Active Orders
         if not df_active.empty:
-            # Reorder columns as requested: No, po_no, customer, invoice_no, status, created_at, eta_payment, payment_date
-            # Note: 'No' is usually index + 1
-            # Note: 'customer' here corresponds to 'partner' in tracking table
-            # Note: 'created_at' might be missing in tracking, using 'last_update' or 'created_at' if exists
-            
             df_active = df_active.reset_index(drop=True)
             df_active['No'] = df_active.index + 1
-            
-            # Ensure columns exist
             for c in ['invoice_no', 'eta_payment', 'payment_date', 'created_at']:
                 if c not in df_active.columns: df_active[c] = ""
             
-            # Highlight Logic (Blue for Customer, Orange for Partner)
-            def highlight_partner(val):
-                if val in cust_list: return 'color: #007bff; font-weight: bold;'
-                if val in supp_list: return 'color: #ff8c00; font-weight: bold;'
-                return ''
-                
-            st.dataframe(
-                df_active.style.applymap(highlight_partner, subset=['partner']),
+            # Use Data Editor with Checkbox for Deletion
+            edited_active = st.data_editor(
+                df_active,
                 column_config={
+                    "Xóa": st.column_config.CheckboxColumn("Xóa", help="Tick để xóa dòng này", default=False),
                     "proof_image": st.column_config.ImageColumn("Ảnh thanh toán/đã giao hàng"),
                     "status_display": st.column_config.TextColumn("status"),
                     "po_no": "po_no", "partner": "Customer/Partner",
                     "actual_date": "Ngày nhận/giao hàng",
                     "eta_payment": "eta_payment"
                 },
-                column_order=["No", "po_no", "partner", "status_display", "actual_date", "eta_payment", "proof_image"],
-                use_container_width=True, hide_index=True
+                column_order=["Xóa", "No", "po_no", "partner", "status_display", "actual_date", "eta_payment", "proof_image"],
+                use_container_width=True, hide_index=True, key="editor_active"
             )
             
+            # DELETE LOGIC
+            rows_to_delete = edited_active[edited_active["Xóa"] == True]
+            if not rows_to_delete.empty:
+                if st.button(f"🗑️ Xóa {len(rows_to_delete)} dòng đã chọn (Tab Đơn Hàng)"):
+                     for _, r in rows_to_delete.iterrows():
+                         supabase.table("crm_tracking").delete().eq("po_no", r["po_no"]).execute()
+                     st.success("Đã xóa!"); time.sleep(1); st.rerun()
+
             # Update Form
             with st.form("update_tracking_form_v2"):
                 st.write("Cập nhật trạng thái:")
                 po_list = df_active['po_no'].unique()
                 sel_po = st.selectbox("Chọn PO", po_list)
-                
-                # Use Vietnamese for Selection, Map back to English for DB
                 status_opts = {"Đã đặt hàng": "Ordered", "Đang vận chuyển về VN": "Shipping", 
                                "Đã nhận hàng": "Arrived", "Đã giao hàng": "Delivered", "Đang đợi PO": "Waiting"}
                 new_status_vn = st.selectbox("Trạng thái mới", list(status_opts.keys()))
-                
                 proof_img = st.file_uploader("Upload Ảnh Proof", type=['png', 'jpg'])
                 
                 if st.form_submit_button("Cập nhật"):
                     new_status_db = status_opts[new_status_vn]
-                    
-                    # Auto update actual_date if status is Delivered/Arrived
                     act_date_val = None
                     if new_status_db in ["Delivered", "Arrived"]:
                         act_date_val = datetime.now().strftime("%d/%m/%Y")
@@ -1353,7 +1359,6 @@ with t5:
                         "last_update": datetime.now().strftime("%d/%m/%Y")
                     }
                     if act_date_val: upd_data["actual_date"] = act_date_val
-                    
                     if proof_img:
                         lnk, _ = upload_to_drive_simple(proof_img, "CRM_PROOF", f"PRF_{sel_po}_{int(time.time())}.png")
                         upd_data["proof_image"] = lnk
@@ -1361,15 +1366,10 @@ with t5:
                     if sel_po:
                          try:
                              supabase.table("crm_tracking").update(upd_data).eq("po_no", sel_po).execute()
-                             
-                             # Auto-link to Payment if Delivered (Customer) & Create ETA Payment
                              row_info = df_active[df_active['po_no'] == sel_po].iloc[0]
                              if new_status_db == "Delivered" and row_info['partner'] in cust_list:
                                  chk = supabase.table("crm_payments").select("*").eq("po_no", sel_po).execute()
-                                 
-                                 # Calculate Default ETA Payment (+30 days)
                                  eta_pay_calc = (datetime.now() + timedelta(days=30)).strftime("%d/%m/%Y")
-                                 
                                  if not chk.data:
                                      pay_rec = {
                                          "po_no": sel_po, "customer": row_info['partner'], "status": "Đợi xuất hóa đơn",
@@ -1379,9 +1379,7 @@ with t5:
                                      supabase.table("crm_payments").insert(pay_rec).execute()
                                      st.success("Đã tự động tạo theo dõi thanh toán!")
                                  else:
-                                     # Update existing payment record with new ETA if missing
                                      supabase.table("crm_payments").update({"eta_payment": eta_pay_calc}).eq("po_no", sel_po).execute()
-
                              st.success("Cập nhật thành công!")
                              time.sleep(1); st.rerun()
                          except Exception as e: st.error(f"Lỗi Update: {e}")
@@ -1390,28 +1388,55 @@ with t5:
 
     # 2. PAYMENT TRACKING
     with t5_2:
-        st.markdown("#### 💰 THEO DÕI THANH TOÁN")
+        c_p1, c_p2 = st.columns([4, 1])
+        with c_p1: 
+            st.markdown("#### 💰 THEO DÕI THANH TOÁN")
+            if st.button("🔄 Refresh Payments"): st.cache_data.clear(); st.rerun()
+        
+        with c_p2:
+             with st.expander("🛠️ Reset Thanh Toán"):
+                 adm_p2 = st.text_input("Pass", type="password", key="adm_t2")
+                 if st.button("Xóa Hết Payment"):
+                     if adm_p2 == "admin":
+                         supabase.table("crm_payments").delete().neq("id", 0).execute()
+                         st.success("Deleted!"); time.sleep(1); st.rerun()
+                     else: st.error("Sai pass")
+
         # Load Payments
         try: df_pay = load_data("crm_payments")
         except: df_pay = pd.DataFrame()
         
-        # Filter: Only Customers
         if not df_pay.empty and cust_list:
              df_pay = df_pay[df_pay['customer'].isin(cust_list)]
 
         if not df_pay.empty:
-            # Create "No" column (Index + 1)
             df_pay = df_pay.reset_index(drop=True)
             df_pay['No'] = df_pay.index + 1
+            df_pay['Xóa'] = False
             
-            # Select Columns to Show (Exclude eta_payment, payment_date, include No)
-            cols_show = ['No', 'po_no', 'customer', 'invoice_no', 'status', 'created_at', 'payment_date']
-            # Ensure exist
-            cols_show = [c for c in cols_show if c in df_pay.columns]
+            cols_show = ['Xóa', 'No', 'po_no', 'customer', 'invoice_no', 'status', 'created_at', 'payment_date']
+            cols_show = [c for c in cols_show if c in df_pay.columns or c == 'Xóa' or c == 'No']
             
-            st.dataframe(df_pay[cols_show], use_container_width=True, hide_index=True)
+            edited_pay = st.data_editor(
+                df_pay[cols_show], 
+                column_config={
+                    "Xóa": st.column_config.CheckboxColumn("Xóa", default=False),
+                    "po_no": st.column_config.TextColumn("PO Number"),
+                    "customer": st.column_config.TextColumn("Customer"),
+                    "invoice_no": st.column_config.TextColumn("Invoice No"),
+                    "status": st.column_config.TextColumn("Status"),
+                    "created_at": st.column_config.DatetimeColumn("Created At", format="DD/MM/YYYY")
+                },
+                use_container_width=True, hide_index=True, key="editor_pay"
+            )
             
-            # Update Form (Keeps full logic even if columns hidden)
+            rows_del_pay = edited_pay[edited_pay["Xóa"] == True]
+            if not rows_del_pay.empty:
+                if st.button(f"🗑️ Xóa {len(rows_del_pay)} dòng thanh toán"):
+                     for _, r in rows_del_pay.iterrows():
+                         supabase.table("crm_payments").delete().eq("po_no", r["po_no"]).execute()
+                     st.success("Đã xóa!"); time.sleep(1); st.rerun()
+
             with st.form("update_payment_form_v2"):
                 st.write("Cập nhật thanh toán:")
                 po_list_p = df_pay['po_no'].unique()
@@ -1422,13 +1447,8 @@ with t5:
                 if st.form_submit_button("Cập nhật Payment"):
                     if sel_po_p:
                         p_upd = {"status": pay_status}
-                        if inv_no: 
-                            p_upd["invoice_no"] = inv_no
-                            if pay_status == "Đợi xuất hóa đơn": p_upd["status"] = "Đợi thanh toán"
-                            # Auto Calc ETA
-                            eta_pay = (datetime.now() + timedelta(days=30)).strftime("%d/%m/%Y")
-                            p_upd["eta_payment"] = eta_pay
-                            
+                        if inv_no: p_upd["invoice_no"] = inv_no
+                        if pay_status == "Đợi xuất hóa đơn": p_upd["status"] = "Đợi thanh toán"
                         if pay_status == "Đã nhận thanh toán":
                             p_upd["payment_date"] = datetime.now().strftime("%d/%m/%Y")
                             
@@ -1437,34 +1457,54 @@ with t5:
                             st.success("Updated Payment Info!")
                             time.sleep(1); st.rerun()
                         except Exception as e:
-                            # Fallback if columns missing
                             if "eta_payment" in str(e) or "payment_date" in str(e) or "PGRST204" in str(e):
                                 st.error("⚠️ Lỗi cấu trúc DB. Đang thử cập nhật cơ bản...")
-                                # Try minimizing payload
                                 safe_upd = {"status": pay_status}
                                 if inv_no: safe_upd["invoice_no"] = inv_no
                                 try:
                                     supabase.table("crm_payments").update(safe_upd).eq("po_no", sel_po_p).execute()
-                                    st.warning("Đã cập nhật trạng thái cơ bản (Bỏ qua ngày tháng do lỗi DB).")
+                                    st.warning("Đã cập nhật (Bỏ qua ngày tháng do lỗi DB).")
                                     time.sleep(1); st.rerun()
                                 except: st.error(f"Lỗi: {e}")
                             else: st.error(f"Lỗi update: {e}")
+                    else: st.error("Chọn PO cần update.")
         else: st.info("Không có dữ liệu thanh toán khách hàng.")
 
     # 3. ORDER HISTORY
     with t5_3:
-        st.markdown("#### 📜 LỊCH SỬ ĐƠN HÀNG (ĐÃ HOÀN THÀNH)")
+        c_h1, c_h2 = st.columns([4, 1])
+        with c_h1: st.markdown("#### 📜 LỊCH SỬ ĐƠN HÀNG (ĐÃ HOÀN THÀNH)")
+        with c_h2:
+             with st.expander("🛠️ Xóa Lịch Sử"):
+                 adm_p3 = st.text_input("Pass", type="password", key="adm_t3")
+                 if st.button("Xóa Hết History"):
+                     if adm_p3 == "admin":
+                         # Logic: Delete only completed ones or all tracking? Assume completed tracking.
+                         # Since history comes from tracking table, deleting here deletes from tracking
+                         # Be careful: This deletes based on logic active/history
+                         st.warning("Chức năng này cần cẩn trọng. Hiện tại chỉ hỗ trợ xóa từng dòng.")
+                     else: st.error("Sai pass")
+
         if not df_history.empty:
-             st.dataframe(
+             df_history['Xóa'] = False
+             edited_hist = st.data_editor(
                 df_history,
                 column_config={
+                    "Xóa": st.column_config.CheckboxColumn("Xóa", default=False),
                     "proof_image": st.column_config.ImageColumn("Ảnh thanh toán/đã nhận hàng"),
                     "status_display": "Status",
                     "po_no": "PO No", "partner": "Partner"
                 },
-                column_order=["po_no", "partner", "invoice_no", "status_display", "eta_payment", "proof_image"],
-                use_container_width=True, hide_index=True
+                column_order=["Xóa", "po_no", "partner", "invoice_no", "status_display", "eta_payment", "proof_image"],
+                use_container_width=True, hide_index=True, key="editor_hist"
             )
+             
+             rows_del_hist = edited_hist[edited_hist["Xóa"] == True]
+             if not rows_del_hist.empty:
+                if st.button(f"🗑️ Xóa {len(rows_del_hist)} dòng lịch sử"):
+                     for _, r in rows_del_hist.iterrows():
+                         supabase.table("crm_tracking").delete().eq("po_no", r["po_no"]).execute()
+                     st.success("Đã xóa!"); time.sleep(1); st.rerun()
         else: st.info("Chưa có đơn hàng nào trong lịch sử.")
 
 # --- TAB 6: MASTER DATA ---
