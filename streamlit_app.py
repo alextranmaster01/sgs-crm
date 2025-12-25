@@ -12,7 +12,7 @@ import numpy as np
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO
 # =============================================================================
-APP_VERSION = "V6032 - SQL FIXED & RESTORED TIMESTAMP"
+APP_VERSION = "V6034 - PAYMENT UPDATE ENHANCED"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # CSS UI
@@ -1308,10 +1308,8 @@ with t5:
                                      # Get Customer Name from Tracking
                                      cust_name = df_track[df_track['po_no'] == sel_po]['partner'].iloc[0]
                                      pay_rec = {
-                                         "po_no": sel_po, 
-                                         "customer": cust_name, 
-                                         "status": "Đợi xuất hóa đơn",
-                                         "created_at": datetime.now().isoformat() # RESTORED: User fixed SQL!
+                                         "po_no": sel_po, "customer": cust_name, "status": "Đợi xuất hóa đơn",
+                                         "created_at": datetime.now().isoformat()
                                      }
                                      supabase.table("crm_payments").insert(pay_rec).execute()
                                      st.success("Đã tự động chuyển sang theo dõi thanh toán!")
@@ -1376,7 +1374,20 @@ with t5:
                             supabase.table("crm_payments").update(p_upd).eq("po_no", sel_po_p).execute()
                             st.success("Updated Payment Info!")
                             st.rerun()
-                        except Exception as e: st.error(f"Lỗi update: {e}")
+                        except Exception as e:
+                            # --- FALLBACK LOGIC FOR MISSING COLUMN 'eta_payment' ---
+                            if "eta_payment" in str(e) or "PGRST204" in str(e):
+                                if "eta_payment" in p_upd:
+                                    del p_upd["eta_payment"] # Remove the missing column from payload
+                                    try:
+                                        supabase.table("crm_payments").update(p_upd).eq("po_no", sel_po_p).execute()
+                                        st.warning("⚠️ Đã cập nhật (Bỏ qua 'eta_payment' do chưa có cột trong Database).")
+                                        time.sleep(1)
+                                        st.rerun()
+                                    except Exception as e2:
+                                        st.error(f"Lỗi update (Retry failed): {e2}")
+                            else:
+                                st.error(f"Lỗi update: {e}")
                     else:
                         st.error("Chọn PO cần update.")
         else:
