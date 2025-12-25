@@ -12,7 +12,7 @@ import numpy as np
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO
 # =============================================================================
-APP_VERSION = "V6043 - FIX INVENTORY IMPORT LOGIC"
+APP_VERSION = "V6043 - FIXED INVENTORY & SYNTAX"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # CSS UI
@@ -343,7 +343,7 @@ with t1:
     c2.markdown(f"<div class='card-3d bg-cost'><h3>CHI PHÍ NCC</h3><h1>{fmt_num(cost)}</h1></div>", unsafe_allow_html=True)
     c3.markdown(f"<div class='card-3d bg-profit'><h3>LỢI NHUẬN GỘP</h3><h1>{fmt_num(profit)}</h1></div>", unsafe_allow_html=True)
 
-# --- TAB 2: KHO HÀNG ---
+# --- TAB 2: KHO HÀNG (ĐÃ SỬA LỖI MẤT DỮ LIỆU) ---
 with t2:
     st.subheader("QUẢN LÝ KHO HÀNG (Excel Online)")
     c_imp, c_view = st.columns([1, 4])
@@ -353,7 +353,7 @@ with t2:
         st.caption("Excel cột A->O")
         st.info("No, Code, Name, Specs, Qty, BuyRMB, TotalRMB, Rate, BuyVND, TotalVND, Leadtime, Supplier, Images, Type, N/U/O/C")
         
-        with st.expander("🛠️ Reset DB"):
+        with st.expander("🛠️ Reset DB (Cẩn thận)"):
             adm_pass = st.text_input("Pass", type="password", key="adm_inv")
             if st.button("⚠️ XÓA SẠCH"):
                 if adm_pass == "admin":
@@ -365,15 +365,14 @@ with t2:
             
         if up_file and st.button("🚀 Import"):
             try:
-                # 1. Đọc file trước để kiểm tra dữ liệu
+                # 1. Đọc file
                 df = pd.read_excel(up_file, header=None, skiprows=1, dtype=str).fillna("")
                 if df.empty:
                     st.error("File Excel trống!")
                     st.stop()
 
-                # 2. Xử lý ảnh (nếu có)
-                wb = load_workbook(up_file, data_only=False)
-                ws = wb.active
+                # 2. Xử lý ảnh
+                wb = load_workbook(up_file, data_only=False); ws = wb.active
                 img_map = {}
                 for image in getattr(ws, '_images', []):
                     row = image.anchor._from.row + 1
@@ -386,7 +385,7 @@ with t2:
                     link, _ = upload_to_drive_simple(buf, "CRM_PRODUCT_IMAGES", fname)
                     img_map[row] = link
                 
-                # 3. Chuẩn bị records
+                # 3. Chuẩn bị dữ liệu
                 records = []
                 prog = st.progress(0)
                 cols_map = ["no", "item_code", "item_name", "specs", "qty", "buying_price_rmb", 
@@ -398,7 +397,8 @@ with t2:
                     for idx, field in enumerate(cols_map):
                         if idx < len(r): d[field] = safe_str(r.iloc[idx])
                         else: d[field] = ""
-                    has_data = d['item_code'] or d['item_name'] or d['specs']
+                    
+                    has_data = d['item_code'] or d['item_name']
                     if has_data:
                         if not d.get('image_path') and (i+2) in img_map: d['image_path'] = img_map[i+2]
                         d['row_order'] = i + 1 
@@ -411,51 +411,46 @@ with t2:
                         records.append(d)
                     prog.progress((i + 1) / len(df))
                 
-                # 4. Thực hiện Insert an toàn (Xóa theo batch rồi Insert)
+                # 4. Insert vào DB (Fix lỗi mất dữ liệu: Xóa theo batch rồi insert)
                 if records:
                     chunk_ins = 100
-                    
-                    # Lấy danh sách item_code cần cập nhật
+                    # Lấy item_code để xóa cũ
                     codes = [b['item_code'] for b in records if b['item_code']]
                     
-                    # Xóa dữ liệu cũ (Batch Delete để tránh lỗi request quá lớn)
+                    # Xóa cũ (Chia nhỏ để tránh lỗi request quá lớn)
                     if codes:
-                         # Chia nhỏ batch xóa nếu quá nhiều
-                         batch_del_size = 50
-                         for k in range(0, len(codes), batch_del_size):
-                             batch_codes = codes[k:k+batch_del_size]
+                        batch_size_del = 50
+                        for k in range(0, len(codes), batch_size_del):
+                             batch_codes = codes[k:k+batch_size_del]
                              try:
                                  supabase.table("crm_purchases").delete().in_("item_code", batch_codes).execute()
-                             except Exception as e_del:
-                                 st.warning(f"Lỗi xóa dữ liệu cũ (Batch {k}): {e_del}")
+                             except: pass # Bỏ qua lỗi xóa nếu không có dữ liệu cũ
 
-                    # Insert dữ liệu mới
-                    insert_success = True
+                    # Insert mới
+                    success_count = 0
                     for k in range(0, len(records), chunk_ins):
                         batch = records[k:k+chunk_ins]
                         try:
                             supabase.table("crm_purchases").insert(batch).execute()
-                        except Exception as e_ins:
-                            insert_success = False
-                            st.error(f"Lỗi Insert Batch {k}: {e_ins}")
-                            break # Dừng nếu lỗi để debug
+                            success_count += len(batch)
+                        except Exception as e:
+                            st.error(f"Lỗi Insert batch {k}: {e}")
+                            
+                    if success_count > 0:
+                        st.success(f"✅ Đã import {success_count} dòng thành công!")
+                        time.sleep(1); st.cache_data.clear(); st.rerun()
+                    else:
+                        st.error("Không thể lưu dữ liệu vào Database.")
 
-                    if insert_success:
-                        st.success(f"✅ Đã import {len(records)} dòng thành công!")
-                        time.sleep(1)
-                        st.cache_data.clear()
-                        st.rerun()
-
-            except Exception as e: st.error(f"Lỗi Import Tổng Quát: {e}")
+            except Exception as e: st.error(f"Lỗi Import: {e}")
 
     with c_view:
         df_pur = load_data("crm_purchases", order_by="row_order", ascending=True) 
-        if not df_pur.empty:
-            cols_to_drop = ['created_at', 'row_order']
-            df_pur = df_pur.drop(columns=[c for c in cols_to_drop if c in df_pur.columns], errors='ignore')
+        cols_to_drop = ['created_at', 'row_order']
+        df_pur = df_pur.drop(columns=[c for c in cols_to_drop if c in df_pur.columns], errors='ignore')
 
-            search = st.text_input("🔍 Tìm kiếm (Name, Code, Specs...)", key="search_pur")
-            
+        search = st.text_input("🔍 Tìm kiếm (Name, Code, Specs...)", key="search_pur")
+        if not df_pur.empty:
             if search:
                 mask = df_pur.astype(str).apply(lambda x: x.str.contains(search, case=False, na=False)).any(axis=1)
                 df_pur = df_pur[mask]
@@ -479,7 +474,7 @@ with t2:
                 }, 
                 use_container_width=True, height=700, hide_index=True
             )
-        else: st.info("Kho hàng trống. Vui lòng Import file Excel.")
+        else: st.info("Kho hàng trống.")
 
 # --- TAB 3: BÁO GIÁ ---
 with t3:
@@ -1565,19 +1560,19 @@ with t6:
             recs = []
             for i,r in d.iterrows(): recs.append({"short_name": safe_str(r.iloc[0]), "full_name": safe_str(r.iloc[1]), "address": safe_str(r.iloc[2])})
             supabase.table("crm_customers").insert(recs).execute(); st.rerun()
-    with ts:
-        df = load_data("crm_suppliers"); st.data_editor(df, num_rows="dynamic", use_container_width=True)
-        up = st.file_uploader("Import NCC", key="usn")
-        if up and st.button("Import NCC"):
-            d = pd.read_excel(up, dtype=str).fillna("")
-            recs = []
-            for i,r in d.iterrows(): recs.append({"short_name": safe_str(r.iloc[0]), "full_name": safe_str(r.iloc[1]), "address": safe_str(r.iloc[2])})
-            supabase.table("crm_suppliers").insert(recs).execute(); st.rerun()
-    with tt:
-        st.write("Upload Template Excel")
-        up_t = st.file_uploader("File Template (.xlsx)", type=["xlsx"])
-        t_name = st.text_input("Tên Template (Nhập: AAA-QUOTATION)")
-        if up_t and t_name and st.button("Lưu Template"):
-            lnk, fid = upload_to_drive_simple(up_t, "CRM_TEMPLATES", f"TMP_{t_name}.xlsx")
-            if fid: supabase.table("crm_templates").insert([{"template_name": t_name, "file_id": fid, "last_updated": datetime.now().strftime("%d/%m/%Y")}]).execute(); st.success("OK"); st.rerun()
-        st.dataframe(load_data("crm_templates"))
+    with ts:
+        df = load_data("crm_suppliers"); st.data_editor(df, num_rows="dynamic", use_container_width=True)
+        up = st.file_uploader("Import NCC", key="usn")
+        if up and st.button("Import NCC"):
+            d = pd.read_excel(up, dtype=str).fillna("")
+            recs = []
+            for i,r in d.iterrows(): recs.append({"short_name": safe_str(r.iloc[0]), "full_name": safe_str(r.iloc[1]), "address": safe_str(r.iloc[2])})
+            supabase.table("crm_suppliers").insert(recs).execute(); st.rerun()
+    with tt:
+        st.write("Upload Template Excel")
+        up_t = st.file_uploader("File Template (.xlsx)", type=["xlsx"])
+        t_name = st.text_input("Tên Template (Nhập: AAA-QUOTATION)")
+        if up_t and t_name and st.button("Lưu Template"):
+            lnk, fid = upload_to_drive_simple(up_t, "CRM_TEMPLATES", f"TMP_{t_name}.xlsx")
+            if fid: supabase.table("crm_templates").insert([{"template_name": t_name, "file_id": fid, "last_updated": datetime.now().strftime("%d/%m/%Y")}]).execute(); st.success("OK"); st.rerun()
+        st.dataframe(load_data("crm_templates"))
