@@ -12,7 +12,7 @@ import numpy as np
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO
 # =============================================================================
-APP_VERSION = "V6043 - FIXED INVENTORY & SYNTAX"
+APP_VERSION = "V6043 - FINAL INVENTORY FIX"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # CSS UI
@@ -343,7 +343,7 @@ with t1:
     c2.markdown(f"<div class='card-3d bg-cost'><h3>CHI PHÍ NCC</h3><h1>{fmt_num(cost)}</h1></div>", unsafe_allow_html=True)
     c3.markdown(f"<div class='card-3d bg-profit'><h3>LỢI NHUẬN GỘP</h3><h1>{fmt_num(profit)}</h1></div>", unsafe_allow_html=True)
 
-# --- TAB 2: KHO HÀNG (ĐÃ SỬA LỖI MẤT DỮ LIỆU) ---
+# --- TAB 2: KHO HÀNG ---
 with t2:
     st.subheader("QUẢN LÝ KHO HÀNG (Excel Online)")
     c_imp, c_view = st.columns([1, 4])
@@ -353,7 +353,7 @@ with t2:
         st.caption("Excel cột A->O")
         st.info("No, Code, Name, Specs, Qty, BuyRMB, TotalRMB, Rate, BuyVND, TotalVND, Leadtime, Supplier, Images, Type, N/U/O/C")
         
-        with st.expander("🛠️ Reset DB (Cẩn thận)"):
+        with st.expander("🛠️ Reset DB"):
             adm_pass = st.text_input("Pass", type="password", key="adm_inv")
             if st.button("⚠️ XÓA SẠCH"):
                 if adm_pass == "admin":
@@ -371,19 +371,21 @@ with t2:
                     st.error("File Excel trống!")
                     st.stop()
 
-                # 2. Xử lý ảnh
+                # 2. Xử lý ảnh (nếu có)
                 wb = load_workbook(up_file, data_only=False); ws = wb.active
                 img_map = {}
                 for image in getattr(ws, '_images', []):
-                    row = image.anchor._from.row + 1
-                    buf = io.BytesIO(image._data())
-                    cell_specs = ws.cell(row=row, column=4).value 
-                    specs_val = safe_str(cell_specs)
-                    safe_name = re.sub(r'[\\/*?:"<>|]', "", specs_val).strip()
-                    if not safe_name: safe_name = f"NO_SPECS_R{row}"
-                    fname = f"{safe_name}.png"
-                    link, _ = upload_to_drive_simple(buf, "CRM_PRODUCT_IMAGES", fname)
-                    img_map[row] = link
+                    try:
+                        row = image.anchor._from.row + 1
+                        buf = io.BytesIO(image._data())
+                        cell_specs = ws.cell(row=row, column=4).value 
+                        specs_val = safe_str(cell_specs)
+                        safe_name = re.sub(r'[\\/*?:"<>|]', "", specs_val).strip()
+                        if not safe_name: safe_name = f"NO_SPECS_R{row}"
+                        fname = f"{safe_name}.png"
+                        link, _ = upload_to_drive_simple(buf, "CRM_PRODUCT_IMAGES", fname)
+                        img_map[row] = link
+                    except: pass
                 
                 # 3. Chuẩn bị dữ liệu
                 records = []
@@ -1560,19 +1562,19 @@ with t6:
             recs = []
             for i,r in d.iterrows(): recs.append({"short_name": safe_str(r.iloc[0]), "full_name": safe_str(r.iloc[1]), "address": safe_str(r.iloc[2])})
             supabase.table("crm_customers").insert(recs).execute(); st.rerun()
-    with ts:
-        df = load_data("crm_suppliers"); st.data_editor(df, num_rows="dynamic", use_container_width=True)
-        up = st.file_uploader("Import NCC", key="usn")
-        if up and st.button("Import NCC"):
-            d = pd.read_excel(up, dtype=str).fillna("")
-            recs = []
-            for i,r in d.iterrows(): recs.append({"short_name": safe_str(r.iloc[0]), "full_name": safe_str(r.iloc[1]), "address": safe_str(r.iloc[2])})
-            supabase.table("crm_suppliers").insert(recs).execute(); st.rerun()
-    with tt:
-        st.write("Upload Template Excel")
-        up_t = st.file_uploader("File Template (.xlsx)", type=["xlsx"])
-        t_name = st.text_input("Tên Template (Nhập: AAA-QUOTATION)")
-        if up_t and t_name and st.button("Lưu Template"):
-            lnk, fid = upload_to_drive_simple(up_t, "CRM_TEMPLATES", f"TMP_{t_name}.xlsx")
-            if fid: supabase.table("crm_templates").insert([{"template_name": t_name, "file_id": fid, "last_updated": datetime.now().strftime("%d/%m/%Y")}]).execute(); st.success("OK"); st.rerun()
-        st.dataframe(load_data("crm_templates"))
+    with ts:
+        df = load_data("crm_suppliers"); st.data_editor(df, num_rows="dynamic", use_container_width=True)
+        up = st.file_uploader("Import NCC", key="usn")
+        if up and st.button("Import NCC"):
+            d = pd.read_excel(up, dtype=str).fillna("")
+            recs = []
+            for i,r in d.iterrows(): recs.append({"short_name": safe_str(r.iloc[0]), "full_name": safe_str(r.iloc[1]), "address": safe_str(r.iloc[2])})
+            supabase.table("crm_suppliers").insert(recs).execute(); st.rerun()
+    with tt:
+        st.write("Upload Template Excel")
+        up_t = st.file_uploader("File Template (.xlsx)", type=["xlsx"])
+        t_name = st.text_input("Tên Template (Nhập: AAA-QUOTATION)")
+        if up_t and t_name and st.button("Lưu Template"):
+            lnk, fid = upload_to_drive_simple(up_t, "CRM_TEMPLATES", f"TMP_{t_name}.xlsx")
+            if fid: supabase.table("crm_templates").insert([{"template_name": t_name, "file_id": fid, "last_updated": datetime.now().strftime("%d/%m/%Y")}]).execute(); st.success("OK"); st.rerun()
+        st.dataframe(load_data("crm_templates"))
