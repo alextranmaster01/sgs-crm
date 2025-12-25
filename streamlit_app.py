@@ -12,7 +12,7 @@ import numpy as np
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO
 # =============================================================================
-APP_VERSION = "V6028 - PO MANAGEMENT UPGRADED"
+APP_VERSION = "V6029 - PO MANAGEMENT FIXED"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # CSS UI
@@ -778,7 +778,7 @@ with t3:
              if idx < len(st.session_state.quote_df):
                  for c in df_data_only.columns:
                      if c in st.session_state.quote_df.columns:
-                        st.session_state.quote_df.at[idx, c] = row[c]
+                         st.session_state.quote_df.at[idx, c] = row[c]
         
         # --- VIEW TOTAL PRICE (FEATURE ADDED) ---
         total_q = st.session_state.quote_df["Total price(VND)"].apply(to_float).sum()
@@ -970,33 +970,39 @@ with t4:
                 db = load_data("crm_purchases")
                 lookup = {clean_key(r['item_code']): r for r in db.to_dict('records')}
                 
-                # --- CHECK GLOBAL QUOTE HISTORY (FOR WARNING ONLY) ---
-                hist_global = load_data("crm_shared_history")
-                global_hist_keys = set()
-                if not hist_global.empty:
-                     global_hist_keys = set(hist_global['item_code'].apply(clean_key).tolist())
-
                 recs = []
                 for i, r in df_up.iterrows():
-                    code_raw = safe_str(r.iloc[1])
-                    qty_val = to_float(r.iloc[4])
+                    # --- NEW LOGIC: PRIORITY TO EXCEL ---
                     no_val = safe_str(r.iloc[0]) 
+                    code_raw = safe_str(r.iloc[1])
+                    name_excel = safe_str(r.iloc[2])
+                    specs_excel = safe_str(r.iloc[3])
+                    qty_val = to_float(r.iloc[4])
+
                     match = lookup.get(clean_key(code_raw))
                     
+                    # Fill missing info from DB (Price, Supplier, Leadtime)
                     if match:
-                        name = match['item_name']; specs = match['specs']; supplier = match['supplier_name']
-                        buy_rmb = to_float(match['buying_price_rmb']); rate = to_float(match['exchange_rate'])
-                        buy_vnd = to_float(match['buying_price_vnd']); leadtime = match['leadtime']
+                        buy_rmb = to_float(match['buying_price_rmb'])
+                        rate = to_float(match['exchange_rate'])
+                        buy_vnd = to_float(match['buying_price_vnd'])
+                        supplier = match.get('supplier_name', '')
+                        leadtime = match.get('leadtime', '0')
+                        note_s = "" 
                     else:
-                        name = safe_str(r.iloc[2]); specs = safe_str(r.iloc[3]); supplier = "Unknown"
-                        buy_rmb = 0; rate = 0; buy_vnd = 0; leadtime = "0"
-                    
-                    # --- Check Warning ---
-                    note_s = "" if clean_key(code_raw) in global_hist_keys else "chưa có lịch sử báo giá"
+                        buy_rmb = 0.0
+                        rate = 0.0
+                        buy_vnd = 0.0
+                        supplier = ""
+                        leadtime = "0"
+                        note_s = "chưa có trong database"
 
                     eta = calc_eta(datetime.now(), leadtime)
+                    
                     recs.append({
-                        "No": no_val, "Item code": code_raw, "Item name": name, "Specs": specs, "Q'ty": qty_val,
+                        "No": no_val, "Item code": code_raw, 
+                        "Item name": name_excel, "Specs": specs_excel, 
+                        "Q'ty": qty_val,
                         "Buying price(RMB)": fmt_num(buy_rmb), "Total buying price(RMB)": fmt_num(buy_rmb * qty_val),
                         "Exchange rate": fmt_num(rate),
                         "Buying price(VND)": fmt_num(buy_vnd), "Total buying price(VND)": fmt_num(buy_vnd * qty_val),
