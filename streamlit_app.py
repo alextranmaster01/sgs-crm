@@ -12,7 +12,7 @@ import numpy as np
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO
 # =============================================================================
-APP_VERSION = "V6034 - PAYMENT UPDATE ENHANCED"
+APP_VERSION = "V6034 - PAYMENT UPDATE FULL FEATURES"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # CSS UI
@@ -1375,17 +1375,11 @@ with t5:
                             st.success("Updated Payment Info!")
                             st.rerun()
                         except Exception as e:
-                            # --- FALLBACK LOGIC FOR MISSING COLUMN 'eta_payment' ---
+                            # --- FALLBACK LOGIC: Try to detect SQL ERROR and GUIDE USER ---
                             if "eta_payment" in str(e) or "PGRST204" in str(e):
-                                if "eta_payment" in p_upd:
-                                    del p_upd["eta_payment"] # Remove the missing column from payload
-                                    try:
-                                        supabase.table("crm_payments").update(p_upd).eq("po_no", sel_po_p).execute()
-                                        st.warning("⚠️ Đã cập nhật (Bỏ qua 'eta_payment' do chưa có cột trong Database).")
-                                        time.sleep(1)
-                                        st.rerun()
-                                    except Exception as e2:
-                                        st.error(f"Lỗi update (Retry failed): {e2}")
+                                st.error("⚠️ Lỗi: Database thiếu cột 'eta_payment'.")
+                                st.code("ALTER TABLE crm_payments ADD COLUMN IF NOT EXISTS eta_payment TEXT;", language="sql")
+                                st.info("👉 Hãy copy lệnh trên và chạy trong Supabase SQL Editor.")
                             else:
                                 st.error(f"Lỗi update: {e}")
                     else:
