@@ -12,7 +12,7 @@ import numpy as np
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO
 # =============================================================================
-APP_VERSION = "V6035 - TRACKING FILTER & PAYMENT FIX"
+APP_VERSION = "V6036 - TRACKING MODULE UPGRADED"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # CSS UI
@@ -1200,7 +1200,7 @@ with t4:
                 df_cust_show = pd.concat([df_cust_show, pd.DataFrame([total_row_c])], ignore_index=True)
                 def highlight_total_c(row):
                     return ['background-color: #ffffcc; font-weight: bold; color: black'] * len(row) if row['No.'] == 'TOTAL' else [''] * len(row)
-                st.dataframe(df_cust_show.style.apply(highlight_total, axis=1), use_container_width=True, hide_index=True)
+                st.dataframe(df_cust_show.style.apply(highlight_total_c, axis=1), use_container_width=True, hide_index=True)
 
                 if st.button("💾 LƯU PO KHÁCH HÀNG"):
                     if not po_c_no: st.error("Thiếu số PO")
@@ -1237,58 +1237,104 @@ with t4:
 # --- TAB 5: TRACKING ---
 with t5:
     st.subheader("THEO DÕI ĐƠN HÀNG (TRACKING)")
-    c_track, c_pay = st.columns([1, 1])
     
-    with c_track:
-        st.markdown("#### 📦 THEO DÕI ĐƠN HÀNG")
-        
-        # --- ORDER TRACKING LOGIC ---
-        if st.button("🔄 Refresh Orders"): st.cache_data.clear(); st.rerun()
-        
-        # Fetch Data
-        df_track = load_data("crm_tracking", order_by="id")
-        
-        # Filter & Search
-        search_track = st.text_input("🔍 Tìm đơn hàng", key="search_tr")
-        if not df_track.empty and search_track:
-             mask = df_track.astype(str).apply(lambda x: x.str.contains(search_track, case=False, na=False)).any(axis=1)
-             df_track = df_track[mask]
-             
-        # Highlight Logic
-        def highlight_eta(val):
-            try:
-                eta_date = datetime.strptime(str(val), "%d/%m/%Y")
-                today = datetime.now()
-                delta = (eta_date - today).days
-                if delta < 0: return 'background-color: #ffcccc; color: red; font-weight: bold' # Overdue
-                if 0 <= delta <= 7: return 'background-color: #fffae6; color: orange; font-weight: bold' # Warning
-                return ''
-            except: return ''
+    # Load Master Data for filtering
+    try:
+        cust_list = load_data("crm_customers")['short_name'].tolist()
+        supp_list = load_data("crm_suppliers")['short_name'].tolist()
+    except:
+        cust_list = []; supp_list = []
 
-        # Display Table
+    # Initialize Tabs
+    t5_1, t5_2, t5_3 = st.tabs(["📦 ĐƠN HÀNG", "💰 THANH TOÁN", "📜 LỊCH SỬ ĐƠN HÀNG"])
+
+    # 1. ORDER TRACKING (Includes Payment Info joined)
+    with t5_1:
+        if st.button("🔄 Refresh Tracking"): st.cache_data.clear(); st.rerun()
+        
+        df_track = load_data("crm_tracking", order_by="id")
+        df_pay = load_data("crm_payments")
+        
+        # Merge Payment Info into Tracking Data based on po_no
         if not df_track.empty:
+            if not df_pay.empty:
+                # Select only relevant columns from payment to avoid dupes or mess
+                pay_subset = df_pay[['po_no', 'invoice_no', 'eta_payment', 'payment_date']].drop_duplicates(subset=['po_no'])
+                df_track = pd.merge(df_track, pay_subset, on='po_no', how='left')
+            else:
+                df_track['invoice_no'] = ""
+                df_track['eta_payment'] = ""
+                df_track['payment_date'] = ""
+
+        # Logic to Separate Active vs History
+        active_rows = []
+        history_rows = []
+        
+        for r in df_track.to_dict('records'):
+            is_supp = r.get('partner') in supp_list
+            is_cust = r.get('partner') in cust_list
+            status = r.get('status', '')
+            has_proof = pd.notna(r.get('proof_image')) and str(r.get('proof_image')).strip() != ''
+            
+            # Condition: Move to History
+            move_to_hist = False
+            if is_supp and status == 'Arrived' and has_proof: move_to_hist = True
+            elif is_cust and status == 'Delivered' and has_proof: move_to_hist = True
+            
+            # Translate Status for Display
+            status_map_rev = {
+                "Ordered": "Đã đặt hàng", "Shipping": "Đang vận chuyển về VN", 
+                "Arrived": "Đã nhận hàng", "Delivered": "Đã giao hàng", "Waiting": "Đang đợi PO"
+            }
+            r['status_display'] = status_map_rev.get(status, status)
+
+            if move_to_hist: history_rows.append(r)
+            else: active_rows.append(r)
+            
+        df_active = pd.DataFrame(active_rows)
+        df_history = pd.DataFrame(history_rows)
+
+        # Show Active Orders
+        if not df_active.empty:
+            # Reorder columns as requested: No, po_no, customer, invoice_no, status, created_at, eta_payment, payment_date
+            # Note: 'No' is usually index + 1
+            # Note: 'customer' here corresponds to 'partner' in tracking table
+            # Note: 'created_at' might be missing in tracking, using 'last_update' or 'created_at' if exists
+            
+            # Ensure columns exist
+            for c in ['invoice_no', 'eta_payment', 'payment_date', 'created_at']:
+                if c not in df_active.columns: df_active[c] = ""
+            
             st.dataframe(
-                df_track.style.applymap(highlight_eta, subset=['eta']),
+                df_active,
                 column_config={
                     "proof_image": st.column_config.ImageColumn("Proof"),
-                    "status": st.column_config.SelectboxColumn("Status", options=["Ordered", "Shipping", "Arrived", "Delivered", "Waiting"]),
-                    "actual_date": st.column_config.TextColumn("Date Received/Delivered")
+                    "status_display": st.column_config.TextColumn("Status"),
+                    "po_no": "PO No", "partner": "Customer/Partner",
+                    "invoice_no": "Invoice No", "eta_payment": "ETA Payment", "payment_date": "Payment Date"
                 },
+                column_order=["po_no", "partner", "invoice_no", "status_display", "created_at", "eta_payment", "payment_date", "proof_image"],
                 use_container_width=True, hide_index=True
             )
             
             # Update Form
-            with st.form("update_tracking_form"):
+            with st.form("update_tracking_form_v2"):
                 st.write("Cập nhật trạng thái:")
-                po_list = df_track['po_no'].unique()
+                po_list = df_active['po_no'].unique()
                 sel_po = st.selectbox("Chọn PO", po_list)
-                new_status = st.selectbox("Trạng thái mới", ["Ordered", "Shipping", "Arrived", "Delivered", "Waiting"])
+                
+                # Use Vietnamese for Selection, Map back to English for DB
+                status_opts = {"Đã đặt hàng": "Ordered", "Đang vận chuyển về VN": "Shipping", 
+                               "Đã nhận hàng": "Arrived", "Đã giao hàng": "Delivered", "Đang đợi PO": "Waiting"}
+                new_status_vn = st.selectbox("Trạng thái mới", list(status_opts.keys()))
+                
                 rec_date = st.date_input("Ngày nhận/giao", datetime.now())
                 proof_img = st.file_uploader("Upload Ảnh Proof", type=['png', 'jpg'])
                 
                 if st.form_submit_button("Cập nhật"):
+                    new_status_db = status_opts[new_status_vn]
                     upd_data = {
-                        "status": new_status, 
+                        "status": new_status_db, 
                         "last_update": datetime.now().strftime("%d/%m/%Y"),
                         "actual_date": rec_date.strftime("%d/%m/%Y")
                     }
@@ -1300,78 +1346,50 @@ with t5:
                          try:
                              supabase.table("crm_tracking").update(upd_data).eq("po_no", sel_po).execute()
                              
-                             # --- AUTOMATION: LINK TO PAYMENT ---
-                             if new_status == "Delivered": # "Đã giao hàng"
-                                 # Check if exists in payment
+                             # Auto-link to Payment if Delivered (Customer)
+                             # Re-fetch specific row to check partner type
+                             row_info = df_active[df_active['po_no'] == sel_po].iloc[0]
+                             if new_status_db == "Delivered" and row_info['partner'] in cust_list:
                                  chk = supabase.table("crm_payments").select("*").eq("po_no", sel_po).execute()
                                  if not chk.data:
-                                     # Get Customer Name from Tracking
-                                     cust_name = df_track[df_track['po_no'] == sel_po]['partner'].iloc[0]
                                      pay_rec = {
-                                         "po_no": sel_po, "customer": cust_name, "status": "Đợi xuất hóa đơn",
+                                         "po_no": sel_po, "customer": row_info['partner'], "status": "Đợi xuất hóa đơn",
                                          "created_at": datetime.now().isoformat()
                                      }
                                      supabase.table("crm_payments").insert(pay_rec).execute()
-                                     st.success("Đã tự động chuyển sang theo dõi thanh toán!")
+                                     st.success("Đã tự động tạo theo dõi thanh toán!")
 
                              st.success("Cập nhật thành công!")
-                             time.sleep(1)
-                             st.rerun()
-                         except Exception as e:
-                             st.error(f"Lỗi Update: {e}")
-                    else:
-                        st.error("Vui lòng chọn PO để cập nhật.")
-                    
-        # Admin Reset
-        with st.expander("🔐 Admin Area"):
-            p = st.text_input("Pass", type="password", key="adm_tr")
-            if st.button("Reset Tracking DB"):
-                if p == "admin":
-                    supabase.table("crm_tracking").delete().neq("id", 0).execute()
-                    st.success("Deleted!"); st.rerun()
+                             time.sleep(1); st.rerun()
+                         except Exception as e: st.error(f"Lỗi Update: {e}")
+                    else: st.error("Chọn PO!")
+        else: st.info("Không có đơn hàng đang xử lý.")
 
-    with c_pay:
+    # 2. PAYMENT TRACKING
+    with t5_2:
         st.markdown("#### 💰 THEO DÕI THANH TOÁN")
-        if st.button("🔄 Refresh Payments"): st.cache_data.clear(); st.rerun()
-        
         # Load Payments
-        try:
-            df_pay = load_data("crm_payments")
-        except:
-            df_pay = pd.DataFrame(columns=["po_no", "customer", "invoice_no", "eta_payment", "payment_date", "status"])
+        try: df_pay = load_data("crm_payments")
+        except: df_pay = pd.DataFrame()
         
-        # Filter Customers Only
-        cust_df = load_data("crm_customers")
-        valid_customers = cust_df['short_name'].tolist() if not cust_df.empty else []
-        
-        if not df_pay.empty and valid_customers:
-             df_pay = df_pay[df_pay['customer'].isin(valid_customers)]
+        # Filter: Only Customers
+        if not df_pay.empty and cust_list:
+             df_pay = df_pay[df_pay['customer'].isin(cust_list)]
 
-        # Search
-        search_pay = st.text_input("🔍 Tìm thanh toán", key="search_py")
-        if not df_pay.empty and search_pay:
-             mask = df_pay.astype(str).apply(lambda x: x.str.contains(search_pay, case=False, na=False)).any(axis=1)
-             df_pay = df_pay[mask]
-        
         if not df_pay.empty:
-            # Customize Display Columns (Remove ID/No, Due Date, Paid Date from VIEW)
-            cols_to_show = ["po_no", "customer", "invoice_no", "status", "created_at"]
-            # Ensure columns exist before selecting
-            existing_cols = [c for c in cols_to_show if c in df_pay.columns]
+            # Create "No" column (Index + 1)
+            df_pay = df_pay.reset_index(drop=True)
+            df_pay['No'] = df_pay.index + 1
             
-            st.dataframe(
-                df_pay[existing_cols], 
-                column_config={
-                    "po_no": st.column_config.TextColumn("PO Number"),
-                    "customer": st.column_config.TextColumn("Customer"),
-                    "invoice_no": st.column_config.TextColumn("Invoice No"),
-                    "status": st.column_config.TextColumn("Status"),
-                    "created_at": st.column_config.DatetimeColumn("Created At", format="DD/MM/YYYY")
-                },
-                use_container_width=True, hide_index=True
-            )
+            # Select Columns to Show (Exclude eta_payment, payment_date, include No)
+            cols_show = ['No', 'po_no', 'customer', 'invoice_no', 'status', 'created_at']
+            # Ensure exist
+            cols_show = [c for c in cols_show if c in df_pay.columns]
             
-            with st.form("update_payment_form"):
+            st.dataframe(df_pay[cols_show], use_container_width=True, hide_index=True)
+            
+            # Update Form (Keeps full logic even if columns hidden)
+            with st.form("update_payment_form_v2"):
                 st.write("Cập nhật thanh toán:")
                 po_list_p = df_pay['po_no'].unique()
                 sel_po_p = st.selectbox("Chọn PO", po_list_p)
@@ -1384,8 +1402,7 @@ with t5:
                         if inv_no: 
                             p_upd["invoice_no"] = inv_no
                             if pay_status == "Đợi xuất hóa đơn": p_upd["status"] = "Đợi thanh toán"
-                            
-                            # Auto Calc ETA Payment (Default 30 days)
+                            # Auto Calc ETA
                             eta_pay = (datetime.now() + timedelta(days=30)).strftime("%d/%m/%Y")
                             p_upd["eta_payment"] = eta_pay
                             
@@ -1395,18 +1412,37 @@ with t5:
                         try:
                             supabase.table("crm_payments").update(p_upd).eq("po_no", sel_po_p).execute()
                             st.success("Updated Payment Info!")
-                            st.rerun()
+                            time.sleep(1); st.rerun()
                         except Exception as e:
-                            if "eta_payment" in str(e) or "PGRST204" in str(e):
-                                st.error("⚠️ Lỗi: Database thiếu cột 'eta_payment'.")
-                                st.code("ALTER TABLE crm_payments ADD COLUMN IF NOT EXISTS eta_payment TEXT;", language="sql")
-                                st.info("👉 Hãy copy lệnh trên và chạy trong Supabase SQL Editor.")
-                            else:
-                                st.error(f"Lỗi update: {e}")
-                    else:
-                        st.error("Chọn PO cần update.")
-        else:
-            st.info("Chưa có dữ liệu thanh toán.")
+                            # Fallback if columns missing
+                            if "eta_payment" in str(e) or "payment_date" in str(e) or "PGRST204" in str(e):
+                                st.error("⚠️ Lỗi cấu trúc DB. Đang thử cập nhật cơ bản...")
+                                # Try minimizing payload
+                                safe_upd = {"status": pay_status}
+                                if inv_no: safe_upd["invoice_no"] = inv_no
+                                try:
+                                    supabase.table("crm_payments").update(safe_upd).eq("po_no", sel_po_p).execute()
+                                    st.warning("Đã cập nhật trạng thái cơ bản (Bỏ qua ngày tháng do lỗi DB).")
+                                    time.sleep(1); st.rerun()
+                                except: st.error(f"Lỗi: {e}")
+                            else: st.error(f"Lỗi update: {e}")
+        else: st.info("Không có dữ liệu thanh toán khách hàng.")
+
+    # 3. ORDER HISTORY
+    with t5_3:
+        st.markdown("#### 📜 LỊCH SỬ ĐƠN HÀNG (ĐÃ HOÀN THÀNH)")
+        if not df_history.empty:
+             st.dataframe(
+                df_history,
+                column_config={
+                    "proof_image": st.column_config.ImageColumn("Proof"),
+                    "status_display": "Status",
+                    "po_no": "PO No", "partner": "Partner"
+                },
+                column_order=["po_no", "partner", "invoice_no", "status_display", "eta_payment", "proof_image"],
+                use_container_width=True, hide_index=True
+            )
+        else: st.info("Chưa có đơn hàng nào trong lịch sử.")
 
 # --- TAB 6: MASTER DATA ---
 with t6:
