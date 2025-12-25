@@ -12,7 +12,7 @@ import numpy as np
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO
 # =============================================================================
-APP_VERSION = "V6040 - TRACKING DELETE & RESET"
+APP_VERSION = "V6042 - TRACKING FULL DELETE & RESET"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # CSS UI
@@ -1318,6 +1318,12 @@ with t5:
             # Use Data Editor with Checkbox for Deletion
             # FIX V6041: CONVERT DATES TO DATETIME OR STRING TO AVOID "StreamlitAPIException"
             if 'created_at' in df_active.columns: df_active['created_at'] = pd.to_datetime(df_active['created_at'], errors='coerce')
+
+            # Highlight Logic (Blue for Customer, Orange for Partner)
+            def highlight_partner(val):
+                if val in cust_list: return 'color: #007bff; font-weight: bold;'
+                if val in supp_list: return 'color: #ff8c00; font-weight: bold;'
+                return ''
 
             edited_active = st.data_editor(
                 df_active,
