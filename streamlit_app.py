@@ -12,7 +12,7 @@ import numpy as np
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO
 # =============================================================================
-APP_VERSION = "V6027 - TRACKING & PAYMENT FULLY AUTOMATED"
+APP_VERSION = "V6028 - PO MANAGEMENT UPGRADED"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # CSS UI
@@ -553,16 +553,16 @@ with t3:
                     
                     # 2. If DB empty, Try Drive (Fallback)
                     if not config_loaded:
-                         cfg_search_name = f"CONFIG_{q_no}_{cust}"
-                         fid_cfg, _, _ = search_file_in_drive_by_name(cfg_search_name)
-                         if fid_cfg:
-                             fh_cfg = download_from_drive(fid_cfg)
-                             if fh_cfg:
-                                 try:
-                                     df_cfg = pd.read_excel(fh_cfg)
-                                     if not df_cfg.empty:
-                                         config_loaded = df_cfg.iloc[0].to_dict()
-                                 except: pass
+                          cfg_search_name = f"CONFIG_{q_no}_{cust}"
+                          fid_cfg, _, _ = search_file_in_drive_by_name(cfg_search_name)
+                          if fid_cfg:
+                              fh_cfg = download_from_drive(fid_cfg)
+                              if fh_cfg:
+                                  try:
+                                      df_cfg = pd.read_excel(fh_cfg)
+                                      if not df_cfg.empty:
+                                          config_loaded = df_cfg.iloc[0].to_dict()
+                                  except: pass
 
                     # 3. Apply Config
                     if config_loaded:
@@ -593,14 +593,14 @@ with t3:
                           folder_link = f"https://drive.google.com/drive/folders/{pid}"
                           st.markdown(f"👉 **[Mở Folder chứa file này trên Google Drive]({folder_link})**", unsafe_allow_html=True)
                     if fid and st.button(f"Tải file chi tiết: {fname}"):
-                         fh = download_from_drive(fid)
-                         if fh:
-                             try:
-                                 df_csv = pd.read_csv(fh, encoding='utf-8-sig', on_bad_lines='skip')
-                                 st.success("Đã tải xong!")
-                                 st.dataframe(df_csv, use_container_width=True)
-                             except Exception as e: st.error(f"Lỗi đọc file CSV: {e}")
-                         else: st.error("Không tải được file.")
+                          fh = download_from_drive(fid)
+                          if fh:
+                              try:
+                                  df_csv = pd.read_csv(fh, encoding='utf-8-sig', on_bad_lines='skip')
+                                  st.success("Đã tải xong!")
+                                  st.dataframe(df_csv, use_container_width=True)
+                              except Exception as e: st.error(f"Lỗi đọc file CSV: {e}")
+                          else: st.error("Không tải được file.")
                     elif not fid: st.warning(f"Không tìm thấy file chi tiết trên Drive (HIST_{q_no}...).")
         else: st.info("Chưa có lịch sử.")
 
@@ -969,12 +969,20 @@ with t4:
                 df_up = pd.read_excel(up_s, dtype=str).fillna("")
                 db = load_data("crm_purchases")
                 lookup = {clean_key(r['item_code']): r for r in db.to_dict('records')}
+                
+                # --- CHECK GLOBAL QUOTE HISTORY (FOR WARNING ONLY) ---
+                hist_global = load_data("crm_shared_history")
+                global_hist_keys = set()
+                if not hist_global.empty:
+                     global_hist_keys = set(hist_global['item_code'].apply(clean_key).tolist())
+
                 recs = []
                 for i, r in df_up.iterrows():
                     code_raw = safe_str(r.iloc[1])
                     qty_val = to_float(r.iloc[4])
                     no_val = safe_str(r.iloc[0]) 
                     match = lookup.get(clean_key(code_raw))
+                    
                     if match:
                         name = match['item_name']; specs = match['specs']; supplier = match['supplier_name']
                         buy_rmb = to_float(match['buying_price_rmb']); rate = to_float(match['exchange_rate'])
@@ -982,13 +990,17 @@ with t4:
                     else:
                         name = safe_str(r.iloc[2]); specs = safe_str(r.iloc[3]); supplier = "Unknown"
                         buy_rmb = 0; rate = 0; buy_vnd = 0; leadtime = "0"
+                    
+                    # --- Check Warning ---
+                    note_s = "" if clean_key(code_raw) in global_hist_keys else "chưa có lịch sử báo giá"
+
                     eta = calc_eta(datetime.now(), leadtime)
                     recs.append({
                         "No": no_val, "Item code": code_raw, "Item name": name, "Specs": specs, "Q'ty": qty_val,
                         "Buying price(RMB)": fmt_num(buy_rmb), "Total buying price(RMB)": fmt_num(buy_rmb * qty_val),
                         "Exchange rate": fmt_num(rate),
                         "Buying price(VND)": fmt_num(buy_vnd), "Total buying price(VND)": fmt_num(buy_vnd * qty_val),
-                        "Supplier": supplier, "ETA": eta
+                        "Supplier": supplier, "ETA": eta, "Ghi chú": note_s
                     })
                 st.session_state.po_ncc_df = pd.DataFrame(recs)
             
@@ -1041,8 +1053,8 @@ with t4:
                             ws.append(headers)
                             for r in group.to_dict('records'):
                                 ws.append([r["No"], r["Item code"], r["Item name"], r["Specs"], r["Q'ty"], 
-                                             r["Buying price(RMB)"], r["Total buying price(RMB)"], r["Exchange rate"],
-                                             r["Buying price(VND)"], r["Total buying price(VND)"], r["Supplier"], r["ETA"]])
+                                           r["Buying price(RMB)"], r["Total buying price(RMB)"], r["Exchange rate"],
+                                           r["Buying price(VND)"], r["Total buying price(VND)"], r["Supplier"], r["ETA"]])
                             out = io.BytesIO(); wb.save(out); out.seek(0)
                             curr_year = datetime.now().strftime("%Y")
                             curr_month = datetime.now().strftime("%b").upper()
@@ -1083,13 +1095,17 @@ with t4:
                     if excel_files:
                         all_recs = []
                         hist = load_data("crm_shared_history") 
+                        # --- STRICT FILTER: ONLY THIS CUSTOMER'S HISTORY ---
                         cust_hist = hist[hist['customer'] == c_name].sort_values(by='date', ascending=False)
+                        
                         price_lookup = {}
                         for _, h in cust_hist.iterrows():
                             c_code = clean_key(h['item_code'])
                             if c_code not in price_lookup: price_lookup[c_code] = to_float(h['unit_price'])
+                        
                         db_items = load_data("crm_purchases")
                         lt_lookup = {clean_key(r['item_code']): r['leadtime'] for r in db_items.to_dict('records')}
+                        
                         for f in excel_files:
                             try:
                                 df_up = pd.read_excel(f, header=None, skiprows=1, dtype=str).fillna("")
@@ -1097,16 +1113,34 @@ with t4:
                                     no_val = safe_str(r.iloc[0]) 
                                     code = safe_str(r.iloc[1])
                                     qty = to_float(r.iloc[4])
-                                    unit_price = price_lookup.get(clean_key(code), 0)
+                                    
+                                    # --- UPDATED PRICE LOGIC ---
+                                    # 1. Look up in SPECIFIC customer history
+                                    c_key = clean_key(code)
+                                    unit_price = 0
+                                    note_status = ""
+                                    
+                                    if c_key in price_lookup:
+                                        unit_price = price_lookup[c_key]
+                                    else:
+                                        # Not found in THIS customer's history.
+                                        # Do NOT fallback to other customers.
+                                        # Fallback to File value if exists, but flag warning.
+                                        if len(r) > 5:
+                                             try: unit_price = to_float(r.iloc[5])
+                                             except: unit_price = 0
+                                        note_status = "chưa có lịch sử báo giá"
+                                    
                                     total = unit_price * qty
                                     leadtime = lt_lookup.get(clean_key(code), "0")
                                     eta = calc_eta(datetime.now(), leadtime)
+                                    
                                     if code:
                                         all_recs.append({
                                             "No.": no_val, "Item code": code, "Item name": safe_str(r.iloc[2]),
                                             "Specs": safe_str(r.iloc[3]), "Q'ty": qty,
                                             "Unit price(VND)": fmt_num(unit_price), "Total price(VND)": fmt_num(total),
-                                            "Customer": c_name, "ETA": eta, "Source File": f.name
+                                            "Customer": c_name, "ETA": eta, "Ghi chú": note_status
                                         })
                             except: pass
                         st.session_state.po_cust_df = pd.DataFrame(all_recs)
