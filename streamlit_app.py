@@ -12,7 +12,7 @@ import numpy as np
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO
 # =============================================================================
-APP_VERSION = "V6036 - TRACKING MODULE UPGRADED"
+APP_VERSION = "V6037 - TRACKING PERFECTED"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # CSS UI
@@ -1301,19 +1301,29 @@ with t5:
             # Note: 'customer' here corresponds to 'partner' in tracking table
             # Note: 'created_at' might be missing in tracking, using 'last_update' or 'created_at' if exists
             
+            df_active = df_active.reset_index(drop=True)
+            df_active['No'] = df_active.index + 1
+            
             # Ensure columns exist
             for c in ['invoice_no', 'eta_payment', 'payment_date', 'created_at']:
                 if c not in df_active.columns: df_active[c] = ""
             
+            # Highlight Logic (Blue for Customer, Orange for Partner)
+            def highlight_partner(val):
+                if val in cust_list: return 'color: #007bff; font-weight: bold;'
+                if val in supp_list: return 'color: #ff8c00; font-weight: bold;'
+                return ''
+                
             st.dataframe(
-                df_active,
+                df_active.style.applymap(highlight_partner, subset=['partner']),
                 column_config={
-                    "proof_image": st.column_config.ImageColumn("Proof"),
-                    "status_display": st.column_config.TextColumn("Status"),
-                    "po_no": "PO No", "partner": "Customer/Partner",
-                    "invoice_no": "Invoice No", "eta_payment": "ETA Payment", "payment_date": "Payment Date"
+                    "proof_image": st.column_config.ImageColumn("Ảnh thanh toán/đã nhận hàng"),
+                    "status_display": st.column_config.TextColumn("status"),
+                    "po_no": "po_no", "partner": "Customer/Partner",
+                    "actual_date": "Ngày nhận/giao hàng",
+                    "eta_payment": "eta_payment"
                 },
-                column_order=["po_no", "partner", "invoice_no", "status_display", "created_at", "eta_payment", "payment_date", "proof_image"],
+                column_order=["No", "po_no", "partner", "status_display", "actual_date", "eta_payment", "proof_image"],
                 use_container_width=True, hide_index=True
             )
             
@@ -1328,16 +1338,22 @@ with t5:
                                "Đã nhận hàng": "Arrived", "Đã giao hàng": "Delivered", "Đang đợi PO": "Waiting"}
                 new_status_vn = st.selectbox("Trạng thái mới", list(status_opts.keys()))
                 
-                rec_date = st.date_input("Ngày nhận/giao", datetime.now())
                 proof_img = st.file_uploader("Upload Ảnh Proof", type=['png', 'jpg'])
                 
                 if st.form_submit_button("Cập nhật"):
                     new_status_db = status_opts[new_status_vn]
+                    
+                    # Auto update actual_date if status is Delivered/Arrived
+                    act_date_val = None
+                    if new_status_db in ["Delivered", "Arrived"]:
+                        act_date_val = datetime.now().strftime("%d/%m/%Y")
+                    
                     upd_data = {
                         "status": new_status_db, 
-                        "last_update": datetime.now().strftime("%d/%m/%Y"),
-                        "actual_date": rec_date.strftime("%d/%m/%Y")
+                        "last_update": datetime.now().strftime("%d/%m/%Y")
                     }
+                    if act_date_val: upd_data["actual_date"] = act_date_val
+                    
                     if proof_img:
                         lnk, _ = upload_to_drive_simple(proof_img, "CRM_PROOF", f"PRF_{sel_po}_{int(time.time())}.png")
                         upd_data["proof_image"] = lnk
@@ -1346,18 +1362,25 @@ with t5:
                          try:
                              supabase.table("crm_tracking").update(upd_data).eq("po_no", sel_po).execute()
                              
-                             # Auto-link to Payment if Delivered (Customer)
-                             # Re-fetch specific row to check partner type
+                             # Auto-link to Payment if Delivered (Customer) & Create ETA Payment
                              row_info = df_active[df_active['po_no'] == sel_po].iloc[0]
                              if new_status_db == "Delivered" and row_info['partner'] in cust_list:
                                  chk = supabase.table("crm_payments").select("*").eq("po_no", sel_po).execute()
+                                 
+                                 # Calculate Default ETA Payment (+30 days)
+                                 eta_pay_calc = (datetime.now() + timedelta(days=30)).strftime("%d/%m/%Y")
+                                 
                                  if not chk.data:
                                      pay_rec = {
                                          "po_no": sel_po, "customer": row_info['partner'], "status": "Đợi xuất hóa đơn",
-                                         "created_at": datetime.now().isoformat()
+                                         "created_at": datetime.now().isoformat(),
+                                         "eta_payment": eta_pay_calc
                                      }
                                      supabase.table("crm_payments").insert(pay_rec).execute()
                                      st.success("Đã tự động tạo theo dõi thanh toán!")
+                                 else:
+                                     # Update existing payment record with new ETA if missing
+                                     supabase.table("crm_payments").update({"eta_payment": eta_pay_calc}).eq("po_no", sel_po).execute()
 
                              st.success("Cập nhật thành công!")
                              time.sleep(1); st.rerun()
@@ -1435,7 +1458,7 @@ with t5:
              st.dataframe(
                 df_history,
                 column_config={
-                    "proof_image": st.column_config.ImageColumn("Proof"),
+                    "proof_image": st.column_config.ImageColumn("Ảnh thanh toán/đã nhận hàng"),
                     "status_display": "Status",
                     "po_no": "PO No", "partner": "Partner"
                 },
