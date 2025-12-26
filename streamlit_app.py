@@ -1654,7 +1654,7 @@ with t5:
 
 # --- TAB 6: MASTER DATA ---
 with t6:
-    tc, ts, tt = st.tabs(["KHÁCH HÀNG", "NHÀ CUNG CẤP", "TEMPLATE"])
+    tc,ts,tt =st.tabs(["KHÁCH HÀNG", "NHÀ CUNG CẤP", "TEMPLATE"])
     with tc:
         df = load_data("crm_customers"); st.data_editor(df, num_rows="dynamic", use_container_width=True)
         up = st.file_uploader("Import KH", key="uck")
@@ -1679,3 +1679,4 @@ with t6:
             lnk, fid = upload_to_drive_simple(up_t, "CRM_TEMPLATES", f"TMP_{t_name}.xlsx")
             if fid: supabase.table("crm_templates").insert([{"template_name": t_name, "file_id": fid, "last_updated": datetime.now().strftime("%d/%m/%Y")}]).execute(); st.success("OK"); st.rerun()
         st.dataframe(load_data("crm_templates"))
+
