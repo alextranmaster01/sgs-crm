@@ -12,7 +12,7 @@ import numpy as np
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO
 # =============================================================================
-APP_VERSION = "V6056 - QUOTE PRO: EXCEL STYLE & INTEGRATED TOTALS"
+APP_VERSION = "V6050 - QUOTE FIXED & OPTIMIZED"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # CSS UI
@@ -279,9 +279,7 @@ def recalculate_quote_logic(df, params):
     # Tính GAP
     df["GAP"] = df["Total price(VND)"] - df["AP total price(VND)"]
 
-    # Logic: Các cột chi phí (EndUser, Buyer...) là giá trị tiền (VND).
-    # Người dùng có thể sửa trực tiếp. Ta chỉ tính tổng để ra Profit.
-    
+    # Tính các chi phí dựa trên % hoặc giá trị nhập vào
     gap_positive = df["GAP"].apply(lambda x: x * 0.6 if x > 0 else 0)
     
     cost_ops = (gap_positive + 
@@ -312,24 +310,33 @@ def recalculate_quote_logic(df, params):
 # --- IMPROVED FORMULA PARSER ---
 def parse_formula(formula, buying_price, ap_price):
     if not formula: return 0.0
+    
+    # 1. Normalize
     s = str(formula).strip().upper()
+    
+    # 2. Handle '='
     if s.startswith("="): s = s[1:]
+    
+    # 3. Replace Keywords
+    # Hỗ trợ: BUY (Buying Price VND), AP (AP Price VND)
     
     val_buy = float(buying_price) if buying_price else 0.0
     val_ap = float(ap_price) if ap_price else 0.0
     
-    # Regex Replace chính xác từ khóa
-    s = re.sub(r'\bBUYING PRICE\b', str(val_buy), s)
-    s = re.sub(r'\bBUY\b', str(val_buy), s)
-    s = re.sub(r'\bAP PRICE\b', str(val_ap), s)
-    s = re.sub(r'\bAP\b', str(val_ap), s)
+    s = s.replace("BUYING PRICE", str(val_buy))
+    s = s.replace("BUY", str(val_buy))
+    s = s.replace("AP PRICE", str(val_ap))
+    s = s.replace("AP", str(val_ap))
     
-    # Chỉ cho phép ký tự an toàn
+    # 4. Cleanup & Eval
     allowed_chars = "0123456789.+-*/() "
-    if not all(c in allowed_chars for c in s): return 0.0
+    if not all(c in allowed_chars for c in s):
+        return 0.0
     
-    try: return float(eval(s))
-    except: return 0.0
+    try:
+        return float(eval(s))
+    except:
+        return 0.0
 
 # =============================================================================
 # 4. GIAO DIỆN CHÍNH
@@ -419,7 +426,7 @@ with t2:
                         records.append(d)
                     prog.progress((i + 1) / len(df))
                 
-                # 4. Insert vào DB
+                # 4. Insert vào DB (Fix lỗi mất dữ liệu: Xóa theo batch rồi insert)
                 if records:
                     chunk_ins = 100
                     # Lấy item_code để xóa cũ
@@ -432,7 +439,7 @@ with t2:
                              batch_codes = codes[k:k+batch_size_del]
                              try:
                                  supabase.table("crm_purchases").delete().in_("item_code", batch_codes).execute()
-                             except: pass
+                             except: pass # Bỏ qua lỗi xóa nếu không có dữ liệu cũ
 
                     # Insert mới
                     success_count = 0
@@ -611,8 +618,6 @@ with t3:
 
                     if config_loaded:
                         st.info(f"📊 **CẤU HÌNH CHI PHÍ (ĐÃ LOAD):** {config_loaded}")
-                        if sel_quote_hist != st.session_state.loaded_quote_id:
-                            pass
                     else:
                         st.warning("⚠️ Báo giá này được tạo từ phiên bản cũ, chưa lưu cấu hình chi phí.")
 
@@ -649,16 +654,6 @@ with t3:
         st.rerun()
     c3.markdown('</div>', unsafe_allow_html=True)
 
-    with st.expander("Cấu hình chi phí (%) & Vận chuyển (Mặc định cho dòng mới)", expanded=True):
-        cols = st.columns(7)
-        keys = ["end", "buy", "tax", "vat", "pay", "mgmt", "trans"]
-        params = {}
-        for i, k in enumerate(keys):
-            default_val = st.session_state.get(f"pct_{k}", "0")
-            val = cols[i].text_input(k.upper(), value=default_val, key=f"input_{k}")
-            st.session_state[f"pct_{k}"] = val
-            params[k] = to_float(val)
-
     # MATCHING
     cf1, cf2 = st.columns([1, 2])
     rfq = cf1.file_uploader("Upload RFQ (xlsx)", type=["xlsx"])
@@ -685,10 +680,11 @@ with t3:
                 qty_raw = get_val(["q'ty", "qty", "quantity", "số lượng"])
                 qty = to_float(qty_raw) if qty_raw else 1.0
 
+                # 2. MATCHING LOGIC (Khớp 3 thông số: Code, Name, Specs)
                 match = None
                 warning_msg = ""
                 
-                # --- MATCHING TUYỆT ĐỐI 3 TRƯỜNG ---
+                # --- UPDATED LOGIC: EXACT MATCH ALL 3 FIELDS ---
                 candidates = [
                     rec for rec in db_records 
                     if strict_match_key(rec['item_code']) == strict_match_key(code_excel)
@@ -711,9 +707,7 @@ with t3:
                 else:
                     buy_rmb = 0; buy_vnd = 0; ex_rate = 0
                     supplier = ""; image = ""; leadtime = ""
-                
-                # Tính các giá trị mặc định từ params
-                
+
                 item = {
                     "Xóa": False,
                     "No": i+1, "Cảnh báo": warning_msg, 
@@ -726,35 +720,31 @@ with t3:
                     "Total buying price(VND)": buy_vnd * qty,
                     "AP price(VND)": 0.0, "AP total price(VND)": 0.0, 
                     "Unit price(VND)": 0.0, "Total price(VND)": 0.0,
-                    "GAP": 0.0, 
-                    "End user(%)": 0.0, "Buyer(%)": 0.0, 
-                    "Import tax(%)": 0.0, "VAT": 0.0, "Transportation": params['trans'],
+                    "GAP": 0.0, "End user(%)": 0.0, "Buyer(%)": 0.0, 
+                    "Import tax(%)": 0.0, "VAT": 0.0, "Transportation": 0.0,
                     "Management fee(%)": 0.0, "Payback(%)": 0.0, 
                     "Profit(VND)": 0.0, "Profit(%)": "0.0%",
                     "Supplier": supplier, "Image": image, "Leadtime": leadtime
                 }
                 res.append(item)
             
-            df_init = pd.DataFrame(res)
-            
-            if not df_init.empty:
-                # Apply initial percentages as money values
-                df_init["Import tax(%)"] = df_init["Total buying price(VND)"] * (params['tax']/100)
-                st.session_state.quote_df = recalculate_quote_logic(df_init, params)
+            st.session_state.quote_df = pd.DataFrame(res)
     
-    # --- FORMULA BUTTONS ---
-    c_form1, c_form2 = st.columns(2)
+    # --- FORMULA BUTTONS (ONE CLICK FIX) ---
+    c_form1, c_form2, c_del = st.columns([2, 2, 1])
     with c_form1:
         ap_f = st.text_input("Formula AP (vd: =BUY*1.1)", key="f_ap")
         st.markdown('<div class="dark-btn">', unsafe_allow_html=True)
         if st.button("Apply AP Price"):
             if not st.session_state.quote_df.empty:
+                # Lọc bỏ dòng TOTAL nếu có trước khi tính
+                st.session_state.quote_df = st.session_state.quote_df[st.session_state.quote_df["No"] != "TOTAL"]
                 for idx, row in st.session_state.quote_df.iterrows():
                     buy = to_float(row["Buying price(VND)"])
                     ap = to_float(row["AP price(VND)"])
                     new_ap = parse_formula(ap_f, buy, ap)
                     st.session_state.quote_df.at[idx, "AP price(VND)"] = new_ap
-                st.session_state.quote_df = recalculate_quote_logic(st.session_state.quote_df, params)
+                st.session_state.quote_df = recalculate_quote_logic(st.session_state.quote_df, {})
                 st.rerun() 
         st.markdown('</div>', unsafe_allow_html=True)
     with c_form2:
@@ -762,23 +752,39 @@ with t3:
         st.markdown('<div class="dark-btn">', unsafe_allow_html=True)
         if st.button("Apply Unit Price"):
             if not st.session_state.quote_df.empty:
+                # Lọc bỏ dòng TOTAL nếu có trước khi tính
+                st.session_state.quote_df = st.session_state.quote_df[st.session_state.quote_df["No"] != "TOTAL"]
                 for idx, row in st.session_state.quote_df.iterrows():
                     buy = to_float(row["Buying price(VND)"])
                     ap = to_float(row["AP price(VND)"])
                     new_unit = parse_formula(unit_f, buy, ap)
                     st.session_state.quote_df.at[idx, "Unit price(VND)"] = new_unit
-                st.session_state.quote_df = recalculate_quote_logic(st.session_state.quote_df, params)
+                st.session_state.quote_df = recalculate_quote_logic(st.session_state.quote_df, {})
                 st.rerun() 
         st.markdown('</div>', unsafe_allow_html=True)
     
+    with c_del:
+        st.write("") # Spacer
+        st.write("") # Spacer
+        st.markdown('<div class="dark-btn">', unsafe_allow_html=True)
+        # DELETE SELECTED BUTTON
+        if st.button("🗑️ DELETE SELECTED"):
+             if not st.session_state.quote_df.empty:
+                  # Filter keep rows where "Xóa" is False AND not TOTAL
+                  st.session_state.quote_df = st.session_state.quote_df[
+                      (st.session_state.quote_df["Xóa"] == False) & 
+                      (st.session_state.quote_df["No"] != "TOTAL")
+                  ].reset_index(drop=True)
+                  # Re-index No column
+                  st.session_state.quote_df["No"] = st.session_state.quote_df.index + 1
+                  st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
+    
     if not st.session_state.quote_df.empty:
-        # 1. DELETE BUTTON (Selected Rows)
-        if st.button("🗑️ Xóa dòng đã chọn"):
-             st.session_state.quote_df = st.session_state.quote_df[st.session_state.quote_df["Xóa"] == False].reset_index(drop=True)
-             st.session_state.quote_df["No"] = st.session_state.quote_df.index + 1
-             st.rerun()
-
-        # 2. DATA EDITOR
+        # 1. CLEANUP STATE (Remove 'TOTAL' row if exists from previous state to avoid calculation errors)
+        st.session_state.quote_df = st.session_state.quote_df[st.session_state.quote_df["No"] != "TOTAL"]
+        
+        # Ensure Checkbox column exists
         if "Xóa" not in st.session_state.quote_df.columns:
              st.session_state.quote_df.insert(0, "Xóa", False)
 
@@ -788,89 +794,79 @@ with t3:
         cols_to_hide = ["Image", "Profit_Pct_Raw"]
         df_show = st.session_state.quote_df.drop(columns=[c for c in cols_to_hide if c in st.session_state.quote_df.columns], errors='ignore')
 
+        # --- PREPARE DISPLAY DATAFRAME WITH TOTAL ROW ---
         # Calculate sums
-        cols_to_sum = ["Q'ty", "Buying price(RMB)", "Total buying price(rmb)", "Exchange rate",
+        cols_to_sum = ["Q'ty", "Buying price(RMB)", "Total buying price(rmb)", 
                        "Buying price(VND)", "Total buying price(VND)", "AP price(VND)", "AP total price(VND)", 
                        "Unit price(VND)", "Total price(VND)", "GAP", "End user(%)", "Buyer(%)", 
                        "Import tax(%)", "VAT", "Transportation", "Management fee(%)", "Payback(%)", "Profit(VND)"]
         
         totals = {}
         for c in cols_to_sum:
-             totals[c] = st.session_state.quote_df[c].apply(to_float).sum()
+             if c in df_show.columns:
+                totals[c] = df_show[c].apply(to_float).sum()
         
-        # Combine Main Data + Total Row
-        df_display = df_show.copy()
-        total_row_data = {c: "" for c in df_display.columns}
-        total_row_data["No"] = "TOTAL"
-        for c in cols_to_sum:
-            if c in df_display.columns:
-                if c == "Exchange rate": 
-                     total_row_data[c] = None 
-                else:
-                     total_row_data[c] = totals[c]
+        # Create Total Row
+        total_row = pd.DataFrame([totals])
+        for c in df_show.columns:
+             if c not in total_row.columns: total_row[c] = ""
+        total_row["No"] = "TOTAL"
+        total_row["Xóa"] = False 
         
-        df_combined = pd.concat([df_display, pd.DataFrame([total_row_data])], ignore_index=True)
+        # Append Total Row to DataFrame for Display
+        df_display = pd.concat([df_show, total_row], ignore_index=True)
         
-        # Configure columns (format: 1,234.5)
+        # Reorder columns to match
+        df_display = df_display[cols_order]
+
+        # Configure columns for formatting
         column_config = {
             "Xóa": st.column_config.CheckboxColumn("Xóa", width="small"),
             "Cảnh báo": st.column_config.TextColumn("Cảnh báo", width="small", disabled=True),
             "No": st.column_config.TextColumn("No", width="small", disabled=True),
             "Q'ty": st.column_config.NumberColumn("Q'ty", format="%d"),
-            "Exchange rate": st.column_config.NumberColumn("Exchange rate", format="%,.2f"),
+            "Exchange rate": st.column_config.NumberColumn("Exchange rate", format="%.2f"),
         }
         
+        # Auto-format money columns (Thousands separator, 1 decimal place)
         money_cols = ["Buying price(RMB)", "Total buying price(rmb)", "Buying price(VND)", 
                       "Total buying price(VND)", "AP price(VND)", "AP total price(VND)", 
                       "Unit price(VND)", "Total price(VND)", "GAP", "End user(%)", "Buyer(%)", 
                       "Import tax(%)", "VAT", "Transportation", "Management fee(%)", "Payback(%)", "Profit(VND)"]
         
         for c in money_cols:
-             column_config[c] = st.column_config.NumberColumn(c, format="%,.1f")
+             column_config[c] = st.column_config.NumberColumn(c, format="%,.1f") # 1 decimal, comma separator
 
-        def style_combined(row):
-            if row['No'] == 'TOTAL':
-                return ['background-color: #ffffcc; font-weight: bold; color: black'] * len(row)
-            return [''] * len(row)
-
-        # DISPLAY EDITOR WITH DYNAMIC ROWS (Trash Icon in Toolbar)
-        # Use a STATIC key to prevent losing checkbox state
-        # But we need to detect changes. 
-        edited_df = st.data_editor(
-            df_combined, 
+        # DISPLAY DATA EDITOR
+        edited_df_display = st.data_editor(
+            df_display, 
             column_config=column_config,
             use_container_width=True, 
             height=600, 
-            key="quote_editor_main", 
-            num_rows="dynamic",
-            hide_index=True 
+            key="quote_editor_main", # Static Key to prevent focus loss
+            hide_index=True,
+            num_rows="dynamic" # Enable Trash Icon functionality natively
         )
         
-        # Detect Changes & Recalculate
-        # We check if edited_df is different from what we passed (df_combined)
-        # BUT we must ignore the TOTAL row in comparison if it's just re-calc difference?
-        # Actually, if user edits a cell, edited_df will have that new value.
-        # We take edited_df (minus TOTAL row), recalculate logic, and update state.
+        # LOGIC TO UPDATE STATE ON CHANGE
+        # Check if the "Data Part" (excluding TOTAL row) has changed
+        # Filter out the TOTAL row from edited_df_display to get the actual data
+        edited_data_only = edited_df_display[edited_df_display["No"] != "TOTAL"].copy()
         
-        df_new_data = edited_df[edited_df["No"] != "TOTAL"].reset_index(drop=True)
+        # Compare with session state (which doesn't have TOTAL row)
+        # We need to be careful with index reset
+        edited_data_only = edited_data_only.reset_index(drop=True)
+        current_state_data = st.session_state.quote_df.reset_index(drop=True)
         
-        # To avoid infinite loop, we only update state if data logically changed
-        # We compare df_new_data with st.session_state.quote_df
-        # Since recalculate_quote_logic will update dependent columns, we just need to pass the inputs.
-        
-        # Simple approach: On every interaction, update state and rerun.
-        # To prevent loop, check if df_new_data is different from current state inputs.
-        
-        # Check if values changed? 
-        # Streamlit reruns script on edit. So we just process edited_df.
-        
-        if not df_new_data.equals(st.session_state.quote_df):
-             st.session_state.quote_df = recalculate_quote_logic(df_new_data, params)
-             st.rerun()
+        if not edited_data_only.equals(current_state_data):
+            # Recalculate logic on the edited data
+            updated_df = recalculate_quote_logic(edited_data_only, {})
+            st.session_state.quote_df = updated_df
+            st.rerun()
 
-        # --- VIEW TOTAL PRICE ---
+        # --- VIEW TOTAL PRICE (Extra visual) ---
         total_q = totals.get("Total price(VND)", 0)
-        st.markdown(f'<div class="total-view">💰 TỔNG GIÁ TRỊ BÁO GIÁ (TOTAL VIEW): {fmt_float_1(total_q)} VND</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="total-view">💰 TỔNG GIÁ TRỊ BÁO GIÁ: {fmt_float_1(total_q)} VND</div>', unsafe_allow_html=True)
 
         st.divider()
         c_rev, c_sv = st.columns([1, 1])
@@ -886,6 +882,7 @@ with t3:
             
             df_review = st.session_state.quote_df[valid_cols].copy()
             
+            # Add Total Row to Review
             total_rev = {c: "" for c in df_review.columns}
             total_rev["No"] = "TOTAL"
             total_rev["Q'ty"] = df_review["Q'ty"].apply(to_float).sum()
@@ -908,6 +905,7 @@ with t3:
                 }
             )
             
+            # Show Total in Review as well
             st.markdown(f'<div class="total-view">💰 TỔNG CỘNG: {fmt_float_1(total_q)} VND</div>', unsafe_allow_html=True)
             
             st.markdown('<div class="dark-btn">', unsafe_allow_html=True)
@@ -952,14 +950,16 @@ with t3:
             st.markdown('<div class="dark-btn">', unsafe_allow_html=True)
             if st.button("💾 LƯU LỊCH SỬ (QUAN TRỌNG ĐỂ LÀM PO)"):
                 if cust_name:
-                    clean_params = {}
-                    for k, v in params.items():
-                        if isinstance(v, float) and (np.isnan(v) or np.isinf(v)): clean_params[k] = 0.0
-                        else: clean_params[k] = v
+                    # 1. CLEAN PARAMS
+                    clean_params = {} # No global params anymore, but keeping structure valid
+                    
+                    # Dump config from first row or general
                     config_json = json.dumps(clean_params) 
                     
                     recs = []
                     for r in st.session_state.quote_df.to_dict('records'):
+                        if r["No"] == "TOTAL": continue # Skip total row if present
+
                         val_qty = to_float(r["Q'ty"])
                         val_unit = to_float(r["Unit price(VND)"])
                         val_total = to_float(r["Total price(VND)"])
@@ -987,7 +987,7 @@ with t3:
                              recs_fallback = [{k: v for k, v in r.items() if k != 'config_data'} for r in recs]
                              try:
                                  supabase.table("crm_shared_history").insert(recs_fallback).execute()
-                                 st.warning("⚠️ Đã lưu thành công (Chế độ tương thích: Bỏ qua cấu hình chi phí do Database cũ).")
+                                 st.warning("⚠️ Đã lưu thành công (Chế độ tương thích).")
                              except Exception as e2:
                                  st.error(f"Lỗi Fatal sau khi retry: {e2}")
                                  st.stop()
@@ -995,6 +995,7 @@ with t3:
                              st.error(f"Lỗi lưu Supabase: {e}")
                              st.stop()
 
+                    # Save CSV Backup
                     try:
                         csv_buffer = io.BytesIO()
                         st.session_state.quote_df.to_csv(csv_buffer, index=False, encoding='utf-8-sig')
@@ -1005,6 +1006,7 @@ with t3:
                         path_list_hist = ["QUOTATION_HISTORY", cust_name, curr_year, curr_month]
                         lnk, _ = upload_to_drive_structured(csv_buffer, path_list_hist, csv_name)
                         
+                        # Save Config File
                         df_cfg = pd.DataFrame([clean_params])
                         cfg_buffer = io.BytesIO()
                         df_cfg.to_excel(cfg_buffer, index=False)
@@ -1070,8 +1072,6 @@ with t4:
                 df_up = pd.read_excel(up_s, dtype=str).fillna("")
                 db = load_data("crm_purchases")
                 
-                # --- [LOGIC MỚI] 3-FIELDS MATCHING ---
-                # Build lookup dictionary với key là tuple (clean_code, clean_name, clean_specs)
                 lookup = {}
                 for r in db.to_dict('records'):
                     k = (strict_match_key(r['item_code']), strict_match_key(r['item_name']), strict_match_key(r['specs']))
@@ -1079,19 +1079,16 @@ with t4:
                 
                 recs = []
                 for i, r in df_up.iterrows():
-                    # Lấy dữ liệu từ Excel
                     no_val = safe_str(r.iloc[0]) 
                     code_raw = safe_str(r.iloc[1])
                     name_excel = safe_str(r.iloc[2])
                     specs_excel = safe_str(r.iloc[3])
                     qty_val = to_float(r.iloc[4])
 
-                    # Tạo key chuẩn hóa từ Excel để so sánh
                     key_check = (strict_match_key(code_raw), strict_match_key(name_excel), strict_match_key(specs_excel))
                     
                     match = lookup.get(key_check)
                     
-                    # Fill missing info from DB (Price, Supplier, Leadtime)
                     if match:
                         buy_rmb = to_float(match['buying_price_rmb'])
                         rate = to_float(match['exchange_rate'])
@@ -1121,7 +1118,6 @@ with t4:
                 st.session_state.po_ncc_df = pd.DataFrame(recs)
             
             if not st.session_state.po_ncc_df.empty:
-                # --- NEW: ADD TOTAL ROW (NCC) ---
                 df_ncc_show = st.session_state.po_ncc_df.copy()
                 total_qty = df_ncc_show["Q'ty"].apply(to_float).sum()
                 total_buy_rmb = df_ncc_show["Buying price(RMB)"].apply(to_float).sum()
@@ -1213,14 +1209,12 @@ with t4:
                         hist = load_data("crm_shared_history") 
                         cust_hist = hist[hist['customer'] == c_name].sort_values(by='date', ascending=False)
                         
-                        # Price Lookup (Use Code only as History table schema implies)
                         price_lookup = {}
                         for _, h in cust_hist.iterrows():
                             c_code = strict_match_key(h['item_code'])
                             if c_code not in price_lookup: price_lookup[c_code] = to_float(h['unit_price'])
                         
                         db_items = load_data("crm_purchases")
-                        # --- [LOGIC MỚI] 3-FIELDS MATCHING AGAINST PRODUCT DB FOR VALIDATION ---
                         db_lookup = { (strict_match_key(r['item_code']), strict_match_key(r['item_name']), strict_match_key(r['specs'])): r for r in db_items.to_dict('records') }
                         
                         for f in excel_files:
@@ -1233,8 +1227,6 @@ with t4:
                                     specs_e = safe_str(r.iloc[3])
                                     qty = to_float(r.iloc[4])
                                     
-                                    # --- UPDATED LOGIC ---
-                                    # 1. Matching tuyệt đối 3 trường với Database sản phẩm để lấy Leadtime & Confirm đúng hàng
                                     k_check = (strict_match_key(code), strict_match_key(name_e), strict_match_key(specs_e))
                                     match_item = db_lookup.get(k_check)
                                     
@@ -1243,17 +1235,14 @@ with t4:
                                     leadtime = "0"
                                     
                                     if match_item:
-                                        # Có trong DB khớp cả 3 trường
                                         leadtime = match_item['leadtime']
                                     else:
                                         note_status = "chưa có trong database"
                                     
-                                    # 2. Lấy giá từ lịch sử khách hàng (dựa vào Code đã chuẩn hóa)
                                     c_key_price = strict_match_key(code)
                                     if c_key_price in price_lookup:
                                         unit_price = price_lookup[c_key_price]
                                     else:
-                                        # Nếu ko có trong lịch sử, lấy từ file excel nếu có cột giá
                                         if len(r) > 5:
                                              try: unit_price = to_float(r.iloc[5])
                                              except: unit_price = 0
@@ -1274,7 +1263,6 @@ with t4:
                     else: st.info("Chỉ load data từ Excel. PDF sẽ được lưu khi bấm 'Lưu PO'.")
 
             if not st.session_state.po_cust_df.empty:
-                # --- NEW: ADD TOTAL ROW (CUST) ---
                 df_cust_show = st.session_state.po_cust_df.copy()
                 total_qty_c = df_cust_show["Q'ty"].apply(to_float).sum()
                 total_unit_vnd = df_cust_show["Unit price(VND)"].apply(to_float).sum()
@@ -1327,23 +1315,20 @@ with t4:
 with t5:
     st.subheader("THEO DÕI ĐƠN HÀNG (TRACKING)")
     
-    # Load Master Data for filtering
     try:
         cust_list = load_data("crm_customers")['short_name'].tolist()
         supp_list = load_data("crm_suppliers")['short_name'].tolist()
     except:
         cust_list = []; supp_list = []
 
-    # Initialize Tabs
     t5_1, t5_2, t5_3 = st.tabs(["📦 ĐƠN HÀNG", "💰 THANH TOÁN", "📜 LỊCH SỬ ĐƠN HÀNG"])
 
-    # 1. ORDER TRACKING (Includes Payment Info joined)
+    # 1. ORDER TRACKING
     with t5_1:
         c_act1, c_act2 = st.columns([4, 1])
         with c_act1:
              if st.button("🔄 Refresh Tracking"): st.cache_data.clear(); st.rerun()
         
-        # --- RESET FUNCTIONALITY ---
         with c_act2:
              with st.expander("🛠️ Reset Đơn Hàng"):
                  adm_p1 = st.text_input("Pass", type="password", key="adm_t1")
@@ -1356,10 +1341,8 @@ with t5:
         df_track = load_data("crm_tracking", order_by="id")
         df_pay = load_data("crm_payments")
         
-        # Merge Payment Info into Tracking Data based on po_no
         if not df_track.empty:
             if not df_pay.empty:
-                # Select only relevant columns from payment to avoid dupes or mess
                 pay_subset = df_pay[['po_no', 'invoice_no', 'eta_payment', 'payment_date']].drop_duplicates(subset=['po_no'])
                 df_track = pd.merge(df_track, pay_subset, on='po_no', how='left')
             else:
@@ -1367,122 +1350,112 @@ with t5:
                 df_track['eta_payment'] = ""
                 df_track['payment_date'] = ""
 
-        # Logic to Separate Active vs History
-        active_rows = []
-        history_rows = []
-        
-        for r in df_track.to_dict('records'):
-            is_supp = r.get('partner') in supp_list
-            is_cust = r.get('partner') in cust_list
-            status = r.get('status', '')
-            has_proof = pd.notna(r.get('proof_image')) and str(r.get('proof_image')).strip() != ''
+            active_rows = []
+            history_rows = []
             
-            # Condition: Move to History
-            move_to_hist = False
-            if is_supp and status == 'Arrived' and has_proof: move_to_hist = True
-            elif is_cust and status == 'Delivered' and has_proof: move_to_hist = True
-            
-            # Translate Status for Display
-            status_map_rev = {
-                "Ordered": "Đã đặt hàng", "Shipping": "Đang vận chuyển về VN", 
-                "Arrived": "Đã nhận hàng", "Delivered": "Đã giao hàng", "Waiting": "Đang đợi PO"
-            }
-            r['status_display'] = status_map_rev.get(status, status)
-            # Add checkbox placeholder
-            r['Xóa'] = False
-
-            if move_to_hist: history_rows.append(r)
-            else: active_rows.append(r)
-            
-        df_active = pd.DataFrame(active_rows)
-        df_history = pd.DataFrame(history_rows)
-
-        # Show Active Orders
-        if not df_active.empty:
-            df_active = df_active.reset_index(drop=True)
-            df_active['No'] = df_active.index + 1
-            for c in ['invoice_no', 'eta_payment', 'payment_date', 'created_at']:
-                if c not in df_active.columns: df_active[c] = ""
-            
-            # Use Data Editor with Checkbox for Deletion
-            # FIX V6041: CONVERT DATES TO DATETIME OR STRING TO AVOID "StreamlitAPIException"
-            if 'created_at' in df_active.columns: df_active['created_at'] = pd.to_datetime(df_active['created_at'], errors='coerce')
-
-            # Highlight Logic (Blue for Customer, Orange for Partner)
-            def highlight_partner(val):
-                if val in cust_list: return 'color: #007bff; font-weight: bold;'
-                if val in supp_list: return 'color: #ff8c00; font-weight: bold;'
-                return ''
-
-            edited_active = st.data_editor(
-                df_active,
-                column_config={
-                    "Xóa": st.column_config.CheckboxColumn("Xóa", help="Tick để xóa dòng này", default=False),
-                    "proof_image": st.column_config.ImageColumn("Ảnh thanh toán/đã giao hàng"),
-                    "status_display": st.column_config.TextColumn("status"),
-                    "po_no": "po_no", "partner": "Customer/Partner",
-                    "actual_date": "Ngày nhận/giao hàng",
-                    "eta_payment": "eta_payment"
-                },
-                column_order=["Xóa", "No", "po_no", "partner", "status_display", "actual_date", "eta_payment", "proof_image"],
-                use_container_width=True, hide_index=True, key="editor_active"
-            )
-            
-            # DELETE LOGIC
-            rows_to_delete = edited_active[edited_active["Xóa"] == True]
-            if not rows_to_delete.empty:
-                if st.button(f"🗑️ Xóa {len(rows_to_delete)} dòng đã chọn (Tab Đơn Hàng)"):
-                     for _, r in rows_to_delete.iterrows():
-                         supabase.table("crm_tracking").delete().eq("po_no", r["po_no"]).execute()
-                     st.success("Đã xóa!"); time.sleep(1); st.rerun()
-
-            # Update Form
-            with st.form("update_tracking_form_v2"):
-                st.write("Cập nhật trạng thái:")
-                po_list = df_active['po_no'].unique()
-                sel_po = st.selectbox("Chọn PO", po_list)
-                status_opts = {"Đã đặt hàng": "Ordered", "Đang vận chuyển về VN": "Shipping", 
-                               "Đã nhận hàng": "Arrived", "Đã giao hàng": "Delivered", "Đang đợi PO": "Waiting"}
-                new_status_vn = st.selectbox("Trạng thái mới", list(status_opts.keys()))
-                proof_img = st.file_uploader("Upload Ảnh Proof", type=['png', 'jpg'])
+            for r in df_track.to_dict('records'):
+                is_supp = r.get('partner') in supp_list
+                is_cust = r.get('partner') in cust_list
+                status = r.get('status', '')
+                has_proof = pd.notna(r.get('proof_image')) and str(r.get('proof_image')).strip() != ''
                 
-                if st.form_submit_button("Cập nhật"):
-                    new_status_db = status_opts[new_status_vn]
-                    act_date_val = None
-                    if new_status_db in ["Delivered", "Arrived"]:
-                        act_date_val = datetime.now().strftime("%d/%m/%Y")
+                move_to_hist = False
+                if is_supp and status == 'Arrived' and has_proof: move_to_hist = True
+                elif is_cust and status == 'Delivered' and has_proof: move_to_hist = True
+                
+                status_map_rev = {
+                    "Ordered": "Đã đặt hàng", "Shipping": "Đang vận chuyển về VN", 
+                    "Arrived": "Đã nhận hàng", "Delivered": "Đã giao hàng", "Waiting": "Đang đợi PO"
+                }
+                r['status_display'] = status_map_rev.get(status, status)
+                r['Xóa'] = False
+
+                if move_to_hist: history_rows.append(r)
+                else: active_rows.append(r)
+            
+            df_active = pd.DataFrame(active_rows)
+            df_history = pd.DataFrame(history_rows)
+
+            if not df_active.empty:
+                df_active = df_active.reset_index(drop=True)
+                df_active['No'] = df_active.index + 1
+                for c in ['invoice_no', 'eta_payment', 'payment_date', 'created_at']:
+                    if c not in df_active.columns: df_active[c] = ""
+                
+                if 'created_at' in df_active.columns: df_active['created_at'] = pd.to_datetime(df_active['created_at'], errors='coerce')
+
+                def highlight_partner(val):
+                    if val in cust_list: return 'color: #007bff; font-weight: bold;'
+                    if val in supp_list: return 'color: #ff8c00; font-weight: bold;'
+                    return ''
+
+                edited_active = st.data_editor(
+                    df_active,
+                    column_config={
+                        "Xóa": st.column_config.CheckboxColumn("Xóa", help="Tick để xóa dòng này", default=False),
+                        "proof_image": st.column_config.ImageColumn("Ảnh thanh toán/đã giao hàng"),
+                        "status_display": st.column_config.TextColumn("status"),
+                        "po_no": "po_no", "partner": "Customer/Partner",
+                        "actual_date": "Ngày nhận/giao hàng",
+                        "eta_payment": "eta_payment"
+                    },
+                    column_order=["Xóa", "No", "po_no", "partner", "status_display", "actual_date", "eta_payment", "proof_image"],
+                    use_container_width=True, hide_index=True, key="editor_active"
+                )
+                
+                rows_to_delete = edited_active[edited_active["Xóa"] == True]
+                if not rows_to_delete.empty:
+                    if st.button(f"🗑️ Xóa {len(rows_to_delete)} dòng đã chọn (Tab Đơn Hàng)"):
+                          for _, r in rows_to_delete.iterrows():
+                              supabase.table("crm_tracking").delete().eq("po_no", r["po_no"]).execute()
+                          st.success("Đã xóa!"); time.sleep(1); st.rerun()
+
+                with st.form("update_tracking_form_v2"):
+                    st.write("Cập nhật trạng thái:")
+                    po_list = df_active['po_no'].unique()
+                    sel_po = st.selectbox("Chọn PO", po_list)
+                    status_opts = {"Đã đặt hàng": "Ordered", "Đang vận chuyển về VN": "Shipping", 
+                                   "Đã nhận hàng": "Arrived", "Đã giao hàng": "Delivered", "Đang đợi PO": "Waiting"}
+                    new_status_vn = st.selectbox("Trạng thái mới", list(status_opts.keys()))
+                    proof_img = st.file_uploader("Upload Ảnh Proof", type=['png', 'jpg'])
                     
-                    upd_data = {
-                        "status": new_status_db, 
-                        "last_update": datetime.now().strftime("%d/%m/%Y")
-                    }
-                    if act_date_val: upd_data["actual_date"] = act_date_val
-                    if proof_img:
-                        lnk, _ = upload_to_drive_simple(proof_img, "CRM_PROOF", f"PRF_{sel_po}_{int(time.time())}.png")
-                        upd_data["proof_image"] = lnk
-                    
-                    if sel_po:
-                         try:
-                             supabase.table("crm_tracking").update(upd_data).eq("po_no", sel_po).execute()
-                             row_info = df_active[df_active['po_no'] == sel_po].iloc[0]
-                             if new_status_db == "Delivered" and row_info['partner'] in cust_list:
-                                 chk = supabase.table("crm_payments").select("*").eq("po_no", sel_po).execute()
-                                 eta_pay_calc = (datetime.now() + timedelta(days=30)).strftime("%d/%m/%Y")
-                                 if not chk.data:
-                                     pay_rec = {
-                                         "po_no": sel_po, "customer": row_info['partner'], "status": "Đợi xuất hóa đơn",
-                                         "created_at": datetime.now().isoformat(),
-                                         "eta_payment": eta_pay_calc
-                                     }
-                                     supabase.table("crm_payments").insert(pay_rec).execute()
-                                     st.success("Đã tự động tạo theo dõi thanh toán!")
-                                 else:
-                                     supabase.table("crm_payments").update({"eta_payment": eta_pay_calc}).eq("po_no", sel_po).execute()
-                             st.success("Cập nhật thành công!")
-                             time.sleep(1); st.rerun()
-                         except Exception as e: st.error(f"Lỗi Update: {e}")
-                    else: st.error("Chọn PO!")
-        else: st.info("Không có đơn hàng đang xử lý.")
+                    if st.form_submit_button("Cập nhật"):
+                        new_status_db = status_opts[new_status_vn]
+                        act_date_val = None
+                        if new_status_db in ["Delivered", "Arrived"]:
+                            act_date_val = datetime.now().strftime("%d/%m/%Y")
+                        
+                        upd_data = {
+                            "status": new_status_db, 
+                            "last_update": datetime.now().strftime("%d/%m/%Y")
+                        }
+                        if act_date_val: upd_data["actual_date"] = act_date_val
+                        if proof_img:
+                            lnk, _ = upload_to_drive_simple(proof_img, "CRM_PROOF", f"PRF_{sel_po}_{int(time.time())}.png")
+                            upd_data["proof_image"] = lnk
+                        
+                        if sel_po:
+                             try:
+                                 supabase.table("crm_tracking").update(upd_data).eq("po_no", sel_po).execute()
+                                 row_info = df_active[df_active['po_no'] == sel_po].iloc[0]
+                                 if new_status_db == "Delivered" and row_info['partner'] in cust_list:
+                                     chk = supabase.table("crm_payments").select("*").eq("po_no", sel_po).execute()
+                                     eta_pay_calc = (datetime.now() + timedelta(days=30)).strftime("%d/%m/%Y")
+                                     if not chk.data:
+                                         pay_rec = {
+                                             "po_no": sel_po, "customer": row_info['partner'], "status": "Đợi xuất hóa đơn",
+                                             "created_at": datetime.now().isoformat(),
+                                             "eta_payment": eta_pay_calc
+                                         }
+                                         supabase.table("crm_payments").insert(pay_rec).execute()
+                                         st.success("Đã tự động tạo theo dõi thanh toán!")
+                                     else:
+                                         supabase.table("crm_payments").update({"eta_payment": eta_pay_calc}).eq("po_no", sel_po).execute()
+                                 st.success("Cập nhật thành công!")
+                                 time.sleep(1); st.rerun()
+                             except Exception as e: st.error(f"Lỗi Update: {e}")
+                        else: st.error("Chọn PO!")
+            else: st.info("Không có đơn hàng đang xử lý.")
 
     # 2. PAYMENT TRACKING
     with t5_2:
@@ -1500,7 +1473,6 @@ with t5:
                          st.success("Deleted!"); time.sleep(1); st.rerun()
                      else: st.error("Sai pass")
 
-        # Load Payments
         try: df_pay = load_data("crm_payments")
         except: df_pay = pd.DataFrame()
         
@@ -1512,7 +1484,6 @@ with t5:
             df_pay['No'] = df_pay.index + 1
             df_pay['Xóa'] = False
             
-            # FIX V6041: CONVERT DATES TO DATETIME OR STRING TO AVOID "StreamlitAPIException"
             if 'created_at' in df_pay.columns: df_pay['created_at'] = pd.to_datetime(df_pay['created_at'], errors='coerce')
             
             cols_show = ['Xóa', 'No', 'po_no', 'customer', 'invoice_no', 'status', 'created_at', 'payment_date']
@@ -1534,9 +1505,9 @@ with t5:
             rows_del_pay = edited_pay[edited_pay["Xóa"] == True]
             if not rows_del_pay.empty:
                 if st.button(f"🗑️ Xóa {len(rows_del_pay)} dòng thanh toán"):
-                     for _, r in rows_del_pay.iterrows():
-                         supabase.table("crm_payments").delete().eq("po_no", r["po_no"]).execute()
-                     st.success("Đã xóa!"); time.sleep(1); st.rerun()
+                      for _, r in rows_del_pay.iterrows():
+                          supabase.table("crm_payments").delete().eq("po_no", r["po_no"]).execute()
+                      st.success("Đã xóa!"); time.sleep(1); st.rerun()
 
             with st.form("update_payment_form_v2"):
                 st.write("Cập nhật thanh toán:")
@@ -1558,7 +1529,6 @@ with t5:
                             st.success("Updated Payment Info!")
                             time.sleep(1); st.rerun()
                         except Exception as e:
-                            # Fallback if columns missing
                             if "eta_payment" in str(e) or "payment_date" in str(e) or "PGRST204" in str(e):
                                 st.error("⚠️ Lỗi cấu trúc DB. Đang thử cập nhật cơ bản...")
                                 safe_upd = {"status": pay_status}
@@ -1581,9 +1551,6 @@ with t5:
                  adm_p3 = st.text_input("Pass", type="password", key="adm_t3")
                  if st.button("Xóa Hết History"):
                      if adm_p3 == "admin":
-                         # Logic: Delete only completed ones or all tracking? Assume completed tracking.
-                         # Since history comes from tracking table, deleting here deletes from tracking
-                         # Be careful: This deletes based on logic active/history
                          st.warning("Chức năng này cần cẩn trọng. Hiện tại chỉ hỗ trợ xóa từng dòng.")
                      else: st.error("Sai pass")
 
@@ -1604,9 +1571,9 @@ with t5:
              rows_del_hist = edited_hist[edited_hist["Xóa"] == True]
              if not rows_del_hist.empty:
                 if st.button(f"🗑️ Xóa {len(rows_del_hist)} dòng lịch sử"):
-                     for _, r in rows_del_hist.iterrows():
-                         supabase.table("crm_tracking").delete().eq("po_no", r["po_no"]).execute()
-                     st.success("Đã xóa!"); time.sleep(1); st.rerun()
+                      for _, r in rows_del_hist.iterrows():
+                          supabase.table("crm_tracking").delete().eq("po_no", r["po_no"]).execute()
+                      st.success("Đã xóa!"); time.sleep(1); st.rerun()
         else: st.info("Chưa có đơn hàng nào trong lịch sử.")
 
 # --- TAB 6: MASTER DATA ---
