@@ -12,7 +12,7 @@ import numpy as np
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO
 # =============================================================================
-APP_VERSION = "V6062 - FINAL FIXED: AUTO-UPDATE & FORMATTING"
+APP_VERSION = "V6063 - FINAL FIX KEYERROR & PERFECTED"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # CSS UI
@@ -249,7 +249,7 @@ def recalculate_quote_logic(df, params):
     
     for c in cols_to_num:
         if c in df.columns: 
-            # Dùng pd.to_numeric để xử lý cả string có dấu phẩy nếu cần thiết, nhưng ở đây data_editor trả về float/int
+            # Dùng pd.to_numeric để xử lý cả string có dấu phẩy
             df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0.0)
     
     # Tính toán cơ bản
@@ -271,7 +271,6 @@ def recalculate_quote_logic(df, params):
                 df["Management fee(%)"] + 
                 df["Transportation"])
     
-    # Tính Profit
     df["Profit(VND)"] = df["Total price(VND)"] - df["Total buying price(VND)"] - cost_ops + df["Payback(%)"]
     
     # Tính % Lợi nhuận
@@ -395,7 +394,6 @@ with t2:
                 if records:
                     chunk_ins = 100
                     codes = [b['item_code'] for b in records if b['item_code']]
-                    
                     if codes:
                         batch_size_del = 50
                         for k in range(0, len(codes), batch_size_del):
@@ -764,7 +762,7 @@ with t3:
         for c in cols_to_sum:
              totals[c] = st.session_state.quote_df[c].apply(to_float).sum()
         
-        # Prepare Total Row
+        # Prepare Total Row Data
         total_row_data = {c: "" for c in df_show.columns}
         total_row_data["No"] = "TOTAL"
         for c in cols_to_sum:
@@ -773,22 +771,15 @@ with t3:
                      total_row_data[c] = ""
                 else:
                      total_row_data[c] = totals[c]
-        
-        df_total_view = pd.DataFrame([total_row_data])
-        # Ensure 'Delete' column exists in total view to avoid KeyError during column reorder
-        if "Delete" not in df_total_view.columns:
-            df_total_view["Delete"] = False
 
-        # Reorder columns to match main dataframe
-        df_total_view = df_total_view[cols_order]
-        
-        # Configure columns using special format %,.1f for thousands separators
+        # Configure columns (Format: 1,234.5 using %.1f to be safe and compatible with comma sep manually applied or D3)
+        # Using "%.1f" format in Streamlit often renders as standard number. To enforce commas, use "%,.1f"
         column_config = {
             "Delete": st.column_config.CheckboxColumn("Xóa", width="small"),
             "Cảnh báo": st.column_config.TextColumn("Cảnh báo", width="small", disabled=True),
             "No": st.column_config.TextColumn("No", width="small", disabled=True),
             "Q'ty": st.column_config.NumberColumn("Q'ty", format="%d"),
-            "Exchange rate": st.column_config.NumberColumn("Exchange rate", format="%,.1f"), # 1 decimal place
+            "Exchange rate": st.column_config.NumberColumn("Exchange rate", format="%,.1f"),
         }
         
         money_cols = ["Buying price(RMB)", "Total buying price(rmb)", "Buying price(VND)", 
@@ -812,13 +803,24 @@ with t3:
         
         # Detect Changes & Recalculate
         if not edited_df.equals(st.session_state.quote_df):
-             st.session_state.quote_df = recalculate_quote_logic(edited_df, {})
+             st.session_state.quote_df = recalculate_quote_logic(edited_df, params)
              st.rerun()
 
-        # --- SHOW TOTAL ROW IMMEDIATELY BELOW ---
+        # --- SHOW TOTAL ROW SEPARATELY (But integrated visually) ---
+        df_total_view = pd.DataFrame([total_row_data])
+        # Ensure 'Delete' column exists in total view to avoid KeyError during column reorder
+        if "Delete" not in df_total_view.columns:
+            df_total_view["Delete"] = False
+
+        # Reorder columns to match main dataframe
+        # Filter cols_order to match df_total_view columns (which are derived from df_show)
+        cols_total_view = [c for c in cols_order if c in df_total_view.columns]
+        df_total_view = df_total_view[cols_total_view]
+        
         def style_total_row(row):
             return ['background-color: #ffffcc; font-weight: bold; color: black'] * len(row)
             
+        st.markdown("### 🔢 BẢNG TỔNG HỢP (TOTAL ROW)")
         st.dataframe(
             df_total_view.style.apply(style_total_row, axis=1),
             use_container_width=True,
