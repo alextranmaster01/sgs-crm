@@ -12,7 +12,7 @@ import numpy as np
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO
 # =============================================================================
-APP_VERSION = "V6055 - FULL RESTORE PO & FIX QUOTE"
+APP_VERSION = "V6056 - QUOTE PRO: EXCEL STYLE & INTEGRATED TOTALS"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # CSS UI
@@ -219,8 +219,14 @@ def clean_key(s): return safe_str(s).lower()
 
 # --- MỚI: HÀM LÀM SẠCH TUYỆT ĐỐI ĐỂ MATCHING ---
 def strict_match_key(val):
+    """
+    Loại bỏ mọi khoảng trắng (space, tab, newline), 
+    chuyển về lowercase để so sánh tuyệt đối.
+    Dùng cho việc matching 3 trường: Code, Name, Specs.
+    """
     if val is None: return ""
     s = str(val).lower()
+    # Loại bỏ toàn bộ whitespace
     return re.sub(r'\s+', '', s)
 
 def calc_eta(order_date_str, leadtime_val):
@@ -273,8 +279,8 @@ def recalculate_quote_logic(df, params):
     # Tính GAP
     df["GAP"] = df["Total price(VND)"] - df["AP total price(VND)"]
 
-    # Logic Profit: Profit = Total Price - Total Buying - (Các chi phí) + Payback
-    # Giả sử cấu trúc chi phí (các cột chi phí chứa giá trị VND đã nhập/tính)
+    # Logic: Các cột chi phí (EndUser, Buyer...) là giá trị tiền (VND).
+    # Người dùng có thể sửa trực tiếp. Ta chỉ tính tổng để ra Profit.
     
     gap_positive = df["GAP"].apply(lambda x: x * 0.6 if x > 0 else 0)
     
@@ -416,8 +422,10 @@ with t2:
                 # 4. Insert vào DB
                 if records:
                     chunk_ins = 100
+                    # Lấy item_code để xóa cũ
                     codes = [b['item_code'] for b in records if b['item_code']]
                     
+                    # Xóa cũ (Chia nhỏ để tránh lỗi request quá lớn)
                     if codes:
                         batch_size_del = 50
                         for k in range(0, len(codes), batch_size_del):
@@ -426,6 +434,7 @@ with t2:
                                  supabase.table("crm_purchases").delete().in_("item_code", batch_codes).execute()
                              except: pass
 
+                    # Insert mới
                     success_count = 0
                     for k in range(0, len(records), chunk_ins):
                         batch = records[k:k+chunk_ins]
@@ -603,7 +612,6 @@ with t3:
                     if config_loaded:
                         st.info(f"📊 **CẤU HÌNH CHI PHÍ (ĐÃ LOAD):** {config_loaded}")
                         if sel_quote_hist != st.session_state.loaded_quote_id:
-                            # Load params but don't force overwrite unless user wants to apply?
                             pass
                     else:
                         st.warning("⚠️ Báo giá này được tạo từ phiên bản cũ, chưa lưu cấu hình chi phí.")
@@ -729,15 +737,9 @@ with t3:
             
             df_init = pd.DataFrame(res)
             
-            # Apply initial params logic if we have data
             if not df_init.empty:
-                df_init["End user(%)"] = (df_init["AP price(VND)"] * df_init["Q'ty"]) * (params['end']/100)
-                df_init["Buyer(%)"] = (df_init["Unit price(VND)"] * df_init["Q'ty"]) * (params['buy']/100)
+                # Apply initial percentages as money values
                 df_init["Import tax(%)"] = df_init["Total buying price(VND)"] * (params['tax']/100)
-                df_init["VAT"] = (df_init["Unit price(VND)"] * df_init["Q'ty"]) * (params['vat']/100)
-                df_init["Management fee(%)"] = (df_init["Unit price(VND)"] * df_init["Q'ty"]) * (params['mgmt']/100)
-                df_init["Payback(%)"] = df_init["GAP"] * (params['pay']/100)
-                
                 st.session_state.quote_df = recalculate_quote_logic(df_init, params)
     
     # --- FORMULA BUTTONS ---
@@ -770,8 +772,8 @@ with t3:
         st.markdown('</div>', unsafe_allow_html=True)
     
     if not st.session_state.quote_df.empty:
-        # 1. DELETE BUTTON
-        if st.button("🗑️ Xóa dòng đã chọn (Thủ công)"):
+        # 1. DELETE BUTTON (Selected Rows)
+        if st.button("🗑️ Xóa dòng đã chọn"):
              st.session_state.quote_df = st.session_state.quote_df[st.session_state.quote_df["Xóa"] == False].reset_index(drop=True)
              st.session_state.quote_df["No"] = st.session_state.quote_df.index + 1
              st.rerun()
@@ -809,13 +811,13 @@ with t3:
         
         df_combined = pd.concat([df_display, pd.DataFrame([total_row_data])], ignore_index=True)
         
-        # Configure columns (D3 Format: %,.1f)
+        # Configure columns (format: 1,234.5)
         column_config = {
             "Xóa": st.column_config.CheckboxColumn("Xóa", width="small"),
             "Cảnh báo": st.column_config.TextColumn("Cảnh báo", width="small", disabled=True),
             "No": st.column_config.TextColumn("No", width="small", disabled=True),
             "Q'ty": st.column_config.NumberColumn("Q'ty", format="%d"),
-            "Exchange rate": st.column_config.NumberColumn("Exchange rate", format="%.2f"),
+            "Exchange rate": st.column_config.NumberColumn("Exchange rate", format="%,.2f"),
         }
         
         money_cols = ["Buying price(RMB)", "Total buying price(rmb)", "Buying price(VND)", 
@@ -824,31 +826,46 @@ with t3:
                       "Import tax(%)", "VAT", "Transportation", "Management fee(%)", "Payback(%)", "Profit(VND)"]
         
         for c in money_cols:
-             column_config[c] = st.column_config.NumberColumn(c, format="%.1f")
+             column_config[c] = st.column_config.NumberColumn(c, format="%,.1f")
 
         def style_combined(row):
             if row['No'] == 'TOTAL':
                 return ['background-color: #ffffcc; font-weight: bold; color: black'] * len(row)
             return [''] * len(row)
 
-        # DISPLAY EDITOR WITH TOOLBAR ICON (num_rows="dynamic")
+        # DISPLAY EDITOR WITH DYNAMIC ROWS (Trash Icon in Toolbar)
+        # Use a STATIC key to prevent losing checkbox state
+        # But we need to detect changes. 
         edited_df = st.data_editor(
             df_combined, 
             column_config=column_config,
             use_container_width=True, 
             height=600, 
-            key=f"editor_quote_{int(time.time())}", 
-            num_rows="dynamic", # Enables Add/Delete icons in Toolbar
+            key="quote_editor_main", 
+            num_rows="dynamic",
             hide_index=True 
         )
         
         # Detect Changes & Recalculate
-        # Ignore changes to TOTAL row
-        if not edited_df.equals(df_combined):
-             # Remove TOTAL row before saving state
-             df_data_only = edited_df[edited_df["No"] != "TOTAL"]
-             # Recalculate based on user edits
-             st.session_state.quote_df = recalculate_quote_logic(df_data_only, params)
+        # We check if edited_df is different from what we passed (df_combined)
+        # BUT we must ignore the TOTAL row in comparison if it's just re-calc difference?
+        # Actually, if user edits a cell, edited_df will have that new value.
+        # We take edited_df (minus TOTAL row), recalculate logic, and update state.
+        
+        df_new_data = edited_df[edited_df["No"] != "TOTAL"].reset_index(drop=True)
+        
+        # To avoid infinite loop, we only update state if data logically changed
+        # We compare df_new_data with st.session_state.quote_df
+        # Since recalculate_quote_logic will update dependent columns, we just need to pass the inputs.
+        
+        # Simple approach: On every interaction, update state and rerun.
+        # To prevent loop, check if df_new_data is different from current state inputs.
+        
+        # Check if values changed? 
+        # Streamlit reruns script on edit. So we just process edited_df.
+        
+        if not df_new_data.equals(st.session_state.quote_df):
+             st.session_state.quote_df = recalculate_quote_logic(df_new_data, params)
              st.rerun()
 
         # --- VIEW TOTAL PRICE ---
@@ -886,8 +903,8 @@ with t3:
                 hide_index=True,
                 column_config={
                     "Q'ty": st.column_config.NumberColumn("Q'ty", format="%d"),
-                    "Unit price(VND)": st.column_config.NumberColumn("Unit price(VND)", format="%.1f"),
-                    "Total price(VND)": st.column_config.NumberColumn("Total price(VND)", format="%.1f")
+                    "Unit price(VND)": st.column_config.NumberColumn("Unit price(VND)", format="%,.1f"),
+                    "Total price(VND)": st.column_config.NumberColumn("Total price(VND)", format="%,.1f")
                 }
             )
             
