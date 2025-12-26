@@ -895,7 +895,7 @@ with t3:
         # Append Total Row
         df_display = pd.concat([df_display, pd.DataFrame([total_row])], ignore_index=True)
         
-        # --- TẠO CALLBACK ĐỂ TỰ ĐỘNG CẬP NHẬT KHI CHỈNH SỬA ---
+        # --- SỬA LỖI: THAY ĐỔI CÁCH TÍNH HASH CHO DATAFRAME ---
         if 'last_edited' not in st.session_state:
             st.session_state.last_edited = None
         
@@ -925,8 +925,15 @@ with t3:
             num_rows="dynamic"
         )
         
-        # KIỂM TRA XEM CÓ THAY ĐỔI DỮ LIỆU KHÔNG
-        current_data_hash = str(hash(str(edited_df.values.tostring())))
+        # KIỂM TRA XEM CÓ THAY ĐỔI DỮ LIỆU KHÔNG - FIXED LỖI HASH
+        # Sử dụng pd.util.hash_pandas_object để tính hash an toàn
+        try:
+            # Tạo hash từ toàn bộ dataframe
+            current_data_hash = str(pd.util.hash_pandas_object(edited_df).sum())
+        except:
+            # Fallback nếu không dùng được hash_pandas_object
+            current_data_hash = str(hash(str(edited_df.to_dict())))
+        
         if st.session_state.get('last_edited_data_hash') != current_data_hash:
             st.session_state.last_edited_data_hash = current_data_hash
             
@@ -1274,7 +1281,7 @@ with t4:
                             supabase.table("db_supplier_orders").insert(db_recs).execute()
                             track_rec = {
                                 "po_no": f"{po_s_no}_{supp_name}", "partner": supp_name, "status": "Ordered", "order_type": "NCC",
-                                "last_update": datetime.now().strftime("%d/%m/Y"), 
+                                "last_update": datetime.now().strftime("%d/%m/%Y"), 
                                 "eta": group.iloc[0]["ETA"]
                             }
                             supabase.table("crm_tracking").insert([track_rec]).execute()
