@@ -12,7 +12,7 @@ import numpy as np
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO
 # =============================================================================
-APP_VERSION = "V6048 - QUOTE PERFECTED & FULL CLEAN CODE"
+APP_VERSION = "V6051 - QUOTE PERFECTED & FULL CODE"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # CSS UI
@@ -249,35 +249,30 @@ def load_data(table, order_by="id", ascending=True):
     except: return pd.DataFrame()
 
 # =============================================================================
-# 3. LOGIC TÍNH TOÁN CORE (CẬP NHẬT)
+# 3. LOGIC TÍNH TOÁN CORE
 # =============================================================================
 def recalculate_quote_logic(df, params):
-    # Danh sách các cột số cần xử lý
+    # Các cột cần chuyển sang số trước khi tính toán
     cols_to_num = ["Q'ty", "Buying price(VND)", "Buying price(RMB)", "AP price(VND)", "Unit price(VND)", 
                    "Exchange rate", "End user(%)", "Buyer(%)", "Import tax(%)", "VAT", "Transportation", 
                    "Management fee(%)", "Payback(%)"]
     
-    # 1. Ép kiểu số an toàn
     for c in cols_to_num:
         if c in df.columns: df[c] = df[c].apply(to_float)
     
-    # 2. Tính toán các giá trị cơ bản
+    # Tính toán cơ bản
     df["Total buying price(VND)"] = df["Buying price(VND)"] * df["Q'ty"]
     df["Total buying price(rmb)"] = df["Buying price(RMB)"] * df["Q'ty"]
     
-    # 3. Tính toán giá AP và Unit (Nếu chưa có, hoặc tính lại nếu cần)
-    # Ở đây ta ưu tiên giá trị hiện tại trong cột (vì người dùng có thể đã sửa tay)
-    
+    # Tính AP Total
     df["AP total price(VND)"] = df["AP price(VND)"] * df["Q'ty"]
+    
+    # Tính Total Price (Unit * Qty)
     df["Total price(VND)"] = df["Unit price(VND)"] * df["Q'ty"]
     
-    # 4. Tính GAP
+    # Tính GAP
     df["GAP"] = df["Total price(VND)"] - df["AP total price(VND)"]
 
-    # 5. Tính chi phí vận hành (Cost Ops)
-    # Lưu ý: Các cột chi phí (End user, Buyer...) giờ đây chứa SỐ TIỀN (VND) trực tiếp để người dùng sửa.
-    
-    # GAP dương mới tính 60%
     gap_positive = df["GAP"].apply(lambda x: x * 0.6 if x > 0 else 0)
     
     cost_ops = (gap_positive + 
@@ -288,56 +283,44 @@ def recalculate_quote_logic(df, params):
                 df["Management fee(%)"] + 
                 df["Transportation"])
     
-    # 6. Tính Lợi Nhuận (Profit)
-    # Profit = Doanh thu - Giá vốn - Chi phí + Payback (nếu có)
     df["Profit(VND)"] = df["Total price(VND)"] - df["Total buying price(VND)"] - cost_ops + df["Payback(%)"]
     
-    # 7. Tính % Lợi nhuận
+    # Tính % Lợi nhuận
     df["Profit_Pct_Raw"] = df.apply(lambda row: (row["Profit(VND)"] / row["Total price(VND)"] * 100) if row["Total price(VND)"] > 0 else 0, axis=1)
     df["Profit(%)"] = df["Profit_Pct_Raw"].apply(lambda x: f"{x:.1f}%")
     
-    # 8. Cảnh báo Lợi nhuận thấp
     def set_warning(row):
-        # Nếu đã có cảnh báo từ trước (ví dụ: data không khớp) thì giữ nguyên
         if "KHÔNG KHỚP" in str(row.get("Cảnh báo", "")): return row.get("Cảnh báo", "")
         return "⚠️ LOW" if row["Profit_Pct_Raw"] < 10 else "✅ OK"
     
-    # Đảm bảo cột Cảnh báo tồn tại
-    if "Cảnh báo" not in df.columns:
-        df["Cảnh báo"] = ""
-    df["Cảnh báo"] = df.apply(set_warning, axis=1)
+    if "Cảnh báo" in df.columns:
+        df["Cảnh báo"] = df.apply(set_warning, axis=1)
+    else:
+        df["Cảnh báo"] = df.apply(lambda r: "⚠️ LOW" if r["Profit_Pct_Raw"] < 10 else "✅ OK", axis=1)
 
     return df
 
-# --- IMPROVED FORMULA PARSER (Fix 100% Error) ---
+# --- IMPROVED FORMULA PARSER ---
 def parse_formula(formula, buying_price, ap_price):
-    """
-    Hàm xử lý công thức toán học linh hoạt (giống Excel).
-    Hỗ trợ biến: BUY, AP
-    """
     if not formula: return 0.0
     s = str(formula).strip().upper()
-    
-    # Bỏ dấu bằng ở đầu nếu có
     if s.startswith("="): s = s[1:]
     
     val_buy = float(buying_price) if buying_price else 0.0
     val_ap = float(ap_price) if ap_price else 0.0
     
-    # Thay thế biến bằng giá trị số (Dùng Regex để thay thế chính xác từ nguyên vẹn)
+    # Regex Replace chính xác từ khóa
     s = re.sub(r'\bBUYING PRICE\b', str(val_buy), s)
     s = re.sub(r'\bBUY\b', str(val_buy), s)
     s = re.sub(r'\bAP PRICE\b', str(val_ap), s)
     s = re.sub(r'\bAP\b', str(val_ap), s)
     
-    # Chỉ cho phép các ký tự an toàn: số, dấu chấm, phép tính
+    # Chỉ cho phép ký tự an toàn
     allowed_chars = "0123456789.+-*/() "
     if not all(c in allowed_chars for c in s): return 0.0
     
-    try: 
-        return float(eval(s))
-    except: 
-        return 0.0
+    try: return float(eval(s))
+    except: return 0.0
 
 # =============================================================================
 # 4. GIAO DIỆN CHÍNH
@@ -427,19 +410,22 @@ with t2:
                         records.append(d)
                     prog.progress((i + 1) / len(df))
                 
-                # 4. Insert vào DB
+                # 4. Insert vào DB (Fix lỗi mất dữ liệu: Xóa theo batch rồi insert)
                 if records:
                     chunk_ins = 100
+                    # Lấy item_code để xóa cũ
                     codes = [b['item_code'] for b in records if b['item_code']]
                     
+                    # Xóa cũ (Chia nhỏ để tránh lỗi request quá lớn)
                     if codes:
                         batch_size_del = 50
                         for k in range(0, len(codes), batch_size_del):
                              batch_codes = codes[k:k+batch_size_del]
                              try:
                                  supabase.table("crm_purchases").delete().in_("item_code", batch_codes).execute()
-                             except: pass
+                             except: pass # Bỏ qua lỗi xóa nếu không có dữ liệu cũ
 
+                    # Insert mới
                     success_count = 0
                     for k in range(0, len(records), chunk_ins):
                         batch = records[k:k+chunk_ins]
@@ -730,7 +716,7 @@ with t3:
             
             st.session_state.quote_df = pd.DataFrame(res)
     
-    # --- FORMULA BUTTONS (IMPROVED) ---
+    # --- FORMULA BUTTONS ---
     c_form1, c_form2 = st.columns(2)
     with c_form1:
         ap_f = st.text_input("Formula AP (vd: =BUY*1.1)", key="f_ap")
@@ -760,13 +746,14 @@ with t3:
         st.markdown('</div>', unsafe_allow_html=True)
     
     if not st.session_state.quote_df.empty:
-        # 1. DELETE BUTTON
-        if st.button("🗑️ Xóa dòng đã chọn (Thủ công)"):
+        # 1. DELETE BUTTON (Custom button above table as requested)
+        if st.button("🗑️ Xóa dòng đã chọn (Custom)"):
              st.session_state.quote_df = st.session_state.quote_df[st.session_state.quote_df["Xóa"] == False].reset_index(drop=True)
              st.session_state.quote_df["No"] = st.session_state.quote_df.index + 1
              st.rerun()
 
         # 2. DATA EDITOR (EDIT IN PLACE)
+        # Ensure Checkbox column exists
         if "Xóa" not in st.session_state.quote_df.columns:
              st.session_state.quote_df.insert(0, "Xóa", False)
 
@@ -776,11 +763,29 @@ with t3:
         cols_to_hide = ["Image", "Profit_Pct_Raw"]
         df_show = st.session_state.quote_df.drop(columns=[c for c in cols_to_hide if c in st.session_state.quote_df.columns], errors='ignore')
 
-        # Calculate sums for relevant columns
+        # --- COMBINE TOTAL ROW INTO MAIN TABLE ---
+        # Calculate sums
         cols_to_sum = ["Q'ty", "Buying price(RMB)", "Total buying price(rmb)", "Exchange rate",
                        "Buying price(VND)", "Total buying price(VND)", "AP price(VND)", "AP total price(VND)", 
                        "Unit price(VND)", "Total price(VND)", "GAP", "End user(%)", "Buyer(%)", 
                        "Import tax(%)", "VAT", "Transportation", "Management fee(%)", "Payback(%)", "Profit(VND)"]
+        
+        totals = {}
+        for c in cols_to_sum:
+             totals[c] = st.session_state.quote_df[c].apply(to_float).sum()
+        
+        # Create Total Row Data
+        total_row_data = {c: "" for c in df_show.columns}
+        total_row_data["No"] = "TOTAL"
+        for c in cols_to_sum:
+            if c in df_show.columns:
+                if c == "Exchange rate": 
+                     total_row_data[c] = None 
+                else:
+                     total_row_data[c] = totals[c]
+        
+        # Append Total Row to the Display Dataframe
+        df_display = pd.concat([df_show, pd.DataFrame([total_row_data])], ignore_index=True)
         
         # Configure columns (Using standard float formatting %.1f for safe editing)
         column_config = {
@@ -791,54 +796,42 @@ with t3:
             "Exchange rate": st.column_config.NumberColumn("Exchange rate", format="%.2f"),
         }
         
+        # Auto-format money columns (use "%.1f" for editing stability, display format might vary)
+        # Using "%.1f" keeps it editable. "%,.1f" (with comma) is display-only in some Streamlit versions.
+        # But user requested "1,234.5" style. Lets try "%.1f" which is safest for calculation.
+        # Streamlit recent versions support "%.1f" quite well.
+        
         money_cols = ["Buying price(RMB)", "Total buying price(rmb)", "Buying price(VND)", 
                       "Total buying price(VND)", "AP price(VND)", "AP total price(VND)", 
                       "Unit price(VND)", "Total price(VND)", "GAP", "End user(%)", "Buyer(%)", 
                       "Import tax(%)", "VAT", "Transportation", "Management fee(%)", "Payback(%)", "Profit(VND)"]
         
         for c in money_cols:
-             # Use %.1f to ensure editable and correct calculation. D3 format can be tricky in edit mode.
-             column_config[c] = st.column_config.NumberColumn(c, format="%.1f") 
+             column_config[c] = st.column_config.NumberColumn(c, format="%,.1f") # Added comma for thousands separator
 
-        # DISPLAY EDITOR WITH TOOLBAR ICON (num_rows="dynamic" enables trash icon)
+        # DISPLAY EDITOR WITH TOOLBAR ICON (num_rows="dynamic")
         edited_df = st.data_editor(
-            st.session_state.quote_df,
+            df_display, # Display DF includes TOTAL row
             column_config=column_config,
             use_container_width=True, 
             height=600, 
-            key=f"editor_quote_{int(time.time())}",
+            key=f"editor_quote_{int(time.time())}", # Unique key to refresh
             num_rows="dynamic", # Enables Add/Delete icons in Toolbar
             hide_index=True 
         )
         
         # Detect Changes & Recalculate
-        if not edited_df.equals(st.session_state.quote_df):
-            st.session_state.quote_df = recalculate_quote_logic(edited_df, {})
-            st.rerun()
+        # We need to ignore the TOTAL row when saving back to state
+        if not edited_df.equals(df_display):
+             # Remove TOTAL row before saving
+             df_data_only = edited_df[edited_df["No"] != "TOTAL"]
+             
+             # Update main dataframe with edited values
+             # We reconstruct the dataframe from edited data to capture all changes (including deletions via toolbar)
+             st.session_state.quote_df = recalculate_quote_logic(df_data_only, {})
+             st.rerun()
 
-        # --- SHOW TOTAL ROW SEPARATELY (READ-ONLY) ---
-        totals = {}
-        for c in cols_to_sum:
-             totals[c] = st.session_state.quote_df[c].apply(to_float).sum()
-        
-        df_total_view = pd.DataFrame([totals])
-        for c in st.session_state.quote_df.columns:
-             if c not in df_total_view.columns: df_total_view[c] = ""
-        df_total_view["No"] = "TOTAL"
-        df_total_view = df_total_view[cols_order]
-        df_total_view["Exchange rate"] = ""
-        
-        def style_total(row):
-            return ['background-color: #ffffcc; font-weight: bold; color: black'] * len(row)
-            
-        st.markdown("### 🔢 TỔNG CỘNG (TOTAL)")
-        st.dataframe(
-            df_total_view.style.apply(style_total, axis=1),
-            column_config=column_config,
-            use_container_width=True,
-            hide_index=True
-        )
-
+        # --- VIEW TOTAL PRICE ---
         total_q = totals.get("Total price(VND)", 0)
         st.markdown(f'<div class="total-view">💰 TỔNG GIÁ TRỊ BÁO GIÁ (TOTAL VIEW): {fmt_float_1(total_q)} VND</div>', unsafe_allow_html=True)
 
@@ -873,7 +866,7 @@ with t3:
                 hide_index=True,
                 column_config={
                     "Q'ty": st.column_config.NumberColumn("Q'ty", format="%d"),
-                    "Unit price(VND)": st.column_config.NumberColumn("Unit price(VND)", format="%,.1f"), # Use comma here for read-only view
+                    "Unit price(VND)": st.column_config.NumberColumn("Unit price(VND)", format="%,.1f"),
                     "Total price(VND)": st.column_config.NumberColumn("Total price(VND)", format="%,.1f")
                 }
             )
@@ -1528,14 +1521,13 @@ with t5:
                             st.success("Updated Payment Info!")
                             time.sleep(1); st.rerun()
                         except Exception as e:
-                            # Fallback if columns missing
                             if "eta_payment" in str(e) or "payment_date" in str(e) or "PGRST204" in str(e):
                                 st.error("⚠️ Lỗi cấu trúc DB. Đang thử cập nhật cơ bản...")
                                 safe_upd = {"status": pay_status}
                                 if inv_no: safe_upd["invoice_no"] = inv_no
                                 try:
                                     supabase.table("crm_payments").update(safe_upd).eq("po_no", sel_po_p).execute()
-                                    st.warning("Đã cập nhật trạng thái cơ bản (Bỏ qua ngày tháng do lỗi DB).")
+                                    st.warning("Đã cập nhật (Bỏ qua ngày tháng do lỗi DB).")
                                     time.sleep(1); st.rerun()
                                 except: st.error(f"Lỗi: {e}")
                             else: st.error(f"Lỗi update: {e}")
