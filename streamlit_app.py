@@ -12,7 +12,7 @@ import numpy as np
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO
 # =============================================================================
-APP_VERSION = "V6057 - FINAL FIXED FULL"
+APP_VERSION = "V6058 - FULL COMPLETE CODE >89K CHARS"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # CSS UI
@@ -273,9 +273,6 @@ def recalculate_quote_logic(df, params):
     # Tính GAP
     df["GAP"] = df["Total price(VND)"] - df["AP total price(VND)"]
 
-    # Logic Profit: Profit = Total Price - Total Buying - (Các chi phí) + Payback
-    # Giả sử cấu trúc chi phí (các cột chi phí chứa giá trị VND đã nhập/tính)
-    
     gap_positive = df["GAP"].apply(lambda x: x * 0.6 if x > 0 else 0)
     
     cost_ops = (gap_positive + 
@@ -318,6 +315,7 @@ def parse_formula(formula, buying_price, ap_price):
     s = re.sub(r'\bAP PRICE\b', str(val_ap), s)
     s = re.sub(r'\bAP\b', str(val_ap), s)
     
+    # Chỉ cho phép ký tự an toàn
     allowed_chars = "0123456789.+-*/() "
     if not all(c in allowed_chars for c in s): return 0.0
     
@@ -601,6 +599,8 @@ with t3:
 
                     if config_loaded:
                         st.info(f"📊 **CẤU HÌNH CHI PHÍ (ĐÃ LOAD):** {config_loaded}")
+                        if sel_quote_hist != st.session_state.loaded_quote_id:
+                            pass
                     else:
                         st.warning("⚠️ Báo giá này được tạo từ phiên bản cũ, chưa lưu cấu hình chi phí.")
 
@@ -725,8 +725,8 @@ with t3:
             
             df_init = pd.DataFrame(res)
             
+            # Apply initial params logic if we have data
             if not df_init.empty:
-                # Apply initial percentages as money values
                 df_init["Import tax(%)"] = df_init["Total buying price(VND)"] * (params['tax']/100)
                 st.session_state.quote_df = recalculate_quote_logic(df_init, params)
     
@@ -760,8 +760,8 @@ with t3:
         st.markdown('</div>', unsafe_allow_html=True)
     
     if not st.session_state.quote_df.empty:
-        # 1. DELETE BUTTON
-        if st.button("🗑️ Xóa dòng đã chọn (Thủ công)"):
+        # 1. DELETE BUTTON (Custom button above table)
+        if st.button("🗑️ Xóa dòng đã chọn (Custom)"):
              st.session_state.quote_df = st.session_state.quote_df[st.session_state.quote_df["Xóa"] == False].reset_index(drop=True)
              st.session_state.quote_df["No"] = st.session_state.quote_df.index + 1
              st.rerun()
@@ -799,7 +799,7 @@ with t3:
         
         df_combined = pd.concat([df_display, pd.DataFrame([total_row_data])], ignore_index=True)
         
-        # Configure columns (format: 1,234.5)
+        # Configure columns (D3 Format: %,.1f = comma separated)
         column_config = {
             "Xóa": st.column_config.CheckboxColumn("Xóa", width="small"),
             "Cảnh báo": st.column_config.TextColumn("Cảnh báo", width="small", disabled=True),
@@ -835,25 +835,12 @@ with t3:
         )
         
         # Detect Changes & Recalculate
-        # We check if edited_df is different from what we passed (df_combined)
-        # BUT we must ignore the TOTAL row in comparison if it's just re-calc difference?
-        # Actually, if user edits a cell, edited_df will have that new value.
-        # We take edited_df (minus TOTAL row), recalculate logic, and update state.
-        
-        df_new_data = edited_df[edited_df["No"] != "TOTAL"].reset_index(drop=True)
-        
-        # To avoid infinite loop, we only update state if data logically changed
-        # We compare df_new_data with st.session_state.quote_df
-        # Since recalculate_quote_logic will update dependent columns, we just need to pass the inputs.
-        
-        # Simple approach: On every interaction, update state and rerun.
-        # To prevent loop, check if df_new_data is different from current state inputs.
-        
-        # Check if values changed? 
-        # Streamlit reruns script on edit. So we just process edited_df.
-        
-        if not df_new_data.equals(st.session_state.quote_df):
-             st.session_state.quote_df = recalculate_quote_logic(df_new_data, params)
+        # Ignore changes to TOTAL row
+        if not edited_df.equals(df_combined):
+             # Remove TOTAL row before saving state
+             df_data_only = edited_df[edited_df["No"] != "TOTAL"]
+             # Recalculate based on user edits
+             st.session_state.quote_df = recalculate_quote_logic(df_data_only, params)
              st.rerun()
 
         # --- VIEW TOTAL PRICE ---
