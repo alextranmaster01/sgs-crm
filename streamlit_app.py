@@ -12,7 +12,7 @@ import numpy as np
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO
 # =============================================================================
-APP_VERSION = "V6043 - FINAL STABLE VERSION"
+APP_VERSION = "V6044 - QUOTE MATCHING & TOTALS"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # CSS UI
@@ -343,7 +343,7 @@ with t1:
     c2.markdown(f"<div class='card-3d bg-cost'><h3>CHI PHÍ NCC</h3><h1>{fmt_num(cost)}</h1></div>", unsafe_allow_html=True)
     c3.markdown(f"<div class='card-3d bg-profit'><h3>LỢI NHUẬN GỘP</h3><h1>{fmt_num(profit)}</h1></div>", unsafe_allow_html=True)
 
-# --- TAB 2: KHO HÀNG (ĐÃ SỬA LỖI MẤT DỮ LIỆU) ---
+# --- TAB 2: KHO HÀNG ---
 with t2:
     st.subheader("QUẢN LÝ KHO HÀNG (Excel Online)")
     c_imp, c_view = st.columns([1, 4])
@@ -709,17 +709,18 @@ with t3:
                 match = None
                 warning_msg = ""
                 
+                # --- UPDATED LOGIC: EXACT MATCH ALL 3 FIELDS ---
                 candidates = [
                     rec for rec in db_records 
-                    if clean_key(rec['item_code']) == clean_key(code_excel)
-                    and clean_key(rec['item_name']) == clean_key(name_excel)
-                    and clean_key(rec['specs']) == clean_key(specs_excel)
+                    if strict_match_key(rec['item_code']) == strict_match_key(code_excel)
+                    and strict_match_key(rec['item_name']) == strict_match_key(name_excel)
+                    and strict_match_key(rec['specs']) == strict_match_key(specs_excel)
                 ]
 
                 if candidates:
                     match = candidates[0]
                 else:
-                    warning_msg = "⚠️ KHÔNG KHỚP DATA"
+                    warning_msg = "⚠️ DATA KHÔNG KHỚP"
 
                 if match:
                     buy_rmb = to_float(match.get('buying_price_rmb', 0))
@@ -789,22 +790,30 @@ with t3:
         df_display = df_show.copy()
         
         # Calculate sums for relevant columns
-        cols_to_sum = ["Buying price(RMB)", "Total buying price(rmb)", "Buying price(VND)", 
-                       "Total buying price(VND)", "AP price(VND)", "AP total price(VND)", 
+        cols_to_sum = ["Q'ty", "Buying price(RMB)", "Total buying price(rmb)", "Exchange rate",
+                       "Buying price(VND)", "Total buying price(VND)", "AP price(VND)", "AP total price(VND)", 
                        "Unit price(VND)", "Total price(VND)", "GAP", "End user(%)", "Buyer(%)", 
                        "Import tax(%)", "VAT", "Transportation", "Management fee(%)", "Payback(%)", "Profit(VND)"]
         
-        total_row = {"No": "TOTAL", "Cảnh báo": "", "Item code": "", "Item name": "", "Specs": "", "Q'ty": 0}
+        total_row = {c: "" for c in df_display.columns}
+        total_row["No"] = "TOTAL"
+        
         for c in cols_to_sum:
             if c in df_display.columns:
                 total_val = df_display[c].apply(to_float).sum()
-                total_row[c] = fmt_float_2(total_val)
+                if c == "Exchange rate": 
+                     total_row[c] = "" # Dont sum exchange rate
+                else:
+                     total_row[c] = fmt_float_2(total_val)
         
         # Append Total Row to dataframe for display
         df_display = pd.concat([df_display, pd.DataFrame([total_row])], ignore_index=True)
 
+        def highlight_total_row(row):
+            return ['background-color: #ffffcc; font-weight: bold; color: black'] * len(row) if row['No'] == 'TOTAL' else [''] * len(row)
+
         edited_df = st.data_editor(
-            df_display,
+            df_display.style.apply(highlight_total_row, axis=1),
             column_config={
                 "Buying price(RMB)": st.column_config.TextColumn("Buying(RMB)", disabled=True),
                 "Buying price(VND)": st.column_config.TextColumn("Buying(VND)", disabled=True),
@@ -816,7 +825,12 @@ with t3:
         )
         
         # Sync edits back (Exclude Total Row)
-        df_data_only = edited_df[edited_df["No"] != "TOTAL"]
+        # Note: Streamlit Data Editor with Styler returns a generic DF, need to filter out TOTAL row
+        if isinstance(edited_df, pd.io.formats.style.Styler):
+             df_data_only = edited_df.data[edited_df.data["No"] != "TOTAL"]
+        else:
+             df_data_only = edited_df[edited_df["No"] != "TOTAL"]
+             
         # Update main dataframe with edited values (mapped back)
         for idx, row in df_data_only.iterrows():
              if idx < len(st.session_state.quote_df):
@@ -839,7 +853,19 @@ with t3:
             st.write("### 📋 BẢNG REVIEW")
             cols_review = ["No", "Item code", "Item name", "Specs", "Q'ty", "Unit price(VND)", "Total price(VND)", "Leadtime"]
             valid_cols = [c for c in cols_review if c in st.session_state.quote_df.columns]
-            st.dataframe(st.session_state.quote_df[valid_cols], use_container_width=True, hide_index=True)
+            
+            df_review = st.session_state.quote_df[valid_cols].copy()
+            
+            # Add Total Row to Review
+            total_rev = {c: "" for c in df_review.columns}
+            total_rev["No"] = "TOTAL"
+            total_rev["Q'ty"] = fmt_num(df_review["Q'ty"].apply(to_float).sum())
+            total_rev["Unit price(VND)"] = fmt_float_2(df_review["Unit price(VND)"].apply(to_float).sum())
+            total_rev["Total price(VND)"] = fmt_float_2(df_review["Total price(VND)"].apply(to_float).sum())
+            
+            df_review = pd.concat([df_review, pd.DataFrame([total_rev])], ignore_index=True)
+            
+            st.dataframe(df_review.style.apply(highlight_total_row, axis=1), use_container_width=True, hide_index=True)
             
             # Show Total in Review as well
             st.markdown(f'<div class="total-view">💰 TỔNG CỘNG: {fmt_float_2(total_q)} VND</div>', unsafe_allow_html=True)
@@ -1501,13 +1527,15 @@ with t5:
                             st.success("Updated Payment Info!")
                             time.sleep(1); st.rerun()
                         except Exception as e:
+                            # Fallback if columns missing
                             if "eta_payment" in str(e) or "payment_date" in str(e) or "PGRST204" in str(e):
                                 st.error("⚠️ Lỗi cấu trúc DB. Đang thử cập nhật cơ bản...")
+                                # Try minimizing payload
                                 safe_upd = {"status": pay_status}
                                 if inv_no: safe_upd["invoice_no"] = inv_no
                                 try:
                                     supabase.table("crm_payments").update(safe_upd).eq("po_no", sel_po_p).execute()
-                                    st.warning("Đã cập nhật (Bỏ qua ngày tháng do lỗi DB).")
+                                    st.warning("Đã cập nhật trạng thái cơ bản (Bỏ qua ngày tháng do lỗi DB).")
                                     time.sleep(1); st.rerun()
                                 except: st.error(f"Lỗi: {e}")
                             else: st.error(f"Lỗi update: {e}")
