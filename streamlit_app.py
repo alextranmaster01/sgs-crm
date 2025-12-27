@@ -12,7 +12,7 @@ import numpy as np
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO
 # =============================================================================
-APP_VERSION = "V6063 - FINAL FIX KEYERROR & PERFECTED"
+APP_VERSION = "V6065 - FINAL STABLE & COLORED TOTAL"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # CSS UI
@@ -52,6 +52,20 @@ st.markdown("""
         text-align: right;
         margin-top: 10px;
         border: 1px solid #4e4e4e;
+    }
+    
+    /* Style cho dòng tổng */
+    .total-row {
+        background-color: #ffffcc !important;
+        font-weight: bold !important;
+        color: #000000 !important;
+    }
+    
+    /* Style cho checkbox column */
+    div[data-testid="stDataFrame"] div[role="columnheader"]:first-child {
+        width: 50px !important;
+        min-width: 50px !important;
+        max-width: 50px !important;
     }
     </style>""", unsafe_allow_html=True)
 
@@ -94,19 +108,26 @@ def get_drive_service():
         return build('drive', 'v3', credentials=creds)
     except: return None
 
+# Hàm tạo folder đệ quy
 def get_or_create_folder_hierarchy(srv, path_list, parent_id):
     current_parent_id = parent_id
     for folder_name in path_list:
         q = f"'{current_parent_id}' in parents and name='{folder_name}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
         results = srv.files().list(q=q, fields="files(id)").execute().get('files', [])
+        
         if results:
             current_parent_id = results[0]['id']
         else:
-            file_metadata = {'name': folder_name, 'mimeType': 'application/vnd.google-apps.folder', 'parents': [current_parent_id]}
+            file_metadata = {
+                'name': folder_name,
+                'mimeType': 'application/vnd.google-apps.folder',
+                'parents': [current_parent_id]
+            }
             folder = srv.files().create(body=file_metadata, fields='id').execute()
             current_parent_id = folder.get('id')
             try: srv.permissions().create(fileId=current_parent_id, body={'role': 'reader', 'type': 'anyone'}).execute()
             except: pass
+            
     return current_parent_id
 
 def upload_to_drive_structured(file_obj, path_list, file_name):
@@ -189,6 +210,20 @@ def to_float(val):
         return float(nums[0]) if nums else 0.0
     except: return 0.0
 
+# --- CẬP NHẬT: ĐỊNH DẠNG SỐ VỚI 1 CHỮ SỐ SAU DẤU CHẤM ---
+def fmt_num_1decimal(x): 
+    try:
+        if x is None: return "0"
+        val = float(x)
+        if val.is_integer(): 
+            return "{:,.0f}".format(val)
+        else:
+            # Giữ 1 chữ số sau dấu thập phân
+            return "{:,.1f}".format(val)
+    except: 
+        return "0"
+
+# Giữ nguyên hàm fmt_num cho các phần khác
 def fmt_num(x): 
     try:
         if x is None: return "0"
@@ -199,15 +234,16 @@ def fmt_num(x):
             return s.rstrip('0').rstrip('.')
     except: return "0"
 
-def fmt_float_1(x):
+def fmt_float_2(x):
     try:
-        if x is None: return "0.0"
+        if x is None: return "0.00"
         val = float(x)
-        return "{:,.1f}".format(val)
-    except: return "0.0"
+        return "{:,.2f}".format(val)
+    except: return "0.00"
 
 def clean_key(s): return safe_str(s).lower()
 
+# --- MỚI: HÀM LÀM SẠCH TUYỆT ĐỐI ĐỂ MATCHING ---
 def strict_match_key(val):
     if val is None: return ""
     s = str(val).lower()
@@ -239,10 +275,10 @@ def load_data(table, order_by="id", ascending=True):
     except: return pd.DataFrame()
 
 # =============================================================================
-# 3. LOGIC TÍNH TOÁN CORE (FIXED AUTO-UPDATE)
+# 3. LOGIC TÍNH TOÁN CORE - CẬP NHẬT
 # =============================================================================
 def recalculate_quote_logic(df, params):
-    # Ép kiểu số an toàn cho các cột tính toán
+    # Chuyển các cột số về float
     cols_to_num = ["Q'ty", "Buying price(VND)", "Buying price(RMB)", "AP price(VND)", "Unit price(VND)", 
                    "Exchange rate", "End user(%)", "Buyer(%)", "Import tax(%)", "VAT", "Transportation", 
                    "Management fee(%)", "Payback(%)"]
@@ -255,14 +291,23 @@ def recalculate_quote_logic(df, params):
     # Tính toán cơ bản
     df["Total buying price(VND)"] = df["Buying price(VND)"] * df["Q'ty"]
     df["Total buying price(rmb)"] = df["Buying price(RMB)"] * df["Q'ty"]
+    
+    # Tính AP Total
     df["AP total price(VND)"] = df["AP price(VND)"] * df["Q'ty"]
+    
+    # Tính Total Price (Unit * Qty)
     df["Total price(VND)"] = df["Unit price(VND)"] * df["Q'ty"]
+    
+    # Tính GAP
     df["GAP"] = df["Total price(VND)"] - df["AP total price(VND)"]
 
     gap_positive = df["GAP"].apply(lambda x: x * 0.6 if x > 0 else 0)
     
-    # CỘNG TỔNG CHI PHÍ TỪ CÁC CỘT (Đã cho phép sửa tay)
-    # Lưu ý: Không dùng params để ghi đè ở đây, để tôn trọng giá trị người dùng nhập
+    # QUAN TRỌNG: CỘNG GỘP CÁC CỘT CHI PHÍ (GIÁ TRỊ HIỆN TẠI TRONG BẢNG)
+    # KHÔNG DÙNG params để tính lại các cột chi phí ở đây. 
+    # Việc tính toán chi phí từ % chỉ làm 1 lần lúc Matching hoặc nút Reset.
+    # Khi user sửa tay trên bảng, ta tôn trọng giá trị đó.
+    
     cost_ops = (gap_positive + 
                 df["End user(%)"] + 
                 df["Buyer(%)"] + 
@@ -271,6 +316,7 @@ def recalculate_quote_logic(df, params):
                 df["Management fee(%)"] + 
                 df["Transportation"])
     
+    # Tính lại Profit dựa trên tổng chi phí (cost_ops)
     df["Profit(VND)"] = df["Total price(VND)"] - df["Total buying price(VND)"] - cost_ops + df["Payback(%)"]
     
     # Tính % Lợi nhuận
@@ -295,7 +341,7 @@ def parse_formula(formula, buying_price, ap_price):
     val_buy = float(buying_price) if buying_price else 0.0
     val_ap = float(ap_price) if ap_price else 0.0
     
-    # Regex thay thế biến an toàn
+    # Regex Replace chính xác từ khóa
     s = re.sub(r'\bBUYING PRICE\b', str(val_buy), s)
     s = re.sub(r'\bBUY\b', str(val_buy), s)
     s = re.sub(r'\bAP PRICE\b', str(val_ap), s)
@@ -303,6 +349,7 @@ def parse_formula(formula, buying_price, ap_price):
     
     allowed_chars = "0123456789.+-*/() "
     if not all(c in allowed_chars for c in s): return 0.0
+    
     try: return float(eval(s))
     except: return 0.0
 
@@ -394,6 +441,7 @@ with t2:
                 if records:
                     chunk_ins = 100
                     codes = [b['item_code'] for b in records if b['item_code']]
+                    
                     if codes:
                         batch_size_del = 50
                         for k in range(0, len(codes), batch_size_del):
@@ -426,6 +474,7 @@ with t2:
             df_pur = df_pur.drop(columns=[c for c in cols_to_drop if c in df_pur.columns], errors='ignore')
 
             search = st.text_input("🔍 Tìm kiếm (Name, Code, Specs...)", key="search_pur")
+            
             if search:
                 mask = df_pur.astype(str).apply(lambda x: x.str.contains(search, case=False, na=False)).any(axis=1)
                 df_pur = df_pur[mask]
@@ -451,10 +500,11 @@ with t2:
             )
         else: st.info("Kho hàng trống.")
 
-# --- TAB 3: BÁO GIÁ (FINAL FIX) ---
+# --- TAB 3: BÁO GIÁ ---
 with t3:
     if 'quote_df' not in st.session_state: st.session_state.quote_df = pd.DataFrame()
     
+    # ------------------ TRA CỨU LỊCH SỬ ------------------
     with st.expander("🔎 TRA CỨU & TRẠNG THÁI BÁO GIÁ", expanded=False):
         c_src1, c_src2 = st.columns(2)
         search_kw = c_src1.text_input("Nhập từ khóa (Tên Khách, Quote No, Code, Name, Date)", help="Tìm kiếm trong lịch sử")
@@ -499,7 +549,7 @@ with t3:
                     results.append({
                         "Trạng thái": "✅ Đã báo giá", "Customer": r['customer'], "Date": r['date'],
                         "Item Code": r['item_code'], "Info": code_info, 
-                        "Unit Price": fmt_float_1(r['unit_price']),
+                        "Unit Price": fmt_float_2(r['unit_price']),
                         "Quote No": r['quote_no'], "PO No": po_found if po_found else "---"
                     })
             
@@ -523,7 +573,7 @@ with t3:
                                 results.append({
                                     "Trạng thái": "✅ Đã báo giá", "Customer": m['customer'], "Date": m['date'],
                                     "Item Code": m['item_code'], "Info": item_map.get(clean_key(m['item_code']), ""),
-                                    "Unit Price": fmt_float_1(m['unit_price']), "Quote No": m['quote_no'], "PO No": po_found
+                                    "Unit Price": fmt_float_2(m['unit_price']), "Quote No": m['quote_no'], "PO No": po_found
                                 })
                         else:
                             results.append({
@@ -549,6 +599,7 @@ with t3:
                 if len(parts) >= 3:
                     q_no = parts[2].replace("Quote: ", "").strip()
                     cust = parts[1].strip()
+                    if 'loaded_quote_id' not in st.session_state: st.session_state.loaded_quote_id = None
                     
                     hist_config_row = df_hist_idx[
                         (df_hist_idx['quote_no'] == q_no) & 
@@ -576,6 +627,7 @@ with t3:
                     if config_loaded:
                         st.info(f"📊 **CẤU HÌNH CHI PHÍ (ĐÃ LOAD):** {config_loaded}")
                         if sel_quote_hist != st.session_state.loaded_quote_id:
+                            # Load params but don't force overwrite unless user wants to apply?
                             pass
                     else:
                         st.warning("⚠️ Báo giá này được tạo từ phiên bản cũ, chưa lưu cấu hình chi phí.")
@@ -692,7 +744,7 @@ with t3:
                     "Unit price(VND)": 0.0, "Total price(VND)": 0.0,
                     "GAP": 0.0, 
                     "End user(%)": 0.0, "Buyer(%)": 0.0, 
-                    "Import tax(%)": 0.0, "VAT": 0.0, "Transportation": params['trans'],
+                    "Import tax(%)": 0.0, "VAT": 0.0, "Transportation": params['trans'], # Default Trans
                     "Management fee(%)": 0.0, "Payback(%)": 0.0, 
                     "Profit(VND)": 0.0, "Profit(%)": "0.0%",
                     "Supplier": supplier, "Image": image, "Leadtime": leadtime
@@ -762,24 +814,23 @@ with t3:
         for c in cols_to_sum:
              totals[c] = st.session_state.quote_df[c].apply(to_float).sum()
         
-        # Prepare Total Row Data
+        # Prepare Total Row Data (Separated from main DF for correct display)
         total_row_data = {c: "" for c in df_show.columns}
         total_row_data["No"] = "TOTAL"
         for c in cols_to_sum:
             if c in df_show.columns:
                 if c == "Exchange rate": 
-                     total_row_data[c] = ""
+                     total_row_data[c] = "" # Không tính tổng Rate
                 else:
                      total_row_data[c] = totals[c]
 
-        # Configure columns (Format: 1,234.5 using %.1f to be safe and compatible with comma sep manually applied or D3)
-        # Using "%.1f" format in Streamlit often renders as standard number. To enforce commas, use "%,.1f"
+        # Configure columns using special format %,.1f for thousands separators
         column_config = {
             "Delete": st.column_config.CheckboxColumn("Xóa", width="small"),
             "Cảnh báo": st.column_config.TextColumn("Cảnh báo", width="small", disabled=True),
             "No": st.column_config.TextColumn("No", width="small", disabled=True),
             "Q'ty": st.column_config.NumberColumn("Q'ty", format="%d"),
-            "Exchange rate": st.column_config.NumberColumn("Exchange rate", format="%,.1f"),
+            "Exchange rate": st.column_config.NumberColumn("Exchange rate", format="%,.1f"), # 1 decimal
         }
         
         money_cols = ["Buying price(RMB)", "Total buying price(rmb)", "Buying price(VND)", 
@@ -788,7 +839,7 @@ with t3:
                       "Import tax(%)", "VAT", "Transportation", "Management fee(%)", "Payback(%)", "Profit(VND)"]
         
         for c in money_cols:
-             column_config[c] = st.column_config.NumberColumn(c, format="%,.1f")
+             column_config[c] = st.column_config.NumberColumn(c, format="%,.1f") # 1 decimal + comma
 
         # DISPLAY MAIN EDITOR
         edited_df = st.data_editor(
@@ -797,16 +848,17 @@ with t3:
             use_container_width=True, 
             height=600, 
             key="quote_editor_main", 
-            num_rows="dynamic", # Adds Trash Icon
+            num_rows="dynamic", # Enables Add/Delete icons in Toolbar
             hide_index=True 
         )
         
-        # Detect Changes & Recalculate
+        # Detect Changes & Recalculate Logic
         if not edited_df.equals(st.session_state.quote_df):
-             st.session_state.quote_df = recalculate_quote_logic(edited_df, params)
+             # Recalculate using edited values (this respects user inputs for cost columns)
+             st.session_state.quote_df = recalculate_quote_logic(edited_df, {})
              st.rerun()
 
-        # --- SHOW TOTAL ROW SEPARATELY (But integrated visually) ---
+        # --- VIEW TOTAL ROW SEPARATELY (But integrated visually) ---
         df_total_view = pd.DataFrame([total_row_data])
         # Ensure 'Delete' column exists in total view to avoid KeyError during column reorder
         if "Delete" not in df_total_view.columns:
@@ -911,7 +963,6 @@ with t3:
             st.markdown('<div class="dark-btn">', unsafe_allow_html=True)
             if st.button("💾 LƯU LỊCH SỬ (QUAN TRỌNG ĐỂ LÀM PO)"):
                 if cust_name:
-                    # 1. CLEAN PARAMS BEFORE JSON DUMP (AVOID NaN IN CONFIG)
                     clean_params = {}
                     for k, v in params.items():
                         if isinstance(v, float) and (np.isnan(v) or np.isinf(v)): clean_params[k] = 0.0
@@ -920,13 +971,11 @@ with t3:
                     
                     recs = []
                     for r in st.session_state.quote_df.to_dict('records'):
-                        # --- FIX: DATA CLEANING (NaN -> 0.0) ---
                         val_qty = to_float(r["Q'ty"])
                         val_unit = to_float(r["Unit price(VND)"])
                         val_total = to_float(r["Total price(VND)"])
                         val_profit = to_float(r["Profit(VND)"])
                         
-                        # Ensure no NaNs exist (Supabase API Error fix)
                         if np.isnan(val_qty) or np.isinf(val_qty): val_qty = 0.0
                         if np.isnan(val_unit) or np.isinf(val_unit): val_unit = 0.0
                         if np.isnan(val_total) or np.isinf(val_total): val_total = 0.0
@@ -943,12 +992,9 @@ with t3:
                         })
                     
                     try:
-                        # --- TRY INSERT WITH config_data ---
                         supabase.table("crm_shared_history").insert(recs).execute()
                     except Exception as e:
-                        # --- FALLBACK IF DB SCHEMA IS MISSING 'config_data' COLUMN ---
                         if "config_data" in str(e) or "PGRST204" in str(e):
-                             # Remove 'config_data' key and retry insert
                              recs_fallback = [{k: v for k, v in r.items() if k != 'config_data'} for r in recs]
                              try:
                                  supabase.table("crm_shared_history").insert(recs_fallback).execute()
@@ -960,7 +1006,6 @@ with t3:
                              st.error(f"Lỗi lưu Supabase: {e}")
                              st.stop()
 
-                    # Save CSV Backup
                     try:
                         csv_buffer = io.BytesIO()
                         st.session_state.quote_df.to_csv(csv_buffer, index=False, encoding='utf-8-sig')
@@ -971,8 +1016,6 @@ with t3:
                         path_list_hist = ["QUOTATION_HISTORY", cust_name, curr_year, curr_month]
                         lnk, _ = upload_to_drive_structured(csv_buffer, path_list_hist, csv_name)
                         
-                        # --- NEW FEATURE: SAVE CONFIG FILE SEPARATELY TO DRIVE ---
-                        # Creates an Excel file with the percentage configuration
                         df_cfg = pd.DataFrame([clean_params])
                         cfg_buffer = io.BytesIO()
                         df_cfg.to_excel(cfg_buffer, index=False)
