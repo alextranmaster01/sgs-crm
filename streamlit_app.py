@@ -12,7 +12,7 @@ import numpy as np
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO
 # =============================================================================
-APP_VERSION = "V6065 - FINAL STABLE & COLORED TOTAL"
+APP_VERSION = "V6067 - FINAL FULL CODE (MERGED TOTAL)"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # CSS UI
@@ -52,20 +52,6 @@ st.markdown("""
         text-align: right;
         margin-top: 10px;
         border: 1px solid #4e4e4e;
-    }
-    
-    /* Style cho dòng tổng */
-    .total-row {
-        background-color: #ffffcc !important;
-        font-weight: bold !important;
-        color: #000000 !important;
-    }
-    
-    /* Style cho checkbox column */
-    div[data-testid="stDataFrame"] div[role="columnheader"]:first-child {
-        width: 50px !important;
-        min-width: 50px !important;
-        max-width: 50px !important;
     }
     </style>""", unsafe_allow_html=True)
 
@@ -108,7 +94,6 @@ def get_drive_service():
         return build('drive', 'v3', credentials=creds)
     except: return None
 
-# Hàm tạo folder đệ quy
 def get_or_create_folder_hierarchy(srv, path_list, parent_id):
     current_parent_id = parent_id
     for folder_name in path_list:
@@ -210,20 +195,6 @@ def to_float(val):
         return float(nums[0]) if nums else 0.0
     except: return 0.0
 
-# --- CẬP NHẬT: ĐỊNH DẠNG SỐ VỚI 1 CHỮ SỐ SAU DẤU CHẤM ---
-def fmt_num_1decimal(x): 
-    try:
-        if x is None: return "0"
-        val = float(x)
-        if val.is_integer(): 
-            return "{:,.0f}".format(val)
-        else:
-            # Giữ 1 chữ số sau dấu thập phân
-            return "{:,.1f}".format(val)
-    except: 
-        return "0"
-
-# Giữ nguyên hàm fmt_num cho các phần khác
 def fmt_num(x): 
     try:
         if x is None: return "0"
@@ -234,16 +205,15 @@ def fmt_num(x):
             return s.rstrip('0').rstrip('.')
     except: return "0"
 
-def fmt_float_2(x):
+def fmt_float_1(x):
     try:
-        if x is None: return "0.00"
+        if x is None: return "0.0"
         val = float(x)
-        return "{:,.2f}".format(val)
-    except: return "0.00"
+        return "{:,.1f}".format(val)
+    except: return "0.0"
 
 def clean_key(s): return safe_str(s).lower()
 
-# --- MỚI: HÀM LÀM SẠCH TUYỆT ĐỐI ĐỂ MATCHING ---
 def strict_match_key(val):
     if val is None: return ""
     s = str(val).lower()
@@ -275,17 +245,17 @@ def load_data(table, order_by="id", ascending=True):
     except: return pd.DataFrame()
 
 # =============================================================================
-# 3. LOGIC TÍNH TOÁN CORE - CẬP NHẬT
+# 3. LOGIC TÍNH TOÁN CORE (FIXED AUTO-UPDATE)
 # =============================================================================
 def recalculate_quote_logic(df, params):
-    # Chuyển các cột số về float
+    # Ép kiểu số an toàn cho các cột tính toán
     cols_to_num = ["Q'ty", "Buying price(VND)", "Buying price(RMB)", "AP price(VND)", "Unit price(VND)", 
                    "Exchange rate", "End user(%)", "Buyer(%)", "Import tax(%)", "VAT", "Transportation", 
                    "Management fee(%)", "Payback(%)"]
     
     for c in cols_to_num:
         if c in df.columns: 
-            # Dùng pd.to_numeric để xử lý cả string có dấu phẩy
+            # Dùng pd.to_numeric để xử lý số liệu
             df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0.0)
     
     # Tính toán cơ bản
@@ -304,10 +274,7 @@ def recalculate_quote_logic(df, params):
     gap_positive = df["GAP"].apply(lambda x: x * 0.6 if x > 0 else 0)
     
     # QUAN TRỌNG: CỘNG GỘP CÁC CỘT CHI PHÍ (GIÁ TRỊ HIỆN TẠI TRONG BẢNG)
-    # KHÔNG DÙNG params để tính lại các cột chi phí ở đây. 
-    # Việc tính toán chi phí từ % chỉ làm 1 lần lúc Matching hoặc nút Reset.
-    # Khi user sửa tay trên bảng, ta tôn trọng giá trị đó.
-    
+    # KHÔNG ghi đè bằng params để giữ lại các giá trị đã sửa tay
     cost_ops = (gap_positive + 
                 df["End user(%)"] + 
                 df["Buyer(%)"] + 
@@ -316,7 +283,7 @@ def recalculate_quote_logic(df, params):
                 df["Management fee(%)"] + 
                 df["Transportation"])
     
-    # Tính lại Profit dựa trên tổng chi phí (cost_ops)
+    # Tính lại Profit
     df["Profit(VND)"] = df["Total price(VND)"] - df["Total buying price(VND)"] - cost_ops + df["Payback(%)"]
     
     # Tính % Lợi nhuận
@@ -341,7 +308,6 @@ def parse_formula(formula, buying_price, ap_price):
     val_buy = float(buying_price) if buying_price else 0.0
     val_ap = float(ap_price) if ap_price else 0.0
     
-    # Regex Replace chính xác từ khóa
     s = re.sub(r'\bBUYING PRICE\b', str(val_buy), s)
     s = re.sub(r'\bBUY\b', str(val_buy), s)
     s = re.sub(r'\bAP PRICE\b', str(val_ap), s)
@@ -441,7 +407,6 @@ with t2:
                 if records:
                     chunk_ins = 100
                     codes = [b['item_code'] for b in records if b['item_code']]
-                    
                     if codes:
                         batch_size_del = 50
                         for k in range(0, len(codes), batch_size_del):
@@ -474,7 +439,6 @@ with t2:
             df_pur = df_pur.drop(columns=[c for c in cols_to_drop if c in df_pur.columns], errors='ignore')
 
             search = st.text_input("🔍 Tìm kiếm (Name, Code, Specs...)", key="search_pur")
-            
             if search:
                 mask = df_pur.astype(str).apply(lambda x: x.str.contains(search, case=False, na=False)).any(axis=1)
                 df_pur = df_pur[mask]
@@ -500,11 +464,10 @@ with t2:
             )
         else: st.info("Kho hàng trống.")
 
-# --- TAB 3: BÁO GIÁ ---
+# --- TAB 3: BÁO GIÁ (FINAL FIX) ---
 with t3:
     if 'quote_df' not in st.session_state: st.session_state.quote_df = pd.DataFrame()
     
-    # ------------------ TRA CỨU LỊCH SỬ ------------------
     with st.expander("🔎 TRA CỨU & TRẠNG THÁI BÁO GIÁ", expanded=False):
         c_src1, c_src2 = st.columns(2)
         search_kw = c_src1.text_input("Nhập từ khóa (Tên Khách, Quote No, Code, Name, Date)", help="Tìm kiếm trong lịch sử")
@@ -549,7 +512,7 @@ with t3:
                     results.append({
                         "Trạng thái": "✅ Đã báo giá", "Customer": r['customer'], "Date": r['date'],
                         "Item Code": r['item_code'], "Info": code_info, 
-                        "Unit Price": fmt_float_2(r['unit_price']),
+                        "Unit Price": fmt_float_1(r['unit_price']),
                         "Quote No": r['quote_no'], "PO No": po_found if po_found else "---"
                     })
             
@@ -573,7 +536,7 @@ with t3:
                                 results.append({
                                     "Trạng thái": "✅ Đã báo giá", "Customer": m['customer'], "Date": m['date'],
                                     "Item Code": m['item_code'], "Info": item_map.get(clean_key(m['item_code']), ""),
-                                    "Unit Price": fmt_float_2(m['unit_price']), "Quote No": m['quote_no'], "PO No": po_found
+                                    "Unit Price": fmt_float_1(m['unit_price']), "Quote No": m['quote_no'], "PO No": po_found
                                 })
                         else:
                             results.append({
@@ -627,7 +590,6 @@ with t3:
                     if config_loaded:
                         st.info(f"📊 **CẤU HÌNH CHI PHÍ (ĐÃ LOAD):** {config_loaded}")
                         if sel_quote_hist != st.session_state.loaded_quote_id:
-                            # Load params but don't force overwrite unless user wants to apply?
                             pass
                     else:
                         st.warning("⚠️ Báo giá này được tạo từ phiên bản cũ, chưa lưu cấu hình chi phí.")
@@ -728,8 +690,6 @@ with t3:
                     buy_rmb = 0; buy_vnd = 0; ex_rate = 0
                     supplier = ""; image = ""; leadtime = ""
                 
-                # Tính các giá trị mặc định từ params
-                
                 item = {
                     "Delete": False, 
                     "No": i+1, "Cảnh báo": warning_msg, 
@@ -753,8 +713,8 @@ with t3:
             
             df_init = pd.DataFrame(res)
             
-            # Apply initial params logic if we have data
             if not df_init.empty:
+                # Apply initial percentages logic based on params for new items
                 df_init["Import tax(%)"] = df_init["Total buying price(VND)"] * (params['tax']/100)
                 st.session_state.quote_df = recalculate_quote_logic(df_init, params)
     
@@ -788,7 +748,7 @@ with t3:
         st.markdown('</div>', unsafe_allow_html=True)
     
     if not st.session_state.quote_df.empty:
-        # 1. DELETE BUTTON (Custom button above table)
+        # 1. DELETE BUTTON
         if st.button("🗑️ Xóa dòng đã chọn"):
              st.session_state.quote_df = st.session_state.quote_df[st.session_state.quote_df["Delete"] == False].reset_index(drop=True)
              st.session_state.quote_df["No"] = st.session_state.quote_df.index + 1
@@ -820,17 +780,20 @@ with t3:
         for c in cols_to_sum:
             if c in df_show.columns:
                 if c == "Exchange rate": 
-                     total_row_data[c] = "" # Không tính tổng Rate
+                     total_row_data[c] = "" 
                 else:
                      total_row_data[c] = totals[c]
 
+        # Combine Main Data + Total Row
+        df_combined = pd.concat([df_show, pd.DataFrame([total_row_data])], ignore_index=True)
+        
         # Configure columns using special format %,.1f for thousands separators
         column_config = {
             "Delete": st.column_config.CheckboxColumn("Xóa", width="small"),
             "Cảnh báo": st.column_config.TextColumn("Cảnh báo", width="small", disabled=True),
             "No": st.column_config.TextColumn("No", width="small", disabled=True),
             "Q'ty": st.column_config.NumberColumn("Q'ty", format="%d"),
-            "Exchange rate": st.column_config.NumberColumn("Exchange rate", format="%,.1f"), # 1 decimal
+            "Exchange rate": st.column_config.NumberColumn("Exchange rate", format="%,.1f"),
         }
         
         money_cols = ["Buying price(RMB)", "Total buying price(rmb)", "Buying price(VND)", 
@@ -839,45 +802,41 @@ with t3:
                       "Import tax(%)", "VAT", "Transportation", "Management fee(%)", "Payback(%)", "Profit(VND)"]
         
         for c in money_cols:
-             column_config[c] = st.column_config.NumberColumn(c, format="%,.1f") # 1 decimal + comma
+             column_config[c] = st.column_config.NumberColumn(c, format="%,.1f")
 
-        # DISPLAY MAIN EDITOR
+        # DISPLAY MAIN EDITOR (without Total row for editing)
         edited_df = st.data_editor(
             st.session_state.quote_df, 
             column_config=column_config,
             use_container_width=True, 
             height=600, 
             key="quote_editor_main", 
-            num_rows="dynamic", # Enables Add/Delete icons in Toolbar
+            num_rows="dynamic",
             hide_index=True 
         )
         
-        # Detect Changes & Recalculate Logic
+        # Detect Changes & Recalculate
         if not edited_df.equals(st.session_state.quote_df):
-             # Recalculate using edited values (this respects user inputs for cost columns)
-             st.session_state.quote_df = recalculate_quote_logic(edited_df, {})
+             st.session_state.quote_df = recalculate_quote_logic(edited_df, params)
              st.rerun()
 
-        # --- VIEW TOTAL ROW SEPARATELY (But integrated visually) ---
+        # --- VIEW TOTAL ROW IMMEDIATELY BELOW ---
         df_total_view = pd.DataFrame([total_row_data])
-        # Ensure 'Delete' column exists in total view to avoid KeyError during column reorder
+        # Ensure Delete column exists in total view to match structure
         if "Delete" not in df_total_view.columns:
             df_total_view["Delete"] = False
-
-        # Reorder columns to match main dataframe
-        # Filter cols_order to match df_total_view columns (which are derived from df_show)
-        cols_total_view = [c for c in cols_order if c in df_total_view.columns]
-        df_total_view = df_total_view[cols_total_view]
         
+        # Sort columns to match main table
+        df_total_view = df_total_view[cols_order]
+
         def style_total_row(row):
             return ['background-color: #ffffcc; font-weight: bold; color: black'] * len(row)
             
-        st.markdown("### 🔢 BẢNG TỔNG HỢP (TOTAL ROW)")
         st.dataframe(
             df_total_view.style.apply(style_total_row, axis=1),
             use_container_width=True,
             hide_index=True,
-            column_config=column_config
+            column_config=column_config # Reuse formatting
         )
 
         st.divider()
@@ -917,8 +876,6 @@ with t3:
                 }
             )
             
-            # Show Total in Review as well
-            total_q = totals.get("Total price(VND)", 0)
             st.markdown(f'<div class="total-view">💰 TỔNG CỘNG: {fmt_num(total_q)} VND</div>', unsafe_allow_html=True)
             
             st.markdown('<div class="dark-btn">', unsafe_allow_html=True)
