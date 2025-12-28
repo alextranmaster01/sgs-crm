@@ -12,7 +12,7 @@ import numpy as np
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO (BLACKBOX)
 # =============================================================================
-APP_VERSION = "V6093 - FINAL STABLE: EXCEL FORMULA & TOTAL FIXED"
+APP_VERSION = "V6094 - FINAL STABLE: ROBUST FORMULA"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # CSS UI
@@ -214,7 +214,6 @@ def fmt_float_2(x):
         return "{:,.2f}".format(val)
     except: return "0.00"
 
-# --- [FIXED] THÊM HÀM FMT_NUM_1DECIMAL ĐỂ SỬA LỖI NAMEERROR ---
 def fmt_num_1decimal(x): 
     try:
         if x is None: return "0.0"
@@ -222,7 +221,6 @@ def fmt_num_1decimal(x):
         if val.is_integer(): 
             return "{:,.0f}".format(val)
         else:
-            # Giữ 1 chữ số sau dấu thập phân, có dấu phẩy ngăn cách
             return "{:,.1f}".format(val)
     except: 
         return "0.0"
@@ -260,7 +258,7 @@ def load_data(table, order_by="id", ascending=True):
     except: return pd.DataFrame()
 
 # =============================================================================
-# 3. LOGIC TÍNH TOÁN CORE (CẬP NHẬT: PROFIT FORMULA MỚI)
+# 3. LOGIC TÍNH TOÁN CORE (CẬP NHẬT: PROFIT FORMULA & FORMULA PARSER)
 # =============================================================================
 def recalculate_quote_logic(df, params):
     # Ép kiểu số an toàn
@@ -320,38 +318,36 @@ def recalculate_quote_logic(df, params):
 
     return df
 
-# --- FIXED FORMULA PARSER (EXCEL LIKE) ---
+# --- FIXED FORMULA PARSER (ROBUST EXCEL-LIKE) ---
 def parse_formula(formula, buying_price, ap_price):
     if not formula: return 0.0
-    # 1. Chuyển hết về in hoa để xử lý không phân biệt hoa thường
     s = str(formula).strip().upper()
     if s.startswith("="): s = s[1:]
     
     val_buy = float(buying_price) if buying_price else 0.0
     val_ap = float(ap_price) if ap_price else 0.0
     
-    # 2. Thay thế thông minh (Từ dài trước, ngắn sau)
-    # Ví dụ: Thay "BUYING PRICE" trước, sau đó mới thay "BUY" để tránh lỗi
+    # Regex Replace - Flexible for all cases
+    # Matches 'BUYING PRICE', 'BUYING', 'BUY' with optional spaces
+    s = re.sub(r'BUYING\s*PRICE', str(val_buy), s, flags=re.IGNORECASE)
+    s = re.sub(r'BUYING', str(val_buy), s, flags=re.IGNORECASE)
+    s = re.sub(r'BUY', str(val_buy), s, flags=re.IGNORECASE)
     
-    # Thay thế BUYING PRICE
-    s = s.replace("BUYING PRICE", str(val_buy))
-    s = s.replace("BUYING", str(val_buy))
-    s = re.sub(r'\bBUY\b', str(val_buy), s) # Dùng \b để chỉ thay từ BUY đứng riêng lẻ
-
-    # Thay thế AP PRICE
-    s = s.replace("AP PRICE", str(val_ap))
-    s = re.sub(r'\bAP\b', str(val_ap), s) # Dùng \b để chỉ thay từ AP đứng riêng lẻ
-
-    # 3. Xử lý dấu phẩy/chấm và phần trăm
+    # Matches 'AP PRICE', 'AP' with optional spaces
+    s = re.sub(r'AP\s*PRICE', str(val_ap), s, flags=re.IGNORECASE)
+    s = re.sub(r'AP', str(val_ap), s, flags=re.IGNORECASE)
+    
+    # Standardize
     s = s.replace(",", ".")
     s = s.replace("%", "/100")
     s = s.replace("X", "*")
     
-    # 4. Lọc ký tự an toàn
-    allowed_chars = "0123456789.+-*/() "
-    if not all(c in allowed_chars for c in s): return 0.0
+    # Remove all characters that are NOT: digits, dot, math operators, parens
+    s_clean = re.sub(r'[^0-9.+\-*/() ]', '', s)
     
-    try: return float(eval(s))
+    try: 
+        if not s_clean: return 0.0
+        return float(eval(s_clean))
     except: return 0.0
 
 # =============================================================================
@@ -380,7 +376,6 @@ with t2:
         st.markdown("**📥 Import Kho Hàng**")
         st.caption("Excel cột A->O")
         st.info("No, Code, Name, Specs, Qty, BuyRMB, TotalRMB, Rate, BuyVND, TotalVND, Leadtime, Supplier, Images, Type, N/U/O/C")
-        
         with st.expander("🛠️ Reset DB"):
             adm_pass = st.text_input("Pass", type="password", key="adm_inv")
             if st.button("⚠️ XÓA SẠCH"):
@@ -560,6 +555,7 @@ with t3:
             filtered_quotes = unique_quotes
             if search_kw: filtered_quotes = [q for q in unique_quotes if search_kw.lower() in q.lower()]
             sel_quote_hist = st.selectbox("Chọn báo giá cũ để xem chi tiết:", [""] + list(filtered_quotes))
+            
             if sel_quote_hist:
                 parts = sel_quote_hist.split(" | ")
                 if len(parts) >= 3:
@@ -673,6 +669,8 @@ with t3:
 
                 match = None
                 warning_msg = ""
+                
+                # Matching tức thì bằng Dictionary
                 key_check = (strict_match_key(code_excel), strict_match_key(name_excel), strict_match_key(specs_excel))
                 match = db_lookup.get(key_check)
 
@@ -763,7 +761,7 @@ with t3:
         cols_to_hide = ["Image", "Profit_Pct_Raw"]
         df_show = st.session_state.quote_df.drop(columns=[c for c in cols_to_hide if c in st.session_state.quote_df.columns], errors='ignore')
 
-        # Configure columns (Use %.1f for data editor - still numeric for calculation)
+        # Configure columns
         column_config = {
             "Select": st.column_config.CheckboxColumn("✅", width="small"),
             "Cảnh báo": st.column_config.TextColumn("Status", width="small", disabled=True),
@@ -811,6 +809,8 @@ with t3:
              st.rerun()
         
         # --- VIEW TOTAL ROW WITH YELLOW COLOR (USING ST.DATAFRAME) ---
+        st.write("▼ **TỔNG HỢP (TOTAL ROW):**")
+        
         # Calculate sums
         cols_to_sum = ["Q'ty", "Buying price(RMB)", "Total buying price(rmb)", "Buying price(VND)", 
                        "Total buying price(VND)", "AP price(VND)", "AP total price(VND)", 
@@ -1192,7 +1192,6 @@ with t5:
                             else: st.error(f"Lỗi update: {e}")
                     else: st.error("Chọn PO cần update.")
         else: st.info("Không có dữ liệu thanh toán khách hàng.")
-
     with t5_3:
         c_h1, c_h2 = st.columns([4, 1])
         with c_h1: st.markdown("#### 📜 LỊCH SỬ ĐƠN HÀNG (ĐÃ HOÀN THÀNH)")
