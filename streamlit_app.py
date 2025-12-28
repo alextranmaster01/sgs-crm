@@ -12,7 +12,7 @@ import numpy as np
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO (BLACKBOX)
 # =============================================================================
-APP_VERSION = "V6098 - FINAL STABLE: LAYOUT & FORMULA PERFECTED"
+APP_VERSION = "V6099 - FINAL STABLE: SQL GUIDE & TEMPLATE FIX"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # CSS UI
@@ -315,35 +315,33 @@ def recalculate_quote_logic(df, params):
 
     return df
 
-# --- FIXED FORMULA PARSER (ADVANCED) ---
+# --- FIXED FORMULA PARSER (ROBUST EXCEL-LIKE) ---
 def parse_formula(formula, buying_price, ap_price):
     if not formula: return 0.0
-    # Chuyển về chữ thường để dễ xử lý
-    s = str(formula).strip().lower()
+    s = str(formula).strip().lower() # Chuyển hết về chữ thường
     if s.startswith("="): s = s[1:]
     
     val_buy = float(buying_price) if buying_price else 0.0
     val_ap = float(ap_price) if ap_price else 0.0
     
-    # 1. Thay thế biến số (linh hoạt hoa thường)
-    # Dùng regex \b để khớp từ nguyên vẹn
+    # Regex Replace - Cực kỳ linh hoạt
+    # Thay thế biến 'buy' hoặc 'buying' hoặc 'buying price'
     s = re.sub(r'\bbuying\s*price\b', str(val_buy), s)
     s = re.sub(r'\bbuying\b', str(val_buy), s)
     s = re.sub(r'\bbuy\b', str(val_buy), s)
     
+    # Thay thế biến 'ap' hoặc 'ap price'
     s = re.sub(r'\bap\s*price\b', str(val_ap), s)
     s = re.sub(r'\bap\b', str(val_ap), s)
     
-    # 2. Thay thế phép toán linh hoạt
-    s = s.replace("x", "*") # x thành nhân
-    s = s.replace(":", "/") # : thành chia
-    s = s.replace(",", ".") # dấu phẩy thành chấm
-    s = s.replace("%", "/100") # % thành chia 100
+    # Các phép toán thay thế
+    s = s.replace(",", ".")
+    s = s.replace("%", "/100")
+    s = s.replace("x", "*") # Hỗ trợ chữ x làm dấu nhân
+    s = s.replace(":", "/") # Hỗ trợ dấu : làm dấu chia
     
-    # 3. Lọc ký tự an toàn (Chỉ giữ số và phép tính)
-    allowed = "0123456789.+-*/() "
-    if not all(c in allowed for c in s): return 0.0
-    
+    allowed_chars = "0123456789.+-*/() "
+    if not all(c in allowed_chars for c in s): return 0.0
     try: return float(eval(s))
     except: return 0.0
 
@@ -552,7 +550,6 @@ with t3:
             filtered_quotes = unique_quotes
             if search_kw: filtered_quotes = [q for q in unique_quotes if search_kw.lower() in q.lower()]
             sel_quote_hist = st.selectbox("Chọn báo giá cũ để xem chi tiết:", [""] + list(filtered_quotes))
-            
             if sel_quote_hist:
                 parts = sel_quote_hist.split(" | ")
                 if len(parts) >= 3:
@@ -565,7 +562,7 @@ with t3:
                         try: config_loaded = json.loads(hist_config_row['config_data'])
                         except: pass
                     
-                    # FALLBACK: Nếu không có config, không báo lỗi đỏ, chỉ cảnh báo nhẹ
+                    # FALLBACK: Nếu không có config, không báo lỗi đỏ
                     if config_loaded:
                         st.info(f"📊 **CẤU HÌNH CHI PHÍ (ĐÃ LOAD):** {config_loaded}")
                         if sel_quote_hist != st.session_state.loaded_quote_id:
@@ -643,10 +640,13 @@ with t3:
         if db.empty: st.error("Kho rỗng!")
         else:
             db_records = db.to_dict('records')
+            
+            # --- TỐI ƯU HÓA: TẠO DICTIONARY ĐỂ MATCHING NHANH HƠN ---
             db_lookup = {}
             for rec in db_records:
                 key = (strict_match_key(rec['item_code']), strict_match_key(rec['item_name']), strict_match_key(rec['specs']))
                 db_lookup[key] = rec
+                
             df_rfq = pd.read_excel(rfq, dtype=str).fillna("")
             res = []
             cols_found = {clean_key(c): c for c in df_rfq.columns}
@@ -705,7 +705,7 @@ with t3:
             if not df_init.empty:
                 st.session_state.quote_df = recalculate_quote_logic(df_init, params)
     
-    # --- FORMULA BUTTONS (FIXED INSTANT UPDATE) ---
+    # --- FORMULA BUTTONS (FIXED INSTANT UPDATE & INDEPENDENT) ---
     c_form1, c_form2 = st.columns(2)
     with c_form1:
         ap_f = st.text_input("Formula AP (vd: =buy*1.1)", key="f_ap")
@@ -716,8 +716,10 @@ with t3:
                 for idx in st.session_state.quote_df.index:
                     buy = to_float(st.session_state.quote_df.at[idx, "Buying price(VND)"])
                     ap = to_float(st.session_state.quote_df.at[idx, "AP price(VND)"])
+                    # Tính toán AP mới từ công thức
                     new_ap = parse_formula(st.session_state.f_ap, buy, ap)
                     st.session_state.quote_df.at[idx, "AP price(VND)"] = new_ap
+                # Recalculate logic sau khi AP thay đổi
                 st.session_state.quote_df = recalculate_quote_logic(st.session_state.quote_df, params)
 
         st.button("Apply AP Price", on_click=apply_ap_callback)
@@ -732,8 +734,10 @@ with t3:
                 for idx in st.session_state.quote_df.index:
                     buy = to_float(st.session_state.quote_df.at[idx, "Buying price(VND)"])
                     ap = to_float(st.session_state.quote_df.at[idx, "AP price(VND)"])
+                    # Tính toán Unit mới từ công thức
                     new_unit = parse_formula(st.session_state.f_unit, buy, ap)
                     st.session_state.quote_df.at[idx, "Unit price(VND)"] = new_unit
+                # Recalculate logic sau khi Unit thay đổi
                 st.session_state.quote_df = recalculate_quote_logic(st.session_state.quote_df, params)
 
         st.button("Apply Unit Price", on_click=apply_unit_callback)
@@ -748,6 +752,7 @@ with t3:
                 st.session_state.quote_df["No"] = range(1, len(st.session_state.quote_df) + 1)
                 st.rerun()
 
+        # Add checkbox "Select" column if missing
         if "Select" not in st.session_state.quote_df.columns:
             st.session_state.quote_df.insert(0, "Select", False)
 
@@ -756,6 +761,7 @@ with t3:
         cols_to_hide = ["Image", "Profit_Pct_Raw"]
         df_show = st.session_state.quote_df.drop(columns=[c for c in cols_to_hide if c in st.session_state.quote_df.columns], errors='ignore')
 
+        # Configure columns (Use %.1f for data editor - still numeric for calculation)
         column_config = {
             "Select": st.column_config.CheckboxColumn("✅", width="small"),
             "Cảnh báo": st.column_config.TextColumn("Status", width="small", disabled=True),
@@ -781,20 +787,22 @@ with t3:
             hide_index=True 
         )
         
-        # Logic Auto Update
+        # Logic Auto Update: Only recalculate if data changed
         input_cols = ["Q'ty", "Exchange rate", "AP price(VND)", "Unit price(VND)", 
                       "End user(%)", "Buyer(%)", "Import tax(%)", "VAT", 
                       "Transportation", "Management fee(%)", "Payback(%)"]
         
         needs_rerun = False
-        if len(edited_df) != len(st.session_state.quote_df): needs_rerun = True
+        if len(edited_df) != len(st.session_state.quote_df):
+             needs_rerun = True
         else:
              for col in input_cols:
                  if col in edited_df.columns:
                      v1 = pd.to_numeric(edited_df[col], errors='coerce').fillna(0).to_numpy()
                      v2 = pd.to_numeric(st.session_state.quote_df[col], errors='coerce').fillna(0).to_numpy()
                      if not np.allclose(v1, v2, rtol=1e-05, atol=1e-08):
-                         needs_rerun = True; break
+                         needs_rerun = True
+                         break
         
         if needs_rerun:
              st.session_state.quote_df = recalculate_quote_logic(edited_df, params)
@@ -871,8 +879,10 @@ with t3:
                 return [''] * len(row)
 
             st.dataframe(df_review.style.apply(highlight_review_total, axis=1), use_container_width=True, hide_index=True)
+            st.markdown(f'<div class="total-view">💰 TỔNG CỘNG: {fmt_num(totals.get("Total price(VND)", 0))} VND</div>', unsafe_allow_html=True)
             
             st.markdown('<div class="dark-btn">', unsafe_allow_html=True)
+            # EXPORT BUTTON WITH TEMPLATE SUPPORT
             if st.button("📤 XUẤT BÁO GIÁ (Excel)"):
                 if not cust_name: st.error("Chưa chọn khách hàng!")
                 else:
@@ -1202,6 +1212,7 @@ with t5:
                             else: st.error(f"Lỗi update: {e}")
                     else: st.error("Chọn PO cần update.")
         else: st.info("Không có dữ liệu thanh toán khách hàng.")
+
     with t5_3:
         c_h1, c_h2 = st.columns([4, 1])
         with c_h1: st.markdown("#### 📜 LỊCH SỬ ĐƠN HÀNG (ĐÃ HOÀN THÀNH)")
