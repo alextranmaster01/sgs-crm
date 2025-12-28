@@ -12,7 +12,7 @@ import numpy as np
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO (BLACKBOX)
 # =============================================================================
-APP_VERSION = "V6096 - FINAL STABLE: INSTANT FORMULA FIX"
+APP_VERSION = "V6097 - FINAL STABLE: HISTORY LAYOUT & EXCEL TEMPLATE"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # CSS UI
@@ -315,7 +315,7 @@ def recalculate_quote_logic(df, params):
 
     return df
 
-# --- FIXED FORMULA PARSER (ROBUST EXCEL-LIKE) ---
+# --- FIXED FORMULA PARSER ---
 def parse_formula(formula, buying_price, ap_price):
     if not formula: return 0.0
     s = str(formula).strip().upper()
@@ -324,7 +324,6 @@ def parse_formula(formula, buying_price, ap_price):
     val_buy = float(buying_price) if buying_price else 0.0
     val_ap = float(ap_price) if ap_price else 0.0
     
-    # Regex Replace - Flexible for all cases
     s = re.sub(r'BUYING\s*PRICE', str(val_buy), s, flags=re.IGNORECASE)
     s = re.sub(r'BUYING', str(val_buy), s, flags=re.IGNORECASE)
     s = re.sub(r'BUY', str(val_buy), s, flags=re.IGNORECASE)
@@ -335,7 +334,6 @@ def parse_formula(formula, buying_price, ap_price):
     
     allowed_chars = "0123456789.+-*/() "
     if not all(c in allowed_chars for c in s): return 0.0
-    
     try: return float(eval(s))
     except: return 0.0
 
@@ -544,7 +542,6 @@ with t3:
             filtered_quotes = unique_quotes
             if search_kw: filtered_quotes = [q for q in unique_quotes if search_kw.lower() in q.lower()]
             sel_quote_hist = st.selectbox("Chọn báo giá cũ để xem chi tiết:", [""] + list(filtered_quotes))
-            
             if sel_quote_hist:
                 parts = sel_quote_hist.split(" | ")
                 if len(parts) >= 3:
@@ -586,6 +583,47 @@ with t3:
                                   df_csv = pd.read_csv(fh, encoding='utf-8-sig', on_bad_lines='skip')
                                   st.success("Đã tải xong!")
                                   st.dataframe(df_csv, use_container_width=True)
+                                  
+                                  # --- [NEW] TOTAL ROW FOR HISTORY VIEW ---
+                                  st.write("▼ **TỔNG HỢP (HISTORY TOTAL):**")
+                                  
+                                  # Define columns to sum from history file
+                                  cols_to_sum_hist = ["Q'ty", "Buying price(RMB)", "Total buying price(rmb)", "Buying price(VND)", 
+                                                   "Total buying price(VND)", "AP price(VND)", "AP total price(VND)", 
+                                                   "Unit price(VND)", "Total price(VND)", "GAP", "End user(%)", "Buyer(%)", 
+                                                   "Import tax(%)", "VAT", "Transportation", "Management fee(%)", "Payback(%)", "Profit(VND)"]
+                                  
+                                  total_data_hist = {"Cảnh báo": "SUM"} 
+                                  
+                                  # Calculate totals
+                                  for c in cols_to_sum_hist:
+                                      if c in df_csv.columns:
+                                          total_data_hist[c] = df_csv[c].apply(to_float).sum()
+                                      else:
+                                          total_data_hist[c] = 0
+                                          
+                                  total_data_hist["Supplier"] = ""
+                                  
+                                  df_hist_total = pd.DataFrame([total_data_hist])
+                                  df_hist_total["Cảnh báo"] = "TOTAL"
+                                  
+                                  # Format
+                                  for c in cols_to_sum_hist:
+                                      if c == "Q'ty":
+                                           df_hist_total[c] = df_hist_total[c].apply(lambda x: "{:,.1f}".format(x))
+                                      else:
+                                           df_hist_total[c] = df_hist_total[c].apply(fmt_num)
+                                  
+                                  def highlight_total_yellow(row):
+                                      return ['background-color: #ffffcc; font-weight: bold; color: black'] * len(row)
+
+                                  st.dataframe(
+                                      df_hist_total.style.apply(highlight_total_yellow, axis=1), 
+                                      use_container_width=True, 
+                                      hide_index=True,
+                                      column_config={"Cảnh báo": st.column_config.TextColumn("SUM")}
+                                  )
+
                               except Exception as e: st.error(f"Lỗi đọc file CSV: {e}")
                           else: st.error("Không tải được file.")
                     elif not fid: st.warning(f"Không tìm thấy file chi tiết trên Drive (HIST_{q_no}...).")
@@ -658,7 +696,6 @@ with t3:
 
                 match = None
                 warning_msg = ""
-                # Matching tức thì bằng Dictionary
                 key_check = (strict_match_key(code_excel), strict_match_key(name_excel), strict_match_key(specs_excel))
                 match = db_lookup.get(key_check)
 
@@ -827,9 +864,15 @@ with t3:
 
         df_total_only = pd.DataFrame([total_row_data])
         
+        # Rename column value from SUM to TOTAL is handled by "Cảnh báo": "SUM"
+        df_total_only["Cảnh báo"] = "TOTAL"
+
         # Format strings for view (1.000,0)
-        for c in money_cols + ["Q'ty"]:
-            if c in df_total_only.columns: df_total_only[c] = df_total_only[c].apply(fmt_num_1decimal)
+        for c in cols_to_sum:
+            if c == "Q'ty":
+                 df_total_only[c] = df_total_only[c].apply(lambda x: "{:,.1f}".format(x))
+            elif c in df_total_only.columns: 
+                df_total_only[c] = df_total_only[c].apply(fmt_num)
         
         def highlight_total_yellow(row):
             return ['background-color: #ffffcc; font-weight: bold; color: black'] * len(row)
@@ -862,7 +905,7 @@ with t3:
             total_rev["Total price(VND)"] = df_review["Total price(VND)"].apply(to_float).sum()
             df_review = pd.concat([df_review, pd.DataFrame([total_rev])], ignore_index=True)
             
-            # Format numbers for Review (String with commas)
+            # Format numbers for Review
             for c in ["Q'ty", "Unit price(VND)", "Total price(VND)"]:
                 df_review[c] = df_review[c].apply(fmt_num)
 
@@ -874,25 +917,60 @@ with t3:
             st.markdown(f'<div class="total-view">💰 TỔNG CỘNG: {fmt_num(totals.get("Total price(VND)", 0))} VND</div>', unsafe_allow_html=True)
             
             st.markdown('<div class="dark-btn">', unsafe_allow_html=True)
-            # EXPORT BUTTON WITH DRIVE ERROR HANDLING
+            # EXPORT BUTTON WITH TEMPLATE SUPPORT
             if st.button("📤 XUẤT BÁO GIÁ (Excel)"):
                 if not cust_name: st.error("Chưa chọn khách hàng!")
                 else:
                     out = io.BytesIO()
                     try:
-                        with pd.ExcelWriter(out, engine='openpyxl') as writer:
-                            df_review.to_excel(writer, index=False, sheet_name='Quote')
+                        # 1. Tải Template AAA-QUOTATION
+                        df_tmpl = load_data("crm_templates")
+                        match_tmpl = df_tmpl[df_tmpl['template_name'].astype(str).str.contains("AAA-QUOTATION", case=False, na=False)]
+                        
+                        wb = None
+                        if not match_tmpl.empty:
+                             tmpl_id = match_tmpl.iloc[0]['file_id']
+                             fh = download_from_drive(tmpl_id)
+                             if fh:
+                                 wb = load_workbook(fh)
+                        
+                        # 2. Nếu không có template, tạo mới (Fallback)
+                        if wb is None:
+                             wb = Workbook()
+                        
+                        ws = wb.active
+                        
+                        # 3. Điền dữ liệu vào Template
+                        # Giả sử template bắt đầu từ dòng 11 (A11) như yêu cầu cũ
+                        start_row = 11
+                        first_leadtime = st.session_state.quote_df.iloc[0]['Leadtime'] if not st.session_state.quote_df.empty else ""
+                        ws['H8'] = safe_str(first_leadtime) # Leadtime ô H8
+                        
+                        for idx, row in st.session_state.quote_df.iterrows():
+                             r = start_row + idx
+                             # Map cột vào Excel (A: No, C: Code, D: Name, E: Specs, F: Qty, G: Unit, H: Total)
+                             ws[f'A{r}'] = row['No']
+                             ws[f'C{r}'] = row['Item code']
+                             ws[f'D{r}'] = row['Item name']
+                             ws[f'E{r}'] = row['Specs']
+                             ws[f'F{r}'] = to_float(row["Q'ty"])
+                             ws[f'G{r}'] = to_float(row["Unit price(VND)"])
+                             ws[f'H{r}'] = to_float(row["Total price(VND)"])
+                        
+                        wb.save(out)
                         out.seek(0)
+                        
                         curr_year = datetime.now().strftime("%Y"); curr_month = datetime.now().strftime("%b").upper()
                         fname = f"QUOTE_{quote_no}_{cust_name}_{int(time.time())}.xlsx"
                         path_list = ["QUOTATION_HISTORY", cust_name, curr_year, curr_month]
+                        
                         lnk = ""
                         try:
                             lnk, _ = upload_to_drive_structured(out, path_list, fname)
                             st.success(f"✅ Đã xuất báo giá: {fname}")
                             if lnk: st.markdown(f"📂 [Mở Folder]({lnk})", unsafe_allow_html=True)
-                        except Exception as e:
-                            st.warning(f"⚠️ Không thể upload lên Drive (Lỗi Token). Vui lòng tải trực tiếp.")
+                        except: pass
+                        
                         st.download_button(label="📥 Tải File Về Máy", data=out, file_name=fname, mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
                     except Exception as e: st.error(f"Lỗi xuất Excel: {e}")
             st.markdown('</div>', unsafe_allow_html=True)
