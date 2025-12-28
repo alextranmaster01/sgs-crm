@@ -12,7 +12,7 @@ import numpy as np
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO (BLACKBOX)
 # =============================================================================
-APP_VERSION = "V6095 - FINAL STABLE: FORMULA FIX & DATA TYPE SAFETY"
+APP_VERSION = "V6096 - FINAL STABLE: INSTANT FORMULA FIX"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # CSS UI
@@ -258,10 +258,9 @@ def load_data(table, order_by="id", ascending=True):
     except: return pd.DataFrame()
 
 # =============================================================================
-# 3. LOGIC TÍNH TOÁN CORE (CẬP NHẬT CHO TAB BÁO GIÁ)
+# 3. LOGIC TÍNH TOÁN CORE
 # =============================================================================
 def recalculate_quote_logic(df, params):
-    # Ép kiểu số an toàn tuyệt đối
     cols_to_num = ["Q'ty", "Buying price(VND)", "Buying price(RMB)", "AP price(VND)", "Unit price(VND)", 
                    "Exchange rate", "End user(%)", "Buyer(%)", "Import tax(%)", "VAT", "Transportation", 
                    "Management fee(%)", "Payback(%)"]
@@ -270,14 +269,12 @@ def recalculate_quote_logic(df, params):
         if c in df.columns: 
             df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0.0)
     
-    # Tính toán cơ bản
     df["Total buying price(VND)"] = df["Buying price(VND)"] * df["Q'ty"]
     df["Total buying price(rmb)"] = df["Buying price(RMB)"] * df["Q'ty"]
     df["AP total price(VND)"] = df["AP price(VND)"] * df["Q'ty"]
     df["Total price(VND)"] = df["Unit price(VND)"] * df["Q'ty"]
     df["GAP"] = df["Total price(VND)"] - df["AP total price(VND)"]
 
-    # Tính toán chi phí từ cấu hình
     pend = params.get('end', 0.0) / 100
     pbuy = params.get('buy', 0.0) / 100
     ptax = params.get('tax', 0.0) / 100
@@ -318,17 +315,16 @@ def recalculate_quote_logic(df, params):
 
     return df
 
-# --- FIXED & SAFE FORMULA PARSER ---
+# --- FIXED FORMULA PARSER (ROBUST EXCEL-LIKE) ---
 def parse_formula(formula, buying_price, ap_price):
     if not formula: return 0.0
     s = str(formula).strip().upper()
     if s.startswith("="): s = s[1:]
     
-    # Ép kiểu dữ liệu đầu vào để tránh lỗi type
     val_buy = float(buying_price) if buying_price else 0.0
     val_ap = float(ap_price) if ap_price else 0.0
     
-    # Regex flexibile
+    # Regex Replace - Flexible for all cases
     s = re.sub(r'BUYING\s*PRICE', str(val_buy), s, flags=re.IGNORECASE)
     s = re.sub(r'BUYING', str(val_buy), s, flags=re.IGNORECASE)
     s = re.sub(r'BUY', str(val_buy), s, flags=re.IGNORECASE)
@@ -336,10 +332,10 @@ def parse_formula(formula, buying_price, ap_price):
     s = re.sub(r'AP', str(val_ap), s, flags=re.IGNORECASE)
     s = s.replace(",", ".")
     s = s.replace("%", "/100")
-    s = s.replace("X", "*")
     
     allowed_chars = "0123456789.+-*/() "
     if not all(c in allowed_chars for c in s): return 0.0
+    
     try: return float(eval(s))
     except: return 0.0
 
@@ -369,7 +365,6 @@ with t2:
         st.markdown("**📥 Import Kho Hàng**")
         st.caption("Excel cột A->O")
         st.info("No, Code, Name, Specs, Qty, BuyRMB, TotalRMB, Rate, BuyVND, TotalVND, Leadtime, Supplier, Images, Type, N/U/O/C")
-        
         with st.expander("🛠️ Reset DB"):
             adm_pass = st.text_input("Pass", type="password", key="adm_inv")
             if st.button("⚠️ XÓA SẠCH"):
@@ -463,7 +458,7 @@ with t2:
             }, use_container_width=True, height=700, hide_index=True)
         else: st.info("Kho hàng trống.")
 
-# --- TAB 3: BÁO GIÁ (FINAL FIXED & STABLE) ---
+# --- TAB 3: BÁO GIÁ (FINAL FIXED) ---
 with t3:
     if 'quote_df' not in st.session_state: st.session_state.quote_df = pd.DataFrame()
     
@@ -549,6 +544,7 @@ with t3:
             filtered_quotes = unique_quotes
             if search_kw: filtered_quotes = [q for q in unique_quotes if search_kw.lower() in q.lower()]
             sel_quote_hist = st.selectbox("Chọn báo giá cũ để xem chi tiết:", [""] + list(filtered_quotes))
+            
             if sel_quote_hist:
                 parts = sel_quote_hist.split(" | ")
                 if len(parts) >= 3:
@@ -638,6 +634,7 @@ with t3:
         if db.empty: st.error("Kho rỗng!")
         else:
             db_records = db.to_dict('records')
+            
             # --- TỐI ƯU HÓA: TẠO DICTIONARY ĐỂ MATCHING NHANH HƠN ---
             db_lookup = {}
             for rec in db_records:
@@ -703,37 +700,44 @@ with t3:
             if not df_init.empty:
                 st.session_state.quote_df = recalculate_quote_logic(df_init, params)
     
-    # --- FORMULA BUTTONS (ONE-CLICK FIX) ---
+    # --- FORMULA BUTTONS (FIXED INSTANT UPDATE) ---
     c_form1, c_form2 = st.columns(2)
     with c_form1:
         ap_f = st.text_input("Formula AP (vd: =BUY*1.1)", key="f_ap")
         st.markdown('<div class="dark-btn">', unsafe_allow_html=True)
-        if st.button("Apply AP Price"):
+        
+        # USE CALLBACK FOR INSTANT UPDATE (BEFORE RERUN)
+        def apply_ap_callback():
             if not st.session_state.quote_df.empty:
-                df_calc = st.session_state.quote_df.copy()
-                for idx in df_calc.index:
-                    buy = df_calc.at[idx, "Buying price(VND)"]
-                    ap = df_calc.at[idx, "AP price(VND)"]
-                    # --- FIX: Ensure strict float conversion before passing to formula
-                    new_ap = parse_formula(ap_f, float(buy), float(ap))
-                    df_calc.at[idx, "AP price(VND)"] = new_ap
-                st.session_state.quote_df = recalculate_quote_logic(df_calc, params)
-                st.rerun() 
+                # Iterate and update DIRECTLY in session state
+                for idx in st.session_state.quote_df.index:
+                    buy = to_float(st.session_state.quote_df.at[idx, "Buying price(VND)"])
+                    ap = to_float(st.session_state.quote_df.at[idx, "AP price(VND)"])
+                    new_ap = parse_formula(st.session_state.f_ap, buy, ap)
+                    st.session_state.quote_df.at[idx, "AP price(VND)"] = new_ap
+                # Recalculate Logic immediately
+                st.session_state.quote_df = recalculate_quote_logic(st.session_state.quote_df, params)
+
+        st.button("Apply AP Price", on_click=apply_ap_callback)
         st.markdown('</div>', unsafe_allow_html=True)
+
     with c_form2:
         unit_f = st.text_input("Formula Unit (vd: =AP*1.2)", key="f_unit")
         st.markdown('<div class="dark-btn">', unsafe_allow_html=True)
-        if st.button("Apply Unit Price"):
+        
+        # USE CALLBACK FOR INSTANT UPDATE (BEFORE RERUN)
+        def apply_unit_callback():
             if not st.session_state.quote_df.empty:
-                df_calc = st.session_state.quote_df.copy()
-                for idx in df_calc.index:
-                    buy = df_calc.at[idx, "Buying price(VND)"]
-                    ap = df_calc.at[idx, "AP price(VND)"]
-                    # --- FIX: Ensure strict float conversion before passing to formula
-                    new_unit = parse_formula(unit_f, float(buy), float(ap))
-                    df_calc.at[idx, "Unit price(VND)"] = new_unit
-                st.session_state.quote_df = recalculate_quote_logic(df_calc, params)
-                st.rerun() 
+                # Iterate and update DIRECTLY in session state
+                for idx in st.session_state.quote_df.index:
+                    buy = to_float(st.session_state.quote_df.at[idx, "Buying price(VND)"])
+                    ap = to_float(st.session_state.quote_df.at[idx, "AP price(VND)"])
+                    new_unit = parse_formula(st.session_state.f_unit, buy, ap)
+                    st.session_state.quote_df.at[idx, "Unit price(VND)"] = new_unit
+                # Recalculate Logic immediately
+                st.session_state.quote_df = recalculate_quote_logic(st.session_state.quote_df, params)
+
+        st.button("Apply Unit Price", on_click=apply_unit_callback)
         st.markdown('</div>', unsafe_allow_html=True)
     
     if not st.session_state.quote_df.empty:
@@ -754,7 +758,7 @@ with t3:
         cols_to_hide = ["Image", "Profit_Pct_Raw"]
         df_show = st.session_state.quote_df.drop(columns=[c for c in cols_to_hide if c in st.session_state.quote_df.columns], errors='ignore')
 
-        # Configure columns
+        # Configure columns (Use %.1f for data editor - still numeric for calculation)
         column_config = {
             "Select": st.column_config.CheckboxColumn("✅", width="small"),
             "Cảnh báo": st.column_config.TextColumn("Status", width="small", disabled=True),
@@ -781,6 +785,7 @@ with t3:
         )
         
         # Logic Auto Update: Only recalculate if data changed
+        # Compare critical input columns with tolerance
         input_cols = ["Q'ty", "Exchange rate", "AP price(VND)", "Unit price(VND)", 
                       "End user(%)", "Buyer(%)", "Import tax(%)", "VAT", 
                       "Transportation", "Management fee(%)", "Payback(%)"]
