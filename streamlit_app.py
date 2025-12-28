@@ -12,7 +12,7 @@ import numpy as np
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO (BLACKBOX)
 # =============================================================================
-APP_VERSION = "V6094 - FINAL STABLE: ROBUST FORMULA"
+APP_VERSION = "V6095 - FINAL STABLE: FORMULA FIX & DATA TYPE SAFETY"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # CSS UI
@@ -258,10 +258,10 @@ def load_data(table, order_by="id", ascending=True):
     except: return pd.DataFrame()
 
 # =============================================================================
-# 3. LOGIC TÍNH TOÁN CORE (CẬP NHẬT: PROFIT FORMULA & FORMULA PARSER)
+# 3. LOGIC TÍNH TOÁN CORE (CẬP NHẬT CHO TAB BÁO GIÁ)
 # =============================================================================
 def recalculate_quote_logic(df, params):
-    # Ép kiểu số an toàn
+    # Ép kiểu số an toàn tuyệt đối
     cols_to_num = ["Q'ty", "Buying price(VND)", "Buying price(RMB)", "AP price(VND)", "Unit price(VND)", 
                    "Exchange rate", "End user(%)", "Buyer(%)", "Import tax(%)", "VAT", "Transportation", 
                    "Management fee(%)", "Payback(%)"]
@@ -318,36 +318,29 @@ def recalculate_quote_logic(df, params):
 
     return df
 
-# --- FIXED FORMULA PARSER (ROBUST EXCEL-LIKE) ---
+# --- FIXED & SAFE FORMULA PARSER ---
 def parse_formula(formula, buying_price, ap_price):
     if not formula: return 0.0
     s = str(formula).strip().upper()
     if s.startswith("="): s = s[1:]
     
+    # Ép kiểu dữ liệu đầu vào để tránh lỗi type
     val_buy = float(buying_price) if buying_price else 0.0
     val_ap = float(ap_price) if ap_price else 0.0
     
-    # Regex Replace - Flexible for all cases
-    # Matches 'BUYING PRICE', 'BUYING', 'BUY' with optional spaces
+    # Regex flexibile
     s = re.sub(r'BUYING\s*PRICE', str(val_buy), s, flags=re.IGNORECASE)
     s = re.sub(r'BUYING', str(val_buy), s, flags=re.IGNORECASE)
     s = re.sub(r'BUY', str(val_buy), s, flags=re.IGNORECASE)
-    
-    # Matches 'AP PRICE', 'AP' with optional spaces
     s = re.sub(r'AP\s*PRICE', str(val_ap), s, flags=re.IGNORECASE)
     s = re.sub(r'AP', str(val_ap), s, flags=re.IGNORECASE)
-    
-    # Standardize
     s = s.replace(",", ".")
     s = s.replace("%", "/100")
     s = s.replace("X", "*")
     
-    # Remove all characters that are NOT: digits, dot, math operators, parens
-    s_clean = re.sub(r'[^0-9.+\-*/() ]', '', s)
-    
-    try: 
-        if not s_clean: return 0.0
-        return float(eval(s_clean))
+    allowed_chars = "0123456789.+-*/() "
+    if not all(c in allowed_chars for c in s): return 0.0
+    try: return float(eval(s))
     except: return 0.0
 
 # =============================================================================
@@ -376,6 +369,7 @@ with t2:
         st.markdown("**📥 Import Kho Hàng**")
         st.caption("Excel cột A->O")
         st.info("No, Code, Name, Specs, Qty, BuyRMB, TotalRMB, Rate, BuyVND, TotalVND, Leadtime, Supplier, Images, Type, N/U/O/C")
+        
         with st.expander("🛠️ Reset DB"):
             adm_pass = st.text_input("Pass", type="password", key="adm_inv")
             if st.button("⚠️ XÓA SẠCH"):
@@ -469,7 +463,7 @@ with t2:
             }, use_container_width=True, height=700, hide_index=True)
         else: st.info("Kho hàng trống.")
 
-# --- TAB 3: BÁO GIÁ (FINAL FIXED) ---
+# --- TAB 3: BÁO GIÁ (FINAL FIXED & STABLE) ---
 with t3:
     if 'quote_df' not in st.session_state: st.session_state.quote_df = pd.DataFrame()
     
@@ -555,7 +549,6 @@ with t3:
             filtered_quotes = unique_quotes
             if search_kw: filtered_quotes = [q for q in unique_quotes if search_kw.lower() in q.lower()]
             sel_quote_hist = st.selectbox("Chọn báo giá cũ để xem chi tiết:", [""] + list(filtered_quotes))
-            
             if sel_quote_hist:
                 parts = sel_quote_hist.split(" | ")
                 if len(parts) >= 3:
@@ -645,7 +638,6 @@ with t3:
         if db.empty: st.error("Kho rỗng!")
         else:
             db_records = db.to_dict('records')
-            
             # --- TỐI ƯU HÓA: TẠO DICTIONARY ĐỂ MATCHING NHANH HƠN ---
             db_lookup = {}
             for rec in db_records:
@@ -669,7 +661,6 @@ with t3:
 
                 match = None
                 warning_msg = ""
-                
                 # Matching tức thì bằng Dictionary
                 key_check = (strict_match_key(code_excel), strict_match_key(name_excel), strict_match_key(specs_excel))
                 match = db_lookup.get(key_check)
@@ -712,7 +703,7 @@ with t3:
             if not df_init.empty:
                 st.session_state.quote_df = recalculate_quote_logic(df_init, params)
     
-    # --- FORMULA BUTTONS (FIXED) ---
+    # --- FORMULA BUTTONS (ONE-CLICK FIX) ---
     c_form1, c_form2 = st.columns(2)
     with c_form1:
         ap_f = st.text_input("Formula AP (vd: =BUY*1.1)", key="f_ap")
@@ -723,7 +714,8 @@ with t3:
                 for idx in df_calc.index:
                     buy = df_calc.at[idx, "Buying price(VND)"]
                     ap = df_calc.at[idx, "AP price(VND)"]
-                    new_ap = parse_formula(ap_f, buy, ap)
+                    # --- FIX: Ensure strict float conversion before passing to formula
+                    new_ap = parse_formula(ap_f, float(buy), float(ap))
                     df_calc.at[idx, "AP price(VND)"] = new_ap
                 st.session_state.quote_df = recalculate_quote_logic(df_calc, params)
                 st.rerun() 
@@ -737,7 +729,8 @@ with t3:
                 for idx in df_calc.index:
                     buy = df_calc.at[idx, "Buying price(VND)"]
                     ap = df_calc.at[idx, "AP price(VND)"]
-                    new_unit = parse_formula(unit_f, buy, ap)
+                    # --- FIX: Ensure strict float conversion before passing to formula
+                    new_unit = parse_formula(unit_f, float(buy), float(ap))
                     df_calc.at[idx, "Unit price(VND)"] = new_unit
                 st.session_state.quote_df = recalculate_quote_logic(df_calc, params)
                 st.rerun() 
@@ -1192,6 +1185,7 @@ with t5:
                             else: st.error(f"Lỗi update: {e}")
                     else: st.error("Chọn PO cần update.")
         else: st.info("Không có dữ liệu thanh toán khách hàng.")
+
     with t5_3:
         c_h1, c_h2 = st.columns([4, 1])
         with c_h1: st.markdown("#### 📜 LỊCH SỬ ĐƠN HÀNG (ĐÃ HOÀN THÀNH)")
