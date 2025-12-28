@@ -10,9 +10,9 @@ import mimetypes
 import numpy as np
 
 # =============================================================================
-# 1. CẤU HÌNH & KHỞI TẠO (BLACKBOX - GIỮ NGUYÊN)
+# 1. CẤU HÌNH & KHỞI TẠO (BLACKBOX)
 # =============================================================================
-APP_VERSION = "V6089 - FINAL OPTIMIZED: FAST MATCHING & STABLE"
+APP_VERSION = "V6090 - FINAL ULTRA FAST: NO FLICKER & INSTANT MATCHING"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # CSS UI
@@ -247,7 +247,7 @@ def load_data(table, order_by="id", ascending=True):
     except: return pd.DataFrame()
 
 # =============================================================================
-# 3. LOGIC TÍNH TOÁN CORE (FIXED AUTO-UPDATE & STABILITY)
+# 3. LOGIC TÍNH TOÁN CORE (TỐI ƯU HÓA AUTO-UPDATE)
 # =============================================================================
 def recalculate_quote_logic(df, params):
     # Ép kiểu số an toàn
@@ -268,7 +268,7 @@ def recalculate_quote_logic(df, params):
 
     gap_positive = df["GAP"].apply(lambda x: x * 0.6 if x > 0 else 0)
     
-    # CỘNG GỘP CHI PHÍ: Sử dụng giá trị TRỰC TIẾP từ các cột trong bảng (user đã nhập)
+    # CỘNG GỘP CHI PHÍ
     cost_ops = (gap_positive + 
                 df["End user(%)"] + 
                 df["Buyer(%)"] + 
@@ -520,7 +520,6 @@ with t3:
             filtered_quotes = unique_quotes
             if search_kw: filtered_quotes = [q for q in unique_quotes if search_kw.lower() in q.lower()]
             sel_quote_hist = st.selectbox("Chọn báo giá cũ để xem chi tiết:", [""] + list(filtered_quotes))
-            
             if sel_quote_hist:
                 parts = sel_quote_hist.split(" | ")
                 if len(parts) >= 3:
@@ -604,7 +603,6 @@ with t3:
             df["Management fee(%)"] = df["Total price(VND)"] * (params['mgmt']/100)
             df["Payback(%)"] = df["GAP"] * (params['pay']/100)
             df["Transportation"] = params['trans']
-            
             st.session_state.quote_df = recalculate_quote_logic(df, params)
             st.success("Đã cập nhật toàn bộ bảng theo cấu hình mới!")
             st.rerun()
@@ -762,8 +760,24 @@ with t3:
         )
         
         # Logic Auto Update: Only recalculate if data changed
-        if not edited_df.equals(st.session_state.quote_df):
-             # Update session state & Recalculate based on USER INPUT
+        # Anti-Flicker: Compare critical input columns with tolerance
+        input_cols = ["Q'ty", "Exchange rate", "AP price(VND)", "Unit price(VND)", 
+                      "End user(%)", "Buyer(%)", "Import tax(%)", "VAT", 
+                      "Transportation", "Management fee(%)", "Payback(%)"]
+        
+        needs_rerun = False
+        if len(edited_df) != len(st.session_state.quote_df):
+             needs_rerun = True
+        else:
+             for col in input_cols:
+                 if col in edited_df.columns:
+                     v1 = pd.to_numeric(edited_df[col], errors='coerce').fillna(0).to_numpy()
+                     v2 = pd.to_numeric(st.session_state.quote_df[col], errors='coerce').fillna(0).to_numpy()
+                     if not np.allclose(v1, v2, rtol=1e-05, atol=1e-08):
+                         needs_rerun = True
+                         break
+        
+        if needs_rerun:
              st.session_state.quote_df = recalculate_quote_logic(edited_df, params)
              st.rerun()
         
@@ -788,7 +802,7 @@ with t3:
         
         # Format strings for view (1.000,0)
         for c in money_cols + ["Q'ty"]:
-            if c in df_total_only.columns: df_total_only[c] = df_total_only[c].apply(fmt_num_1decimal)
+            if c in df_total_only.columns: df_total_only[c] = df_total_only[c].apply(fmt_num)
         
         def highlight_total_yellow(row):
             return ['background-color: #ffffcc; font-weight: bold; color: black'] * len(row)
@@ -1149,7 +1163,6 @@ with t5:
                             else: st.error(f"Lỗi update: {e}")
                     else: st.error("Chọn PO cần update.")
         else: st.info("Không có dữ liệu thanh toán khách hàng.")
-
     with t5_3:
         c_h1, c_h2 = st.columns([4, 1])
         with c_h1: st.markdown("#### 📜 LỊCH SỬ ĐƠN HÀNG (ĐÃ HOÀN THÀNH)")
