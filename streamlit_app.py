@@ -10,9 +10,9 @@ import mimetypes
 import numpy as np
 
 # =============================================================================
-# 1. CẤU HÌNH & KHỞI TẠO (BLACKBOX - GIỮ NGUYÊN)
+# 1. CẤU HÌNH & KHỞI TẠO (BLACKBOX)
 # =============================================================================
-APP_VERSION = "V6092 - FINAL: NEW PROFIT FORMULA"
+APP_VERSION = "V6093 - FINAL STABLE: EXCEL FORMULA & TOTAL FIXED"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # CSS UI
@@ -214,6 +214,19 @@ def fmt_float_2(x):
         return "{:,.2f}".format(val)
     except: return "0.00"
 
+# --- [FIXED] THÊM HÀM FMT_NUM_1DECIMAL ĐỂ SỬA LỖI NAMEERROR ---
+def fmt_num_1decimal(x): 
+    try:
+        if x is None: return "0.0"
+        val = float(x)
+        if val.is_integer(): 
+            return "{:,.0f}".format(val)
+        else:
+            # Giữ 1 chữ số sau dấu thập phân, có dấu phẩy ngăn cách
+            return "{:,.1f}".format(val)
+    except: 
+        return "0.0"
+
 def clean_key(s): return safe_str(s).lower()
 
 def strict_match_key(val):
@@ -266,7 +279,7 @@ def recalculate_quote_logic(df, params):
     df["Total price(VND)"] = df["Unit price(VND)"] * df["Q'ty"]
     df["GAP"] = df["Total price(VND)"] - df["AP total price(VND)"]
 
-    # 4. Tính toán các cột chi phí dựa trên % (Đảm bảo nhất quán)
+    # Tính toán chi phí từ cấu hình
     pend = params.get('end', 0.0) / 100
     pbuy = params.get('buy', 0.0) / 100
     ptax = params.get('tax', 0.0) / 100
@@ -281,13 +294,9 @@ def recalculate_quote_logic(df, params):
     df["Management fee(%)"] = df["Total price(VND)"] * pmgmt
     df["Payback(%)"] = df["GAP"] * ppay
     
-    # Transportation giữ nguyên giá trị user nhập
     if "Transportation" not in df.columns: df["Transportation"] = 0.0
     else: df["Transportation"] = pd.to_numeric(df["Transportation"], errors='coerce').fillna(0.0)
 
-    # --- CẬP NHẬT CÔNG THỨC PROFIT ---
-    # Profit = Total price - (Total Buying + GAP + End user + Buyer + Import tax + VAT + Transportation + Management fee) + Payback
-    
     deductions = (df["Total buying price(VND)"] + 
                   df["GAP"] + 
                   df["End user(%)"] + 
@@ -299,7 +308,6 @@ def recalculate_quote_logic(df, params):
     
     df["Profit(VND)"] = df["Total price(VND)"] - deductions + df["Payback(%)"]
     
-    # Tính % Lợi nhuận
     df["Profit_Pct_Raw"] = df.apply(lambda row: (row["Profit(VND)"] / row["Total price(VND)"] * 100) if row["Total price(VND)"] > 0 else 0, axis=1)
     df["Profit(%)"] = df["Profit_Pct_Raw"].apply(lambda x: f"{x:.1f}%")
     
@@ -312,25 +320,37 @@ def recalculate_quote_logic(df, params):
 
     return df
 
-# --- FIXED FORMULA PARSER ---
+# --- FIXED FORMULA PARSER (EXCEL LIKE) ---
 def parse_formula(formula, buying_price, ap_price):
     if not formula: return 0.0
+    # 1. Chuyển hết về in hoa để xử lý không phân biệt hoa thường
     s = str(formula).strip().upper()
     if s.startswith("="): s = s[1:]
     
     val_buy = float(buying_price) if buying_price else 0.0
     val_ap = float(ap_price) if ap_price else 0.0
     
-    s = re.sub(r'BUYING\s*PRICE', str(val_buy), s, flags=re.IGNORECASE)
-    s = re.sub(r'BUYING', str(val_buy), s, flags=re.IGNORECASE)
-    s = re.sub(r'BUY', str(val_buy), s, flags=re.IGNORECASE)
-    s = re.sub(r'AP\s*PRICE', str(val_ap), s, flags=re.IGNORECASE)
-    s = re.sub(r'AP', str(val_ap), s, flags=re.IGNORECASE)
+    # 2. Thay thế thông minh (Từ dài trước, ngắn sau)
+    # Ví dụ: Thay "BUYING PRICE" trước, sau đó mới thay "BUY" để tránh lỗi
+    
+    # Thay thế BUYING PRICE
+    s = s.replace("BUYING PRICE", str(val_buy))
+    s = s.replace("BUYING", str(val_buy))
+    s = re.sub(r'\bBUY\b', str(val_buy), s) # Dùng \b để chỉ thay từ BUY đứng riêng lẻ
+
+    # Thay thế AP PRICE
+    s = s.replace("AP PRICE", str(val_ap))
+    s = re.sub(r'\bAP\b', str(val_ap), s) # Dùng \b để chỉ thay từ AP đứng riêng lẻ
+
+    # 3. Xử lý dấu phẩy/chấm và phần trăm
     s = s.replace(",", ".")
     s = s.replace("%", "/100")
+    s = s.replace("X", "*")
     
+    # 4. Lọc ký tự an toàn
     allowed_chars = "0123456789.+-*/() "
     if not all(c in allowed_chars for c in s): return 0.0
+    
     try: return float(eval(s))
     except: return 0.0
 
@@ -360,6 +380,7 @@ with t2:
         st.markdown("**📥 Import Kho Hàng**")
         st.caption("Excel cột A->O")
         st.info("No, Code, Name, Specs, Qty, BuyRMB, TotalRMB, Rate, BuyVND, TotalVND, Leadtime, Supplier, Images, Type, N/U/O/C")
+        
         with st.expander("🛠️ Reset DB"):
             adm_pass = st.text_input("Pass", type="password", key="adm_inv")
             if st.button("⚠️ XÓA SẠCH"):
@@ -367,6 +388,7 @@ with t2:
                     supabase.table("crm_purchases").delete().neq("id", 0).execute()
                     st.success("Deleted!"); time.sleep(1); st.rerun()
                 else: st.error("Sai Pass!")
+        
         up_file = st.file_uploader("Upload Excel", type=["xlsx"], key="inv_up")
         if up_file and st.button("🚀 Import"):
             try:
@@ -452,7 +474,7 @@ with t2:
             }, use_container_width=True, height=700, hide_index=True)
         else: st.info("Kho hàng trống.")
 
-# --- TAB 3: BÁO GIÁ ---
+# --- TAB 3: BÁO GIÁ (FINAL FIXED) ---
 with t3:
     if 'quote_df' not in st.session_state: st.session_state.quote_df = pd.DataFrame()
     
@@ -651,8 +673,6 @@ with t3:
 
                 match = None
                 warning_msg = ""
-                
-                # Matching tức thì bằng Dictionary
                 key_check = (strict_match_key(code_excel), strict_match_key(name_excel), strict_match_key(specs_excel))
                 match = db_lookup.get(key_check)
 
@@ -743,7 +763,7 @@ with t3:
         cols_to_hide = ["Image", "Profit_Pct_Raw"]
         df_show = st.session_state.quote_df.drop(columns=[c for c in cols_to_hide if c in st.session_state.quote_df.columns], errors='ignore')
 
-        # Configure columns
+        # Configure columns (Use %.1f for data editor - still numeric for calculation)
         column_config = {
             "Select": st.column_config.CheckboxColumn("✅", width="small"),
             "Cảnh báo": st.column_config.TextColumn("Status", width="small", disabled=True),
@@ -791,8 +811,6 @@ with t3:
              st.rerun()
         
         # --- VIEW TOTAL ROW WITH YELLOW COLOR (USING ST.DATAFRAME) ---
-        st.write("▼ **TỔNG HỢP (TOTAL ROW):**")
-        
         # Calculate sums
         cols_to_sum = ["Q'ty", "Buying price(RMB)", "Total buying price(rmb)", "Buying price(VND)", 
                        "Total buying price(VND)", "AP price(VND)", "AP total price(VND)", 
@@ -811,7 +829,6 @@ with t3:
 
         df_total_only = pd.DataFrame([total_row_data])
         
-        # Rename column for display if needed
         # Format strings for view (1.000,0)
         for c in money_cols + ["Q'ty"]:
             if c in df_total_only.columns: df_total_only[c] = df_total_only[c].apply(fmt_num_1decimal)
@@ -859,6 +876,7 @@ with t3:
             st.markdown(f'<div class="total-view">💰 TỔNG CỘNG: {fmt_num(totals.get("Total price(VND)", 0))} VND</div>', unsafe_allow_html=True)
             
             st.markdown('<div class="dark-btn">', unsafe_allow_html=True)
+            # EXPORT BUTTON WITH DRIVE ERROR HANDLING
             if st.button("📤 XUẤT BÁO GIÁ (Excel)"):
                 if not cust_name: st.error("Chưa chọn khách hàng!")
                 else:
@@ -1174,6 +1192,7 @@ with t5:
                             else: st.error(f"Lỗi update: {e}")
                     else: st.error("Chọn PO cần update.")
         else: st.info("Không có dữ liệu thanh toán khách hàng.")
+
     with t5_3:
         c_h1, c_h2 = st.columns([4, 1])
         with c_h1: st.markdown("#### 📜 LỊCH SỬ ĐƠN HÀNG (ĐÃ HOÀN THÀNH)")
