@@ -12,7 +12,7 @@ import numpy as np
 # =============================================================================
 # 1. CẤU HÌNH & KHỞI TẠO (ENVIRONMENT & CONFIG)
 # =============================================================================
-APP_VERSION = "V6098 - FINAL STABLE (OAuth 2.0 Fixed)"
+APP_VERSION = "V6098 - FINAL STANDARD (Standard Files Integrated)"
 st.set_page_config(page_title=f"CRM {APP_VERSION}", layout="wide", page_icon="💎")
 
 # CSS UI/UX
@@ -1253,133 +1253,88 @@ with t5:
 with t6:
     tc, ts, tt = st.tabs(["KHÁCH HÀNG", "NHÀ CUNG CẤP", "TEMPLATE"])
     
-    # ---------------------------------------------------------
-    # TAB 6.1: KHÁCH HÀNG
-    # ---------------------------------------------------------
+    # 6.1 Khách hàng (Standard: short_name, eng_name->full_name, address_1->address, tax_code, payment_term, phone)
     with tc:
-        st.markdown("### 👥 Danh sách Khách Hàng")
-        try:
-            df = load_data("crm_customers")
-            st.data_editor(df, num_rows="dynamic", use_container_width=True, key="editor_cust")
-        except Exception as e:
-            st.error(f"Lỗi tải dữ liệu: {e}")
-
-        st.divider()
-        st.markdown("#### 📥 Import Khách Hàng")
-        st.caption("Excel cột A, B, C tương ứng: Short Name | Full Name | Address")
-        up = st.file_uploader("Import KH (Excel)", key="uck")
-        
-        if up and st.button("🚀 Bắt đầu Import KH"):
+        df = load_data("crm_customers"); st.data_editor(df, num_rows="dynamic", use_container_width=True)
+        up = st.file_uploader("Import KH (Standard Excel)", key="uck")
+        if up and st.button("Import KH"):
             try:
                 d = pd.read_excel(up, dtype=str).fillna("")
+                # Chuẩn hóa tên cột để mapping linh hoạt
+                d.columns = d.columns.str.strip().str.lower()
                 recs = []
-                seen_codes = set()
-                
-                for i, r in d.iterrows():
-                    s_name = safe_str(r.iloc[0]) if len(r) > 0 else ""
-                    f_name = safe_str(r.iloc[1]) if len(r) > 1 else ""
-                    addr = safe_str(r.iloc[2]) if len(r) > 2 else ""
-                    
-                    if s_name and s_name not in seen_codes:
-                        recs.append({
-                            "short_name": s_name, 
-                            "full_name": f_name, 
-                            "address": addr
-                        })
-                        seen_codes.add(s_name)
-                
-                if recs:
-                    supabase.table("crm_customers").upsert(recs, on_conflict="short_name").execute()
-                    st.success(f"✅ Đã xử lý thành công {len(recs)} dòng (đã tự động loại bỏ dòng trùng trong file)!")
-                    time.sleep(1); st.rerun()
-                else:
-                    st.warning("File Excel không có dữ liệu hợp lệ.")
-            
-            except Exception as e:
-                st.error(f"🛑 Lỗi Import: {e}")
+                for i,r in d.iterrows():
+                    # Logic Mapping: Ưu tiên tên cột chuẩn, Fallback index nếu file cũ
+                    s_name = safe_str(r.get('short_name', r.iloc[1] if len(r)>1 else "")) 
+                    # Nếu file chuẩn thì short_name ở cột 1 (index 1) vì cột 0 là 'no'
+                    if 'short_name' not in d.columns: s_name = safe_str(r.iloc[0]) # Fallback file đơn giản
 
-    # ---------------------------------------------------------
-    # TAB 6.2: NHÀ CUNG CẤP
-    # ---------------------------------------------------------
+                    f_name = safe_str(r.get('eng_name', r.get('full_name', r.iloc[1] if len(r)>1 else "")))
+                    addr = safe_str(r.get('address_1', r.get('address', r.iloc[2] if len(r)>2 else "")))
+                    
+                    # Các trường mở rộng (nếu có)
+                    tax = safe_str(r.get('tax_code', ''))
+                    phone = safe_str(r.get('phone', ''))
+                    pay_term = safe_str(r.get('payment_term', ''))
+                    contact = safe_str(r.get('contact_person', ''))
+
+                    if s_name:
+                        entry = {"short_name": s_name, "full_name": f_name, "address": addr}
+                        if tax: entry["tax_code"] = tax
+                        if phone: entry["phone"] = phone
+                        if pay_term: entry["payment_term"] = pay_term
+                        if contact: entry["contact_person"] = contact
+                        recs.append(entry)
+                        
+                if recs: supabase.table("crm_customers").upsert(recs, on_conflict="short_name").execute(); st.success("OK"); st.rerun()
+            except Exception as e: st.error(f"Lỗi: {e}")
+
+    # 6.2 Nhà cung cấp (Standard: short_name, eng_name->full_name, address_1->address)
     with ts:
-        st.markdown("### 🏭 Danh sách Nhà Cung Cấp")
-        try:
-            df = load_data("crm_suppliers")
-            st.data_editor(df, num_rows="dynamic", use_container_width=True, key="editor_supp")
-        except Exception as e:
-            st.error(f"Lỗi tải dữ liệu: {e}")
-
-        st.divider()
-        st.markdown("#### 📥 Import Nhà Cung Cấp")
-        st.caption("Excel cột A, B, C tương ứng: Short Name | Full Name | Address")
-        up = st.file_uploader("Import NCC (Excel)", key="usn")
-        
-        if up and st.button("🚀 Bắt đầu Import NCC"):
+        df = load_data("crm_suppliers"); st.data_editor(df, num_rows="dynamic", use_container_width=True)
+        up = st.file_uploader("Import NCC (Standard Excel)", key="usn")
+        if up and st.button("Import NCC"):
             try:
                 d = pd.read_excel(up, dtype=str).fillna("")
+                d.columns = d.columns.str.strip().str.lower()
                 recs = []
-                seen_codes = set()
-                
-                for i, r in d.iterrows():
-                    s_name = safe_str(r.iloc[0]) if len(r) > 0 else ""
-                    f_name = safe_str(r.iloc[1]) if len(r) > 1 else ""
-                    addr = safe_str(r.iloc[2]) if len(r) > 2 else ""
+                for i,r in d.iterrows():
+                    s_name = safe_str(r.get('short_name', r.iloc[0] if len(r)>0 else ""))
+                    f_name = safe_str(r.get('eng_name', r.get('full_name', r.iloc[1] if len(r)>1 else "")))
+                    addr = safe_str(r.get('address_1', r.get('address', r.iloc[2] if len(r)>2 else "")))
                     
-                    if s_name and s_name not in seen_codes:
-                        recs.append({
-                            "short_name": s_name, 
-                            "full_name": f_name, 
-                            "address": addr
-                        })
-                        seen_codes.add(s_name)
-                
-                if recs:
-                    supabase.table("crm_suppliers").upsert(recs, on_conflict="short_name").execute()
-                    st.success(f"✅ Đã xử lý thành công {len(recs)} dòng (đã tự động loại bỏ dòng trùng trong file)!")
-                    time.sleep(1); st.rerun()
-                else:
-                    st.warning("File Excel không có dữ liệu hợp lệ.")
-            
-            except Exception as e:
-                st.error(f"🛑 Lỗi Import: {e}")
+                    tax = safe_str(r.get('tax_code', ''))
+                    phone = safe_str(r.get('phone', ''))
+                    pay_term = safe_str(r.get('payment_term', ''))
+                    contact = safe_str(r.get('contact_person', ''))
 
-    # ---------------------------------------------------------
-    # TAB 6.3: TEMPLATE
-    # ---------------------------------------------------------
+                    if s_name:
+                        entry = {"short_name": s_name, "full_name": f_name, "address": addr}
+                        if tax: entry["tax_code"] = tax
+                        if phone: entry["phone"] = phone
+                        if pay_term: entry["payment_term"] = pay_term
+                        if contact: entry["contact_person"] = contact
+                        recs.append(entry)
+
+                if recs: supabase.table("crm_suppliers").upsert(recs, on_conflict="short_name").execute(); st.success("OK"); st.rerun()
+            except Exception as e: st.error(f"Lỗi: {e}")
+
+    # 6.3 Template
     with tt:
         st.write("Upload Template Excel")
         up_t = st.file_uploader("File Template (.xlsx)", type=["xlsx"])
         t_name = st.text_input("Tên Template (Nhập: AAA-QUOTATION)")
+        if up_t and t_name and st.button("Lưu"):
+            lnk, fid = upload_to_drive_simple(up_t, "CRM_TEMPLATES", f"TMP_{t_name}.xlsx")
+            if fid:
+                try: supabase.table("crm_templates").delete().eq("template_name", t_name).execute()
+                except: pass
+                supabase.table("crm_templates").insert([{"template_name": t_name, "file_id": fid, "last_updated": datetime.now().strftime("%d/%m/%Y")}]).execute(); st.success("OK"); st.rerun()
+            else: st.error(lnk)
         
-        if up_t and t_name and st.button("Lưu Template"):
-            try:
-                lnk, fid = upload_to_drive_simple(up_t, "CRM_TEMPLATES", f"TMP_{t_name}.xlsx")
-                if fid: 
-                    try: supabase.table("crm_templates").delete().eq("template_name", t_name).execute()
-                    except: pass
-                    
-                    supabase.table("crm_templates").insert([{
-                        "template_name": t_name, 
-                        "file_id": fid, 
-                        "last_updated": datetime.now().strftime("%d/%m/%Y")
-                    }]).execute()
-                    st.success("✅ OK"); time.sleep(1); st.rerun()
-                else:
-                    st.error(f"Lỗi upload: {lnk}")
-            except Exception as e:
-                st.error(f"Lỗi: {e}")
-                
-        try:
-            df_tmpl = load_data("crm_templates")
-            if not df_tmpl.empty:
-                df_tmpl["Xóa"] = False
-                edited_tmpl = st.data_editor(df_tmpl, column_config={"Xóa": st.column_config.CheckboxColumn("Xóa", default=False)}, use_container_width=True, key="editor_tmpl")
-                
-                if st.button("🗑️ Xóa Template đã chọn"):
-                    to_del = edited_tmpl[edited_tmpl["Xóa"] == True]
-                    if not to_del.empty:
-                        for _, r in to_del.iterrows():
-                            if 'id' in r: supabase.table("crm_templates").delete().eq("id", r["id"]).execute()
-                        st.success("Đã xóa!"); time.sleep(1); st.rerun()
-        except:
-            st.info("Chưa có template.")
+        df_t = load_data("crm_templates")
+        if not df_t.empty:
+            df_t["Del"] = False; ed = st.data_editor(df_t, column_config={"Del": st.column_config.CheckboxColumn(default=False)})
+            if st.button("Xóa Template"):
+                for _, r in ed[ed["Del"]].iterrows(): supabase.table("crm_templates").delete().eq("id", r["id"]).execute()
+                st.rerun()
