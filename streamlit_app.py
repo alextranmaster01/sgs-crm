@@ -1273,29 +1273,27 @@ with t6:
             try:
                 d = pd.read_excel(up, dtype=str).fillna("")
                 recs = []
-                seen_codes = set() # Dùng để kiểm tra trùng lặp trong file
+                seen_codes = set()
                 
                 for i, r in d.iterrows():
                     s_name = safe_str(r.iloc[0]) if len(r) > 0 else ""
                     f_name = safe_str(r.iloc[1]) if len(r) > 1 else ""
                     addr = safe_str(r.iloc[2]) if len(r) > 2 else ""
                     
-                    # Chỉ thêm nếu có Short Name và chưa từng xuất hiện trong file này
                     if s_name and s_name not in seen_codes:
                         recs.append({
                             "short_name": s_name, 
                             "full_name": f_name, 
                             "address": addr
                         })
-                        seen_codes.add(s_name) # Đánh dấu đã gặp
+                        seen_codes.add(s_name)
                 
                 if recs:
-                    # Upsert (Cập nhật nếu DB đã có, Thêm mới nếu chưa)
                     supabase.table("crm_customers").upsert(recs, on_conflict="short_name").execute()
                     st.success(f"✅ Đã xử lý thành công {len(recs)} dòng (đã tự động loại bỏ dòng trùng trong file)!")
                     time.sleep(1); st.rerun()
                 else:
-                    st.warning("File Excel không có dữ liệu hợp lệ hoặc toàn bộ bị trùng lặp.")
+                    st.warning("File Excel không có dữ liệu hợp lệ.")
             
             except Exception as e:
                 st.error(f"🛑 Lỗi Import: {e}")
@@ -1320,7 +1318,7 @@ with t6:
             try:
                 d = pd.read_excel(up, dtype=str).fillna("")
                 recs = []
-                seen_codes = set() # Set kiểm tra trùng
+                seen_codes = set()
                 
                 for i, r in d.iterrows():
                     s_name = safe_str(r.iloc[0]) if len(r) > 0 else ""
