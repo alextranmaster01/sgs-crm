@@ -1205,31 +1205,170 @@ with t5:
                      for _, r in rows_del_hist.iterrows(): supabase.table("crm_tracking").delete().eq("po_no", r["po_no"]).execute()
                      st.success("Đã xóa!"); time.sleep(1); st.rerun()
         else: st.info("Chưa có đơn hàng nào trong lịch sử.")
-
-# --- TAB 6: MASTER DATA ---
+# [cite_start]--- TAB 6: MASTER DATA [cite: 165-172] ---
 with t6:
     tc, ts, tt = st.tabs(["KHÁCH HÀNG", "NHÀ CUNG CẤP", "TEMPLATE"])
+    
+    # -----------------------------------------------
+    # 1. TAB KHÁCH HÀNG
+    # -----------------------------------------------
     with tc:
-        df = load_data("crm_customers"); st.data_editor(df, num_rows="dynamic", use_container_width=True)
-        up = st.file_uploader("Import KH", key="uck")
-        if up and st.button("Import KH"):
-            d = pd.read_excel(up, dtype=str).fillna("")
-            recs = []
-            for i,r in d.iterrows(): recs.append({"short_name": safe_str(r.iloc[0]), "full_name": safe_str(r.iloc[1]), "address": safe_str(r.iloc[2])})
-            supabase.table("crm_customers").insert(recs).execute(); st.rerun()
+        st.markdown("### 👥 Danh sách Khách Hàng")
+        df = load_data("crm_customers")
+        st.data_editor(df, num_rows="dynamic", use_container_width=True, key="editor_cust")
+        
+        st.divider()
+        st.markdown("#### 📥 Import Khách Hàng từ Excel")
+        st.caption("File Excel cần 3 cột theo thứ tự: Short Name | Full Name | Address")
+        up = st.file_uploader("Chọn file Excel Khách Hàng", type=["xlsx"], key="uck")
+        
+        if up and st.button("Bắt đầu Import KH"):
+            try:
+                d = pd.read_excel(up, dtype=str).fillna("")
+                recs = []
+                for i, r in d.iterrows():
+                    # Kiểm tra độ dài hàng để tránh lỗi index
+                    s_name = safe_str(r.iloc[0]) if len(r) > 0 else ""
+                    f_name = safe_str(r.iloc[1]) if len(r) > 1 else ""
+                    addr = safe_str(r.iloc[2]) if len(r) > 2 else ""
+                    
+                    if s_name: # Chỉ thêm nếu có tên viết tắt
+                        recs.append({
+                            "short_name": s_name, 
+                            "full_name": f_name, 
+                            "address": addr
+                        })
+                
+                if recs:
+                    # Dùng upsert để tránh lỗi trùng lặp (Cập nhật nếu short_name đã tồn tại)
+                    # Lưu ý: Cột short_name trong DB nên được set là Unique (Duy nhất)
+                    try:
+                        supabase.table("crm_customers").upsert(recs, on_conflict="short_name").execute()
+                        st.success(f"✅ Đã xử lý {len(recs)} dòng dữ liệu thành công!")
+                        time.sleep(1); st.rerun()
+                    except Exception as e_db:
+                        # Fallback về insert nếu upsert lỗi (do cấu hình DB) nhưng có try-catch để không sập app
+                        supabase.table("crm_customers").insert(recs).execute()
+                        st.success(f"✅ Đã thêm mới {len(recs)} khách hàng!")
+                        time.sleep(1); st.rerun()
+                else:
+                    st.warning("⚠️ File Excel không có dữ liệu hợp lệ (Cột đầu tiên không được để trống).")
+                    
+            except Exception as e:
+                # Hiển thị lỗi chi tiết thay vì sập app
+                if hasattr(e, 'details'): st.error(f"🛑 Lỗi Database: {e.details}")
+                elif hasattr(e, 'message'): st.error(f"🛑 Lỗi: {e.message}")
+                else: st.error(f"🛑 Lỗi không xác định: {e}")
+
+    # -----------------------------------------------
+    # 2. TAB NHÀ CUNG CẤP (NCC) - KHẮC PHỤC LỖI TẠI ĐÂY
+    # -----------------------------------------------
     with ts:
-        df = load_data("crm_suppliers"); st.data_editor(df, num_rows="dynamic", use_container_width=True)
-        up = st.file_uploader("Import NCC", key="usn")
-        if up and st.button("Import NCC"):
-            d = pd.read_excel(up, dtype=str).fillna("")
-            recs = []
-            for i,r in d.iterrows(): recs.append({"short_name": safe_str(r.iloc[0]), "full_name": safe_str(r.iloc[1]), "address": safe_str(r.iloc[2])})
-            supabase.table("crm_suppliers").insert(recs).execute(); st.rerun()
+        st.markdown("### 🏭 Danh sách Nhà Cung Cấp")
+        df = load_data("crm_suppliers")
+        st.data_editor(df, num_rows="dynamic", use_container_width=True, key="editor_supp")
+        
+        st.divider()
+        st.markdown("#### 📥 Import Nhà Cung Cấp từ Excel")
+        st.caption("File Excel cần 3 cột theo thứ tự: Short Name | Full Name | Address")
+        up = st.file_uploader("Chọn file Excel NCC", type=["xlsx"], key="usn")
+        
+        if up and st.button("Bắt đầu Import NCC"):
+            try:
+                d = pd.read_excel(up, dtype=str).fillna("")
+                recs = []
+                for i, r in d.iterrows():
+                    s_name = safe_str(r.iloc[0]) if len(r) > 0 else ""
+                    f_name = safe_str(r.iloc[1]) if len(r) > 1 else ""
+                    addr = safe_str(r.iloc[2]) if len(r) > 2 else ""
+                    
+                    if s_name:
+                        recs.append({
+                            "short_name": s_name, 
+                            "full_name": f_name, 
+                            "address": addr
+                        })
+                
+                if recs:
+                    # [FIX] Sử dụng Upsert & Try-Catch để xử lý lỗi trùng lặp
+                    try:
+                        # Thử update nếu trùng short_name
+                        supabase.table("crm_suppliers").upsert(recs, on_conflict="short_name").execute()
+                        st.success(f"✅ Đã cập nhật/thêm mới {len(recs)} nhà cung cấp!")
+                        time.sleep(1); st.rerun()
+                    except Exception as e_upsert:
+                        # Nếu lỗi upsert, thử insert thông thường và báo lỗi cụ thể nếu trùng
+                        if "duplicate key" in str(e_upsert) or "conflict" in str(e_upsert):
+                             st.error("⚠️ Lỗi trùng lặp dữ liệu: Một số mã NCC trong file đã tồn tại trên hệ thống.")
+                        else:
+                             st.error(f"🛑 Lỗi khi lưu vào Database: {e_upsert}")
+                else:
+                    st.warning("⚠️ File Excel rỗng hoặc cột đầu tiên (Short Name) bị trống.")
+            
+            except Exception as e:
+                # Bắt lỗi file Excel hoặc các lỗi khác
+                st.error(f"🛑 Đã xảy ra lỗi khi đọc file: {e}")
+
+    # -----------------------------------------------
+    # 3. TAB TEMPLATE
+    # -----------------------------------------------
     with tt:
-        st.write("Upload Template Excel")
-        up_t = st.file_uploader("File Template (.xlsx)", type=["xlsx"])
-        t_name = st.text_input("Tên Template (Nhập: AAA-QUOTATION)")
+        st.write("### 📂 Quản lý File Mẫu (Template)")
+        up_t = st.file_uploader("Upload File Template (.xlsx)", type=["xlsx"])
+        t_name = st.text_input("Tên Template (Lưu ý: Nhập chính xác 'AAA-QUOTATION' cho mẫu báo giá)", placeholder="Ví dụ: AAA-QUOTATION")
+        
         if up_t and t_name and st.button("Lưu Template"):
-            lnk, fid = upload_to_drive_simple(up_t, "CRM_TEMPLATES", f"TMP_{t_name}.xlsx")
-            if fid: supabase.table("crm_templates").insert([{"template_name": t_name, "file_id": fid, "last_updated": datetime.now().strftime("%d/%m/%Y")}]).execute(); st.success("OK"); st.rerun()
-        st.dataframe(load_data("crm_templates"))
+            with st.spinner("Đang upload lên Google Drive..."):
+                lnk, fid = upload_to_drive_simple(up_t, "CRM_TEMPLATES", f"TMP_{t_name}.xlsx")
+                if fid: 
+                    # Xóa template cũ cùng tên nếu có để tránh rác DB
+                    try: supabase.table("crm_templates").delete().eq("template_name", t_name).execute()
+                    except: pass
+                    
+                    # Insert mới
+                    supabase.table("crm_templates").insert([{
+                        "template_name": t_name, 
+                        "file_id": fid, 
+                        "last_updated": datetime.now().strftime("%d/%m/%Y")
+                    }]).execute()
+                    st.success("✅ Đã lưu template thành công!")
+                    time.sleep(1); st.rerun()
+                else:
+                    st.error("❌ Lỗi upload file lên Google Drive. Vui lòng kiểm tra kết nối.")
+        
+        st.divider()
+        df_tmpl = load_data("crm_templates")
+        
+        if not df_tmpl.empty:
+            df_tmpl["Xóa"] = False
+            edited_tmpl = st.data_editor(
+                df_tmpl, 
+                column_config={
+                    "Xóa": st.column_config.CheckboxColumn("Xóa", default=False),
+                    "file_id": st.column_config.TextColumn("File ID", disabled=True),
+                    "template_name": st.column_config.TextColumn("Tên Template"),
+                    "last_updated": st.column_config.TextColumn("Ngày cập nhật")
+                },
+                use_container_width=True,
+                hide_index=True,
+                key="editor_tmpl"
+            )
+            
+            if st.button("🗑️ Xóa Template đã chọn"):
+                to_del = edited_tmpl[edited_tmpl["Xóa"] == True]
+                if not to_del.empty:
+                    for _, r in to_del.iterrows():
+                        if 'id' in r: supabase.table("crm_templates").delete().eq("id", r["id"]).execute()
+                        elif 'template_name' in r: supabase.table("crm_templates").delete().eq("template_name", r["template_name"]).execute()
+                    st.success("✅ Đã xóa template!"); time.sleep(1); st.rerun()
+            
+            with st.expander("🛠️ Admin Zone: Xóa Hết Template"):
+                adm_tmpl = st.text_input("Nhập password admin để xóa toàn bộ:", type="password", key="pass_del_tmpl")
+                if st.button("⚠️ XÁC NHẬN XÓA HẾT"):
+                    if adm_tmpl == "admin":
+                        supabase.table("crm_templates").delete().neq("id", 0).execute()
+                        st.success("🗑️ Đã xóa sạch dữ liệu template!"); time.sleep(1); st.rerun()
+                    else:
+                        st.error("Sai mật khẩu!")
+        else:
+            st.info("Chưa có template nào được lưu.")
