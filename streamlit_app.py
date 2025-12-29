@@ -1273,34 +1273,32 @@ with t6:
             try:
                 d = pd.read_excel(up, dtype=str).fillna("")
                 recs = []
+                seen_codes = set() # Dùng để kiểm tra trùng lặp trong file
+                
                 for i, r in d.iterrows():
-                    # Lấy dữ liệu an toàn
                     s_name = safe_str(r.iloc[0]) if len(r) > 0 else ""
                     f_name = safe_str(r.iloc[1]) if len(r) > 1 else ""
                     addr = safe_str(r.iloc[2]) if len(r) > 2 else ""
                     
-                    if s_name:  # Chỉ thêm nếu có Short Name
+                    # Chỉ thêm nếu có Short Name và chưa từng xuất hiện trong file này
+                    if s_name and s_name not in seen_codes:
                         recs.append({
                             "short_name": s_name, 
                             "full_name": f_name, 
                             "address": addr
                         })
+                        seen_codes.add(s_name) # Đánh dấu đã gặp
                 
                 if recs:
-                    # Dùng upsert thay vì insert để tránh lỗi trùng lặp
+                    # Upsert (Cập nhật nếu DB đã có, Thêm mới nếu chưa)
                     supabase.table("crm_customers").upsert(recs, on_conflict="short_name").execute()
-                    st.success(f"✅ Đã cập nhật thành công {len(recs)} khách hàng!")
+                    st.success(f"✅ Đã xử lý thành công {len(recs)} dòng (đã tự động loại bỏ dòng trùng trong file)!")
                     time.sleep(1); st.rerun()
                 else:
-                    st.warning("File Excel không có dữ liệu hợp lệ (Cột A - Short Name bị trống).")
+                    st.warning("File Excel không có dữ liệu hợp lệ hoặc toàn bộ bị trùng lặp.")
             
             except Exception as e:
-                # Hiển thị lỗi chi tiết
-                err_msg = str(e)
-                if "duplicate key" in err_msg:
-                    st.error("⚠️ Lỗi trùng lặp dữ liệu: Mã khách hàng đã tồn tại. Vui lòng chạy lệnh SQL tôi cung cấp để bật tính năng tự động cập nhật (Upsert).")
-                else:
-                    st.error(f"🛑 Lỗi Import: {err_msg}")
+                st.error(f"🛑 Lỗi Import: {e}")
 
     # ---------------------------------------------------------
     # TAB 6.2: NHÀ CUNG CẤP
@@ -1322,32 +1320,30 @@ with t6:
             try:
                 d = pd.read_excel(up, dtype=str).fillna("")
                 recs = []
+                seen_codes = set() # Set kiểm tra trùng
+                
                 for i, r in d.iterrows():
                     s_name = safe_str(r.iloc[0]) if len(r) > 0 else ""
                     f_name = safe_str(r.iloc[1]) if len(r) > 1 else ""
                     addr = safe_str(r.iloc[2]) if len(r) > 2 else ""
                     
-                    if s_name:
+                    if s_name and s_name not in seen_codes:
                         recs.append({
                             "short_name": s_name, 
                             "full_name": f_name, 
                             "address": addr
                         })
+                        seen_codes.add(s_name)
                 
                 if recs:
-                    # Dùng upsert
                     supabase.table("crm_suppliers").upsert(recs, on_conflict="short_name").execute()
-                    st.success(f"✅ Đã cập nhật thành công {len(recs)} nhà cung cấp!")
+                    st.success(f"✅ Đã xử lý thành công {len(recs)} dòng (đã tự động loại bỏ dòng trùng trong file)!")
                     time.sleep(1); st.rerun()
                 else:
                     st.warning("File Excel không có dữ liệu hợp lệ.")
             
             except Exception as e:
-                err_msg = str(e)
-                if "duplicate key" in err_msg:
-                    st.error("⚠️ Lỗi trùng lặp dữ liệu: Mã NCC đã tồn tại.")
-                else:
-                    st.error(f"🛑 Lỗi Import: {err_msg}")
+                st.error(f"🛑 Lỗi Import: {e}")
 
     # ---------------------------------------------------------
     # TAB 6.3: TEMPLATE
@@ -1361,7 +1357,6 @@ with t6:
             try:
                 lnk, fid = upload_to_drive_simple(up_t, "CRM_TEMPLATES", f"TMP_{t_name}.xlsx")
                 if fid: 
-                    # Xóa cũ insert mới để tránh lỗi
                     try: supabase.table("crm_templates").delete().eq("template_name", t_name).execute()
                     except: pass
                     
@@ -1372,11 +1367,10 @@ with t6:
                     }]).execute()
                     st.success("✅ OK"); time.sleep(1); st.rerun()
                 else:
-                    st.error(f"Lỗi upload: {lnk}") # Hiển thị lỗi chi tiết từ Drive
+                    st.error(f"Lỗi upload: {lnk}")
             except Exception as e:
                 st.error(f"Lỗi: {e}")
                 
-        # Hiển thị và xóa template
         try:
             df_tmpl = load_data("crm_templates")
             if not df_tmpl.empty:
