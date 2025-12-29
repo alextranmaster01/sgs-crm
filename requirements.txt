@@ -1,10 +1,12 @@
 streamlit
 pandas
 numpy
-openpyxl
 supabase
 google-api-python-client
+google-auth
 google-auth-oauthlib
+google-auth-httplib2
+openpyxl
+python-docx
 xlsxwriter
-google-api-python-client
-numpy
+plotly
