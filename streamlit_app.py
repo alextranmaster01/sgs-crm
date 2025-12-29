@@ -603,12 +603,9 @@ with t3:
                         st.caption("ℹ️ Báo giá này từ phiên bản cũ (chưa lưu cấu hình chi phí).")
 
                     search_name = f"HIST_{q_no}_{cust}"
-                    lnk, fid, _ = search_file_in_drive_by_name(search_name) # Fix: Unpack 3 values
+                    lnk, fid, _ = search_file_in_drive_by_name(search_name) 
                     
                     if fid:
-                         st.markdown(f"👉 **[Mở Folder chứa file này trên Google Drive]({lnk})**", unsafe_allow_html=True) # lnk is folder link in my func logic? No search returns file id.
-                         # search_file_in_drive_by_name returns id, name, parent
-                         
                          if st.button(f"Tải file chi tiết"):
                               fh = download_from_drive(fid)
                               if fh:
@@ -1256,44 +1253,141 @@ with t5:
 with t6:
     tc, ts, tt = st.tabs(["KHÁCH HÀNG", "NHÀ CUNG CẤP", "TEMPLATE"])
     
-    # 6.1 Khách hàng (Fix Upsert)
+    # ---------------------------------------------------------
+    # TAB 6.1: KHÁCH HÀNG
+    # ---------------------------------------------------------
     with tc:
-        df = load_data("crm_customers"); st.data_editor(df, num_rows="dynamic", use_container_width=True)
-        up = st.file_uploader("Import KH", key="uck")
-        if up and st.button("Import KH"):
-            try:
-                d = pd.read_excel(up, dtype=str).fillna(""); recs = []
-                for i,r in d.iterrows():
-                    if len(r)>0 and safe_str(r.iloc[0]): recs.append({"short_name": safe_str(r.iloc[0]), "full_name": safe_str(r.iloc[1]) if len(r)>1 else "", "address": safe_str(r.iloc[2]) if len(r)>2 else ""})
-                if recs: supabase.table("crm_customers").upsert(recs, on_conflict="short_name").execute(); st.success("OK"); st.rerun()
-            except Exception as e: st.error(f"Lỗi: {e}. Hãy đảm bảo cột short_name là Unique trong DB.")
+        st.markdown("### 👥 Danh sách Khách Hàng")
+        try:
+            df = load_data("crm_customers")
+            st.data_editor(df, num_rows="dynamic", use_container_width=True, key="editor_cust")
+        except Exception as e:
+            st.error(f"Lỗi tải dữ liệu: {e}")
 
-    # 6.2 Nhà cung cấp (Fix Upsert)
-    with ts:
-        df = load_data("crm_suppliers"); st.data_editor(df, num_rows="dynamic", use_container_width=True)
-        up = st.file_uploader("Import NCC", key="usn")
-        if up and st.button("Import NCC"):
-            try:
-                d = pd.read_excel(up, dtype=str).fillna(""); recs = []
-                for i,r in d.iterrows():
-                    if len(r)>0 and safe_str(r.iloc[0]): recs.append({"short_name": safe_str(r.iloc[0]), "full_name": safe_str(r.iloc[1]) if len(r)>1 else "", "address": safe_str(r.iloc[2]) if len(r)>2 else ""})
-                if recs: supabase.table("crm_suppliers").upsert(recs, on_conflict="short_name").execute(); st.success("OK"); st.rerun()
-            except Exception as e: st.error(f"Lỗi: {e}. Hãy đảm bảo cột short_name là Unique trong DB.")
-
-    # 6.3 Template
-    with tt:
-        up_t = st.file_uploader("File Template", type=["xlsx"]); t_name = st.text_input("Tên Template")
-        if up_t and t_name and st.button("Lưu"):
-            lnk, fid = upload_to_drive_simple(up_t, "CRM_TEMPLATES", f"TMP_{t_name}.xlsx")
-            if fid:
-                try: supabase.table("crm_templates").delete().eq("template_name", t_name).execute()
-                except: pass
-                supabase.table("crm_templates").insert([{"template_name": t_name, "file_id": fid, "last_updated": datetime.now().strftime("%d/%m/%Y")}]).execute(); st.success("OK"); st.rerun()
-            else: st.error(lnk) # lnk chứa msg lỗi
+        st.divider()
+        st.markdown("#### 📥 Import Khách Hàng")
+        st.caption("Excel cột A, B, C tương ứng: Short Name | Full Name | Address")
+        up = st.file_uploader("Import KH (Excel)", key="uck")
         
-        df_t = load_data("crm_templates")
-        if not df_t.empty:
-            df_t["Del"] = False; ed = st.data_editor(df_t, column_config={"Del": st.column_config.CheckboxColumn(default=False)})
-            if st.button("Xóa Template"):
-                for _, r in ed[ed["Del"]].iterrows(): supabase.table("crm_templates").delete().eq("id", r["id"]).execute()
-                st.rerun()
+        if up and st.button("🚀 Bắt đầu Import KH"):
+            try:
+                d = pd.read_excel(up, dtype=str).fillna("")
+                recs = []
+                for i, r in d.iterrows():
+                    # Lấy dữ liệu an toàn
+                    s_name = safe_str(r.iloc[0]) if len(r) > 0 else ""
+                    f_name = safe_str(r.iloc[1]) if len(r) > 1 else ""
+                    addr = safe_str(r.iloc[2]) if len(r) > 2 else ""
+                    
+                    if s_name:  # Chỉ thêm nếu có Short Name
+                        recs.append({
+                            "short_name": s_name, 
+                            "full_name": f_name, 
+                            "address": addr
+                        })
+                
+                if recs:
+                    # Dùng upsert thay vì insert để tránh lỗi trùng lặp
+                    supabase.table("crm_customers").upsert(recs, on_conflict="short_name").execute()
+                    st.success(f"✅ Đã cập nhật thành công {len(recs)} khách hàng!")
+                    time.sleep(1); st.rerun()
+                else:
+                    st.warning("File Excel không có dữ liệu hợp lệ (Cột A - Short Name bị trống).")
+            
+            except Exception as e:
+                # Hiển thị lỗi chi tiết
+                err_msg = str(e)
+                if "duplicate key" in err_msg:
+                    st.error("⚠️ Lỗi trùng lặp dữ liệu: Mã khách hàng đã tồn tại. Vui lòng chạy lệnh SQL tôi cung cấp để bật tính năng tự động cập nhật (Upsert).")
+                else:
+                    st.error(f"🛑 Lỗi Import: {err_msg}")
+
+    # ---------------------------------------------------------
+    # TAB 6.2: NHÀ CUNG CẤP
+    # ---------------------------------------------------------
+    with ts:
+        st.markdown("### 🏭 Danh sách Nhà Cung Cấp")
+        try:
+            df = load_data("crm_suppliers")
+            st.data_editor(df, num_rows="dynamic", use_container_width=True, key="editor_supp")
+        except Exception as e:
+            st.error(f"Lỗi tải dữ liệu: {e}")
+
+        st.divider()
+        st.markdown("#### 📥 Import Nhà Cung Cấp")
+        st.caption("Excel cột A, B, C tương ứng: Short Name | Full Name | Address")
+        up = st.file_uploader("Import NCC (Excel)", key="usn")
+        
+        if up and st.button("🚀 Bắt đầu Import NCC"):
+            try:
+                d = pd.read_excel(up, dtype=str).fillna("")
+                recs = []
+                for i, r in d.iterrows():
+                    s_name = safe_str(r.iloc[0]) if len(r) > 0 else ""
+                    f_name = safe_str(r.iloc[1]) if len(r) > 1 else ""
+                    addr = safe_str(r.iloc[2]) if len(r) > 2 else ""
+                    
+                    if s_name:
+                        recs.append({
+                            "short_name": s_name, 
+                            "full_name": f_name, 
+                            "address": addr
+                        })
+                
+                if recs:
+                    # Dùng upsert
+                    supabase.table("crm_suppliers").upsert(recs, on_conflict="short_name").execute()
+                    st.success(f"✅ Đã cập nhật thành công {len(recs)} nhà cung cấp!")
+                    time.sleep(1); st.rerun()
+                else:
+                    st.warning("File Excel không có dữ liệu hợp lệ.")
+            
+            except Exception as e:
+                err_msg = str(e)
+                if "duplicate key" in err_msg:
+                    st.error("⚠️ Lỗi trùng lặp dữ liệu: Mã NCC đã tồn tại.")
+                else:
+                    st.error(f"🛑 Lỗi Import: {err_msg}")
+
+    # ---------------------------------------------------------
+    # TAB 6.3: TEMPLATE
+    # ---------------------------------------------------------
+    with tt:
+        st.write("Upload Template Excel")
+        up_t = st.file_uploader("File Template (.xlsx)", type=["xlsx"])
+        t_name = st.text_input("Tên Template (Nhập: AAA-QUOTATION)")
+        
+        if up_t and t_name and st.button("Lưu Template"):
+            try:
+                lnk, fid = upload_to_drive_simple(up_t, "CRM_TEMPLATES", f"TMP_{t_name}.xlsx")
+                if fid: 
+                    # Xóa cũ insert mới để tránh lỗi
+                    try: supabase.table("crm_templates").delete().eq("template_name", t_name).execute()
+                    except: pass
+                    
+                    supabase.table("crm_templates").insert([{
+                        "template_name": t_name, 
+                        "file_id": fid, 
+                        "last_updated": datetime.now().strftime("%d/%m/%Y")
+                    }]).execute()
+                    st.success("✅ OK"); time.sleep(1); st.rerun()
+                else:
+                    st.error(f"Lỗi upload: {lnk}") # Hiển thị lỗi chi tiết từ Drive
+            except Exception as e:
+                st.error(f"Lỗi: {e}")
+                
+        # Hiển thị và xóa template
+        try:
+            df_tmpl = load_data("crm_templates")
+            if not df_tmpl.empty:
+                df_tmpl["Xóa"] = False
+                edited_tmpl = st.data_editor(df_tmpl, column_config={"Xóa": st.column_config.CheckboxColumn("Xóa", default=False)}, use_container_width=True, key="editor_tmpl")
+                
+                if st.button("🗑️ Xóa Template đã chọn"):
+                    to_del = edited_tmpl[edited_tmpl["Xóa"] == True]
+                    if not to_del.empty:
+                        for _, r in to_del.iterrows():
+                            if 'id' in r: supabase.table("crm_templates").delete().eq("id", r["id"]).execute()
+                        st.success("Đã xóa!"); time.sleep(1); st.rerun()
+        except:
+            st.info("Chưa có template.")
