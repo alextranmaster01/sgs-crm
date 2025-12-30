@@ -76,15 +76,16 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 import io
-
 # --- SUPABASE CONNECTION ---
 @st.cache_resource
-# --- SỬA LẠI ĐOẠN NÀY TRONG FILE streamlit_app.py ---
-@st.cache_resource
 def init_supabase():
+    # QUAN TRỌNG: 2 dòng dưới này phải lùi vào trong (thụt đầu dòng)
     url = st.secrets["supabase"]["SUPABASE_URL"]
     key = st.secrets["supabase"]["SUPABASE_KEY"]
     return create_client(url, key)
+
+# Dòng này nằm sát lề trái (không thụt vào)
+supabase: Client = init_supabase()
 # Dòng này nằm sát lề trái (không thụt vào)
 supabase: Client = init_supabase()
 supabase: Client = init_supabase()
@@ -531,6 +532,7 @@ with tab6:
         df_s = backend.load_data("suppliers")
         edited_s = st.data_editor(df_s, num_rows="dynamic", key="editor_supp")
         if st.button("Lưu Master NCC"): backend.save_data("suppliers", edited_s)
+
 
 
 
