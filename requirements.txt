@@ -10,3 +10,4 @@ openpyxl
 python-docx
 xlsxwriter
 plotly
+python-dotenv
