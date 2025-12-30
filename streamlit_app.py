@@ -218,75 +218,118 @@ with tab1:
     m5.error(f"**TỔNG PO CHƯA THANH TOÁN**: {unpaid_count}")
 
 # =============================================================================
-# TAB 2: BÁO GIÁ NCC (DB GIÁ)
+# TAB 2: BÁO GIÁ NCC (DB GIÁ) - AUTO EXTRACT & UPLOAD IMAGES
 # =============================================================================
 with tab2:
-    st.subheader("Database Giá Nhà Cung Cấp")
+    import time
+    import io
+    from openpyxl import load_workbook
+
+    st.subheader("Database Giá Nhà Cung Cấp (Tự động tách ảnh từ Excel)")
     
     col_tool, col_search = st.columns([1, 1])
     with col_tool:
-        uploaded_file = st.file_uploader("📥 Import Excel (Làm mới DB)", type=['xlsx'], key="uploader_pur")
+        uploaded_file = st.file_uploader("📥 Import Excel (Có chứa ảnh)", type=['xlsx'], key="uploader_pur")
         
         if uploaded_file:
-            # Nút xác nhận Import (Để bạn kiểm soát khi nào chạy)
-            if st.button("🚀 BẮT ĐẦU IMPORT", type="primary"):
+            if st.button("🚀 BẮT ĐẦU IMPORT & TÁCH ẢNH", type="primary"):
+                status_box = st.status("Đang xử lý file Excel...", expanded=True)
                 try:
-                    with st.spinner("Đang đọc file và đẩy lên Server..."):
-                        # 1. Đọc file Excel
-                        df_raw = pd.read_excel(uploaded_file, header=None, dtype=str).fillna("")
-                        
-                        # 2. Tìm dòng tiêu đề (chứa chữ "Item code")
-                        start_row = 0
-                        for i in range(min(20, len(df_raw))):
-                            row_str = str(df_raw.iloc[i].values).lower()
-                            if 'item code' in row_str or 'mã hàng' in row_str:
-                                start_row = i + 1
-                                break
-                        
-                        # 3. Quét dữ liệu
-                        data_clean = []
-                        for i in range(start_row, len(df_raw)):
-                            row = df_raw.iloc[i]
+                    # 1. Đọc dữ liệu văn bản bằng Pandas
+                    status_box.write("📖 Đang đọc dữ liệu văn bản...")
+                    df_raw = pd.read_excel(uploaded_file, header=None, dtype=str).fillna("")
+                    
+                    # Tìm dòng tiêu đề
+                    start_row = 0
+                    for i in range(min(20, len(df_raw))):
+                        row_str = str(df_raw.iloc[i].values).lower()
+                        if 'item code' in row_str or 'mã hàng' in row_str:
+                            start_row = i + 1
+                            break
+                    
+                    # 2. Đọc hình ảnh bằng Openpyxl
+                    status_box.write("🖼️ Đang quét và tách hình ảnh từ file Excel...")
+                    uploaded_file.seek(0) 
+                    wb = load_workbook(uploaded_file, data_only=True)
+                    ws = wb.active
+                    
+                    image_map = {}
+                    if hasattr(ws, '_images'):
+                        for img in ws._images:
+                            row_idx = img.anchor._from.row
+                            img_bytes = img._data()
+                            image_map[row_idx] = img_bytes
                             
-                            # Hàm lấy dữ liệu an toàn
-                            def get(idx): 
-                                return logic.safe_str(row[idx]) if idx < len(row) else ""
-                            
-                            code_val = get(1) # Cột B là Code
-                            if not code_val: continue 
+                    status_box.write(f"✅ Đã tìm thấy {len(image_map)} ảnh trong file.")
 
-                            # Mapping CỨNG 100% theo file của bạn
-                            item = {
-                                "no": get(0),                     # Cột A
-                                "item_code": code_val,            # Cột B
-                                "item_name": get(2),              # Cột C
-                                "specs": get(3),                  # Cột D
-                                "qty": logic.fmt_num(logic.to_float(get(4))),           # Cột E
-                                "buying_price_rmb": logic.fmt_num(logic.to_float(get(5))), # Cột F
-                                "total_buying_price_rmb": logic.fmt_num(logic.to_float(get(6))), # Cột G
-                                "exchange_rate": logic.fmt_num(logic.to_float(get(7))),    # Cột H
-                                "buying_price_vnd": logic.fmt_num(logic.to_float(get(8))), # Cột I
-                                "total_buying_price_vnd": logic.fmt_num(logic.to_float(get(9))), # Cột J
-                                "leadtime": get(10),              # Cột K
-                                "supplier_name": get(11),         # Cột L
-                                "image_path": get(12),            # Cột M
-                                
-                                # Cột hệ thống
-                                "_clean_code": logic.clean_lookup_key(code_val),
-                                "_clean_specs": logic.clean_lookup_key(get(3)),
-                                "_clean_name": logic.clean_lookup_key(get(2))
-                            }
-                            data_clean.append(item)
+                    # 3. Ghép dữ liệu & Upload ảnh
+                    data_clean = []
+                    total_rows = len(df_raw) - start_row
+                    prog_bar = status_box.progress(0)
+                    
+                    for idx, i in enumerate(range(start_row, len(df_raw))):
+                        prog_bar.progress((idx + 1) / total_rows)
+                        row = df_raw.iloc[i]
                         
-                        # 4. Lưu vào Supabase
-                        if data_clean:
-                            df_final = pd.DataFrame(data_clean)
-                            backend.save_data("purchases", df_final)
-                            st.success(f"✅ Thành công! Đã lưu {len(df_final)} dòng.")
-                            time.sleep(1)
-                            st.rerun()
+                        def get(col_idx): 
+                            return logic.safe_str(row[col_idx]) if col_idx < len(row) else ""
+                        
+                        code_val = get(1) # Cột B
+                        if not code_val: continue 
+
+                        # --- XỬ LÝ ẢNH ---
+                        final_img_link = ""
+                        
+                        # Ưu tiên 1: Ảnh dán trong Excel (Embedded)
+                        if i in image_map:
+                            img_data = image_map[i]
+                            filename = f"{logic.safe_filename(code_val)}.png"
+                            file_obj = io.BytesIO(img_data)
+                            
+                            status_box.write(f"☁️ Upload ảnh: {code_val}...")
+                            link = backend.upload_to_drive(file_obj, filename) # Upload lên Drive
+                            if link: final_img_link = link
+                        
+                        # Ưu tiên 2: Link ảnh cũ (nếu không có ảnh mới)
                         else:
-                            st.error("⚠️ Không đọc được dòng nào. Hãy kiểm tra xem file có cột 'Item code' không.")
+                            old_path = get(12)
+                            if "http" in old_path: # Chỉ lấy nếu là link online
+                                final_img_link = old_path
+
+                        # --- TẠO ITEM ---
+                        item = {
+                            "no": get(0),                     # A
+                            "item_code": code_val,            # B
+                            "item_name": get(2),              # C
+                            "specs": get(3),                  # D
+                            "qty": logic.fmt_num(logic.to_float(get(4))),           # E
+                            "buying_price_rmb": logic.fmt_num(logic.to_float(get(5))), # F
+                            "total_buying_price_rmb": logic.fmt_num(logic.to_float(get(6))), # G
+                            "exchange_rate": logic.fmt_num(logic.to_float(get(7))),    # H
+                            "buying_price_vnd": logic.fmt_num(logic.to_float(get(8))), # I
+                            "total_buying_price_vnd": logic.fmt_num(logic.to_float(get(9))), # J
+                            "leadtime": get(10),              # K
+                            "supplier_name": get(11),         # L
+                            "image_path": final_img_link,     # M (Link ảnh để hiển thị)
+                            
+                            "_clean_code": logic.clean_lookup_key(code_val),
+                            "_clean_specs": logic.clean_lookup_key(get(3)),
+                            "_clean_name": logic.clean_lookup_key(get(2))
+                        }
+                        data_clean.append(item)
+                    
+                    # 4. Lưu vào Database
+                    if data_clean:
+                        df_final = pd.DataFrame(data_clean)
+                        backend.save_data("purchases", df_final)
+                        
+                        status_box.update(label="✅ Import hoàn tất!", state="complete", expanded=False)
+                        st.success(f"Đã xử lý xong {len(df_final)} dòng.")
+                        time.sleep(1)
+                        st.rerun()
+                    else:
+                        status_box.update(label="⚠️ Lỗi dữ liệu", state="error")
+                        st.error("Không tìm thấy dữ liệu hợp lệ.")
 
                 except Exception as e:
                     st.error(f"❌ Lỗi: {e}") 
@@ -294,24 +337,40 @@ with tab2:
     # Load Data & Hiển thị
     df_pur = backend.load_data("purchases")
     
-    search_term = st.text_input("🔍 Tìm kiếm code, tên, specs...", key="search_pur")
+    # Tìm kiếm
+    search_term = st.text_input("🔍 Tìm kiếm code, tên...", key="search_pur")
     if search_term and not df_pur.empty:
         mask = df_pur.apply(lambda x: x.astype(str).str.contains(search_term, case=False, na=False)).any(axis=1)
         df_pur = df_pur[mask]
 
+    # --- CẤU HÌNH HIỂN THỊ CỘT (QUAN TRỌNG NHẤT) ---
     column_cfg = {
-        "image_path": st.column_config.ImageColumn("Ảnh SP"),
-        "total_buying_price_vnd": st.column_config.NumberColumn("Tổng Mua (VND)", format="%d"),
-         "_clean_code": None, "_clean_specs": None, "_clean_name": None
+        # Cấu hình cột image_path thành dạng ImageColumn để hiện ảnh
+        "image_path": st.column_config.ImageColumn(
+            "Images", # Tên cột hiển thị
+            help="Hình ảnh sản phẩm",
+            width="small" # Kích thước ảnh (small, medium, large)
+        ),
+        "total_buying_price_vnd": st.column_config.NumberColumn("Total VND", format="%d"),
+        "buying_price_vnd": st.column_config.NumberColumn("Price VND", format="%d"),
+         "_clean_code": None, "_clean_specs": None, "_clean_name": None # Ẩn cột rác
     }
+
+    # Thứ tự cột hiển thị (Đúng 100% theo Excel: No -> Code ... -> Images)
+    cols_order = [
+        "no", "item_code", "item_name", "specs", "qty", 
+        "buying_price_rmb", "total_buying_price_rmb", "exchange_rate", 
+        "buying_price_vnd", "total_buying_price_vnd", "leadtime", 
+        "supplier_name", "image_path"
+    ]
 
     edited_pur = st.data_editor(
         df_pur, 
         num_rows="dynamic", 
         use_container_width=True,
         key="editor_pur",
-        column_config=column_cfg,
-        column_order=["image_path", "no", "item_code", "item_name", "specs", "qty", "buying_price_rmb", "total_buying_price_rmb", "exchange_rate", "buying_price_vnd", "total_buying_price_vnd", "leadtime", "supplier_name"]
+        column_config=column_cfg, # Áp dụng config ảnh
+        column_order=cols_order   # Áp dụng thứ tự cột
     )
     
     if st.button("💾 Lưu thay đổi DB NCC", type="primary"):
@@ -464,6 +523,7 @@ with tab6:
         df_s = backend.load_data("suppliers")
         edited_s = st.data_editor(df_s, num_rows="dynamic", key="editor_supp")
         if st.button("Lưu Master NCC"): backend.save_data("suppliers", edited_s)
+
 
 
 
