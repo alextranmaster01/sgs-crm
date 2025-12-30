@@ -70,7 +70,7 @@ def upload_to_drive(file_obj, filename, folder_type="images"):
     try:
         # Lấy ID folder từ secrets (hoặc điền trực tiếp ID vào đây)
         # folder_id = st.secrets["google"]["folder_id_images"] 
-        folder_id = "PASTE_ID_FOLDER_CUA_BAN_VAO_DAY" 
+        folder_id = "17QK8rGlwcwcSE1bXb8M7DF0vn5VpQqXO" 
 
         file_metadata = {
             'name': filename,
