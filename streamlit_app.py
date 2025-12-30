@@ -225,54 +225,75 @@ with tab2:
     
     col_tool, col_search = st.columns([1, 1])
     with col_tool:
-        # Cung cấp key riêng cho uploader để quản lý state tốt hơn
         uploaded_file = st.file_uploader("📥 Import Excel (Làm mới DB)", type=['xlsx'], key="uploader_pur")
         
         if uploaded_file:
-            # --- LOGIC CHỐNG LOOP (VÒNG LẶP) ---
-            # Tạo một ID duy nhất cho file dựa trên tên và kích thước
+            # Tạo ID để tránh xử lý lặp lại
             file_id = f"{uploaded_file.name}_{uploaded_file.size}"
             
-            # Kiểm tra xem file này đã được xử lý chưa trong session này
-            if "processed_file_id" not in st.session_state:
-                st.session_state.processed_file_id = ""
+            if "processed_file_id" not in st.session_state: st.session_state.processed_file_id = ""
             
+            # Chỉ xử lý nếu là file mới
             if st.session_state.processed_file_id != file_id:
-                # Nếu là file mới (chưa xử lý), thì mới chạy code import
                 try:
+                    # Đọc file không Header để lấy index chính xác
                     df_raw = pd.read_excel(uploaded_file, header=None, dtype=str).fillna("")
                     
+                    # --- DEBUG: HIỂN THỊ DỮ LIỆU THÔ ĐỂ KIỂM TRA ---
+                    with st.expander("🕵️ Xem dữ liệu thô từ Excel (Debug)", expanded=True):
+                        st.write(f"Tổng số dòng: {len(df_raw)} | Tổng số cột: {len(df_raw.columns)}")
+                        st.dataframe(df_raw.head(5)) # Hiện 5 dòng đầu
+                        
+                        # Kiểm tra xem cột Code (Index 1) có dữ liệu không
+                        if len(df_raw.columns) > 1:
+                            st.info(f"Cột Code đang lấy ở vị trí cột thứ 2 (Index 1). Giá trị mẫu: {df_raw.iloc[1, 1] if len(df_raw)>1 else 'N/A'}")
+                        else:
+                            st.error("File Excel có quá ít cột!")
+
+                    # Tìm dòng bắt đầu (Header)
                     start_row = 0
                     if len(df_raw) > 0:
-                        first_cell = str(df_raw.iloc[0, 1]).lower()
+                        # Thử tìm chữ 'code' hoặc 'mã' ở cột 1 hoặc cột 0
+                        first_cell = str(df_raw.iloc[0, 1]).lower() if len(df_raw.columns) > 1 else ""
                         if 'code' in first_cell or 'mã' in first_cell: start_row = 1
-                        elif len(df_raw) > 1 and ('code' in str(df_raw.iloc[1, 1]).lower()): start_row = 2
+                        elif len(df_raw) > 1:
+                             second_cell = str(df_raw.iloc[1, 1]).lower() if len(df_raw.columns) > 1 else ""
+                             if 'code' in second_cell: start_row = 2
 
                     data_clean = []
+                    # Lấy số lượng cột thực tế
+                    num_cols = len(df_raw.columns)
+
                     for i in range(start_row, len(df_raw)):
                         row = df_raw.iloc[i]
-                        if len(row) < 12: continue 
                         
-                        code_val = logic.safe_str(row[1])
-                        if not code_val: continue
+                        # --- FIX: KHÔNG BỎ QUA DÒNG NẾU THIẾU CỘT ---
+                        # Thay vì continue, ta dùng hàm an toàn để lấy dữ liệu
+                        def get_val(idx):
+                            return logic.safe_str(row[idx]) if idx < num_cols else ""
+
+                        code_val = get_val(1) # Cột B
+                        if not code_val: continue # Bắt buộc phải có Code
 
                         item = {
-                            "no": logic.safe_str(row[0]),
+                            "no": get_val(0), # Cột A
                             "item_code": code_val,
-                            "item_name": logic.safe_str(row[2]),
-                            "specs": logic.safe_str(row[3]),
-                            "qty": logic.fmt_num(logic.to_float(row[4])),
-                            "buying_price_rmb": logic.fmt_num(logic.to_float(row[5])),
-                            "total_buying_price_rmb": logic.fmt_num(logic.to_float(row[6])),
-                            "exchange_rate": logic.fmt_num(logic.to_float(row[7])),
-                            "buying_price_vnd": logic.fmt_num(logic.to_float(row[8])),
-                            "total_buying_price_vnd": logic.fmt_num(logic.to_float(row[9])),
-                            "leadtime": logic.safe_str(row[10]),
-                            "supplier_name": logic.safe_str(row[11]),
-                            "image_path": logic.safe_str(row[12]) if len(row) > 12 else "", 
-                            "_clean_code": logic.clean_lookup_key(row[1]),
-                            "_clean_specs": logic.clean_lookup_key(row[3]),
-                            "_clean_name": logic.clean_lookup_key(row[2])
+                            "item_name": get_val(2), # Cột C
+                            "specs": get_val(3),     # Cột D
+                            "qty": logic.fmt_num(logic.to_float(get_val(4))), # Cột E
+                            "buying_price_rmb": logic.fmt_num(logic.to_float(get_val(5))), # Cột F
+                            "total_buying_price_rmb": logic.fmt_num(logic.to_float(get_val(6))), # Cột G
+                            "exchange_rate": logic.fmt_num(logic.to_float(get_val(7))), # Cột H
+                            "buying_price_vnd": logic.fmt_num(logic.to_float(get_val(8))), # Cột I
+                            "total_buying_price_vnd": logic.fmt_num(logic.to_float(get_val(9))), # Cột J
+                            "leadtime": get_val(10), # Cột K
+                            "supplier_name": get_val(11), # Cột L
+                            "image_path": get_val(12), # Cột M (Nếu không có sẽ tự điền rỗng)
+                            
+                            # Cột tìm kiếm
+                            "_clean_code": logic.clean_lookup_key(code_val),
+                            "_clean_specs": logic.clean_lookup_key(get_val(3)),
+                            "_clean_name": logic.clean_lookup_key(get_val(2))
                         }
                         data_clean.append(item)
                     
@@ -280,20 +301,18 @@ with tab2:
                         df_final = pd.DataFrame(data_clean)
                         backend.save_data("purchases", df_final)
                         
-                        # --- ĐÁNH DẤU ĐÃ XỬ LÝ XONG ---
                         st.session_state.processed_file_id = file_id
-                        st.success(f"✅ Đã import {len(df_final)} dòng thành công!")
+                        st.success(f"✅ Đã tìm thấy và import {len(df_final)} dòng dữ liệu!")
                         
-                        # Xóa cache và rerun 1 lần duy nhất
                         st.cache_data.clear()
                         import time
-                        time.sleep(1) # Đợi 1 chút để user đọc thông báo
+                        time.sleep(2) # Đợi 2s để bạn kịp đọc thông báo
                         st.rerun()
                     else:
-                        st.warning("⚠️ File không có dữ liệu code hợp lệ.")
+                        st.error("⚠️ File đọc được nhưng không có dòng nào hợp lệ (Có thể do Cột Code bị sai vị trí). Hãy xem bảng 'Dữ liệu thô' bên trên.")
                         
                 except Exception as e:
-                    st.error(f"❌ Lỗi Import: {e}") 
+                    st.error(f"❌ Lỗi Xử lý Import: {e}") 
 
     # Load Data
     df_pur = backend.load_data("purchases")
@@ -304,7 +323,6 @@ with tab2:
         mask = df_pur.apply(lambda x: x.astype(str).str.contains(search_term, case=False, na=False)).any(axis=1)
         df_pur = df_pur[mask]
 
-    # Cấu hình hiển thị cột
     column_cfg = {
         "image_path": st.column_config.ImageColumn("Ảnh SP", help="Xem ảnh"),
         "total_buying_price_vnd": st.column_config.NumberColumn("Tổng Mua (VND)", format="%d"),
@@ -471,6 +489,7 @@ with tab6:
         df_s = backend.load_data("suppliers")
         edited_s = st.data_editor(df_s, num_rows="dynamic", key="editor_supp")
         if st.button("Lưu Master NCC"): backend.save_data("suppliers", edited_s)
+
 
 
 
