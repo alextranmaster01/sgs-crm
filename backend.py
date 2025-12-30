@@ -1,7 +1,20 @@
 import streamlit as st
-from google.oauth2.credentials import Credentials
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
+from supabase import create_client, Client # <--- Đảm bảo có dòng import này
+
+# 1. Hàm khởi tạo kết nối (có Cache)
+@st.cache_resource
+def init_supabase():
+    try:
+        # Lấy thông tin từ secrets.toml
+        url = st.secrets["supabase"]["SUPABASE_URL"]
+        key = st.secrets["supabase"]["SUPABASE_KEY"]
+        return create_client(url, key)
+    except Exception as e:
+        st.error(f"Lỗi kết nối Supabase: {e}")
+        return None
+
+# 2. Gọi hàm để lấy biến client
+supabase = init_supabase()
 
 def get_drive_service():
     # Lấy thông tin từ secrets.toml
