@@ -1,6 +1,31 @@
 import streamlit as st
 from supabase import create_client, Client # <--- Đảm bảo có dòng import này
+# File: backend.py
+import pandas as pd
+import streamlit as st
+from supabase import create_client, Client
+# ... các import khác của bạn (google, etc.)
 
+# --- THÊM ĐOẠN NÀY VÀO ĐẦU FILE (SAU IMPORT) ---
+SCHEMAS = {
+    "purchases": [
+        "no", "item_code", "item_name", "specs", "qty", 
+        "buying_price_rmb", "total_buying_price_rmb", "exchange_rate", 
+        "buying_price_vnd", "total_buying_price_vnd", "leadtime", 
+        "supplier_name", "image_path", 
+        "_clean_code", "_clean_specs", "_clean_name"
+    ],
+    "customer_orders": [
+        "order_id", "customer_name", "order_date", "delivery_date",
+        "items", "total_amount", "status", "notes"
+    ],
+    "inventory": [
+        "item_code", "item_name", "stock_qty", "location", "last_updated"
+    ]
+}
+# ------------------------------------------------
+
+# ... Sau đó mới đến các hàm init_supabase, load_data ...
 # 1. Hàm khởi tạo kết nối (có Cache)
 @st.cache_resource
 def init_supabase():
