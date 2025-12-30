@@ -133,18 +133,65 @@ def get_drive_service():
     )
     return build('drive', 'v3', credentials=creds)
 
+# --- TÌM HÀM upload_to_drive CŨ VÀ THAY THẾ BẰNG ĐOẠN NÀY ---
+
 def upload_to_drive(file_obj, filename, folder_type="images"):
     try:
         service = get_drive_service()
+        # Lấy ID thư mục từ secrets
         folder_id = st.secrets["google"][f"folder_id_{folder_type}"]
         
-        file_metadata = {'name': filename, 'parents': [folder_id]}
-        media = MediaIoBaseUpload(file_obj, mimetype='application/octet-stream')
+        # BƯỚC 1: KIỂM TRA FILE ĐÃ TỒN TẠI CHƯA?
+        # Query: Tìm file có tên = filename VÀ nằm trong folder_id VÀ không nằm trong thùng rác
+        query = f"name = '{filename}' and '{folder_id}' in parents and trashed = false"
+        results = service.files().list(q=query, fields="files(id, webContentLink)").execute()
+        files = results.get('files', [])
         
-        file = service.files().create(body=file_metadata, media_body=media, fields='id, webContentLink').execute()
-        return file.get('webContentLink') # Trả về link file
+        # Chuẩn bị nội dung file (Dùng mimetype image/png để xem trước chuẩn hơn)
+        media = MediaIoBaseUpload(file_obj, mimetype='image/png', resumable=True)
+        
+        final_link = ""
+        file_id = ""
+
+        if files:
+            # BƯỚC 2: NẾU ĐÃ CÓ -> UPDATE (GHI ĐÈ)
+            file_id = files[0]['id']
+            # st.toast(f"Phát hiện ảnh cũ, đang ghi đè: {filename}")
+            
+            updated_file = service.files().update(
+                fileId=file_id,
+                media_body=media,
+                fields='id, webContentLink'
+            ).execute()
+            final_link = updated_file.get('webContentLink')
+            
+        else:
+            # BƯỚC 3: NẾU CHƯA CÓ -> CREATE (TẠO MỚI)
+            file_metadata = {
+                'name': filename, 
+                'parents': [folder_id]
+            }
+            created_file = service.files().create(
+                body=file_metadata,
+                media_body=media,
+                fields='id, webContentLink'
+            ).execute()
+            file_id = created_file.get('id')
+            final_link = created_file.get('webContentLink')
+
+        # BƯỚC 4: SET QUYỀN PUBLIC (Để hiển thị được trên App)
+        # Luôn chạy lệnh này để đảm bảo dù mới hay cũ đều xem được
+        try:
+            permission = {'type': 'anyone', 'role': 'reader'}
+            service.permissions().create(fileId=file_id, body=permission).execute()
+        except Exception:
+            pass # Nếu đã có quyền rồi thì bỏ qua lỗi này
+
+        return final_link
+
     except Exception as e:
         st.error(f"Lỗi Upload Drive: {e}")
+        return None
         return None
     import streamlit as st
 import pandas as pd
@@ -532,6 +579,7 @@ with tab6:
         df_s = backend.load_data("suppliers")
         edited_s = st.data_editor(df_s, num_rows="dynamic", key="editor_supp")
         if st.button("Lưu Master NCC"): backend.save_data("suppliers", edited_s)
+
 
 
 
