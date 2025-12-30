@@ -9,14 +9,18 @@ from googleapiclient.http import MediaIoBaseUpload
 @st.cache_resource
 def init_supabase():
     try:
-        # Dùng chữ thường khớp với Secrets của bạn
+        # Lấy thông tin từ secrets
         url = st.secrets["supabase"]["url"]
         key = st.secrets["supabase"]["key"]
-        return create_client(url, key)
+        
+        # QUAN TRỌNG: Xóa sạch các ký tự xuống dòng/khoảng trắng thừa trong Key
+        # (Lỗi này rất hay gặp khi copy key dài)
+        clean_key = key.replace("\n", "").replace(" ", "").strip()
+        
+        return create_client(url, clean_key)
     except Exception as e:
+        st.error(f"❌ Lỗi Kết Nối Supabase: {e}") # Hiện lỗi đỏ lên màn hình
         return None
-
-supabase: Client = init_supabase()
 
 # --- 2. CẤU HÌNH BẢNG & CỘT (QUAN TRỌNG ĐỂ KHÔNG BỊ LỖI KEYERROR) ---
 TABLES = {
