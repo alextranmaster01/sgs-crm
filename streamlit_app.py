@@ -165,31 +165,49 @@ def generate_excel(quote_info, items_df, customer):
 # =============================================================================
 
 # --- TAB 2: KHO HÀNG ---
-def module_products():
-    st.markdown("## 📦 QUẢN LÝ KHO HÀNG")
-    tab1, tab2 = st.tabs(["Danh Sách Sản Phẩm", "Thêm Mới / Import"])
-    
-    with tab1:
-        df = fetch_data("products")
-        if not df.empty:
-            st.dataframe(df[['ma_hang', 'ten_hang_vn', 'gia_mua', 'nha_cung_cap', 'anh_minh_hoa']], 
-                         column_config={"anh_minh_hoa": st.column_config.ImageColumn("Ảnh"), "gia_mua": st.column_config.NumberColumn("Giá Mua", format="%d")},
-                         use_container_width=True)
-        else: st.info("Kho hàng trống.")
-        
+# ... (Phần code cũ của tab1 giữ nguyên)
+
     with tab2:
+        st.subheader("Thêm Mới Sản Phẩm")
         with st.form("add_prod"):
             c1, c2 = st.columns(2)
-            ma = c1.text_input("Mã Hàng *")
+            ma = c1.text_input("Mã Hàng (Bắt buộc) *")
             ten = c2.text_input("Tên Hàng")
-            gia = c1.number_input("Giá Mua", min_value=0.0)
+            gia = c1.number_input("Giá Mua", min_value=0.0, step=1000.0)
             ncc = c2.text_input("Nhà Cung Cấp")
             img = st.file_uploader("Ảnh SP")
-            if st.form_submit_button("Lưu"):
-                url = upload_image_drive(img) if img else ""
-                supabase.table("products").insert({"ma_hang": ma, "ten_hang_vn": ten, "gia_mua": gia, "nha_cung_cap": ncc, "anh_minh_hoa": url}).execute()
-                st.success("Đã thêm!")
-                st.rerun()
+            
+            submit = st.form_submit_button("Lưu Sản Phẩm")
+            
+            if submit:
+                if not ma:
+                    st.error("⚠️ Vui lòng nhập Mã Hàng!")
+                else:
+                    # 1. Upload ảnh trước (nếu có)
+                    url = ""
+                    if img:
+                        with st.spinner("Đang tải ảnh lên Drive..."):
+                            url = upload_image_drive(img)
+                    
+                    # 2. Gửi dữ liệu sang Supabase với Try-Except
+                    try:
+                        data = {
+                            "ma_hang": ma, 
+                            "ten_hang_vn": ten, 
+                            "gia_mua": gia, 
+                            "nha_cung_cap": ncc, 
+                            "anh_minh_hoa": url
+                        }
+                        supabase.table("products").insert(data).execute()
+                        st.success(f"✅ Đã thêm thành công: {ma}")
+                        time.sleep(1) # Đợi 1 xíu để người dùng thấy thông báo
+                        st.rerun() # Tải lại trang để cập nhật danh sách
+                        
+                    except Exception as e:
+                        # In lỗi chi tiết ra màn hình để debug
+                        st.error("❌ LỖI LƯU DỮ LIỆU!")
+                        st.warning(f"Chi tiết lỗi: {e}")
+                        st.info("💡 Gợi ý: Kiểm tra xem 'Mã Hàng' này đã có chưa? Hoặc bạn đã chạy code SQL tạo bảng chưa?")
 
 # --- TAB 3: KHÁCH HÀNG ---
 def module_customers():
@@ -368,3 +386,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
