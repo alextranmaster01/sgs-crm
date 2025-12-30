@@ -227,30 +227,27 @@ with tab2:
     with col_tool:
         uploaded_file = st.file_uploader("📥 Import Excel (Làm mới DB)", type=['xlsx'])
         if uploaded_file:
-            # --- FIX LỖI IMPORT TẠI ĐÂY ---
             try:
-                # 1. Đọc Excel không lấy header (header=None) để map theo vị trí cột (Index)
-                # Giống logic cũ: Cột 0=No, 1=Code, 2=Name...
+                # Logic đọc Excel thủ công theo Index (Như code cũ)
                 df_raw = pd.read_excel(uploaded_file, header=None, dtype=str).fillna("")
                 
-                # Xác định hàng bắt đầu (Bỏ qua header nếu dòng đầu tiên chứa chữ 'Code' hoặc 'Mã')
                 start_row = 0
                 if len(df_raw) > 0:
                     first_cell = str(df_raw.iloc[0, 1]).lower()
-                    if 'code' in first_cell or 'mã' in first_cell:
-                        start_row = 1
-                    # Trường hợp Excel có 2 dòng header, check dòng thứ 2
-                    elif len(df_raw) > 1 and ('code' in str(df_raw.iloc[1, 1]).lower()):
-                        start_row = 2
+                    if 'code' in first_cell or 'mã' in first_cell: start_row = 1
+                    elif len(df_raw) > 1 and ('code' in str(df_raw.iloc[1, 1]).lower()): start_row = 2
 
                 data_clean = []
                 for i in range(start_row, len(df_raw)):
                     row = df_raw.iloc[i]
-                    # Map đúng thứ tự cột trong Database Supabase
-                    # Dựa trên logic file V4800 cũ
+                    if len(row) < 12: continue # Bỏ qua dòng thiếu cột
+                    
+                    code_val = logic.safe_str(row[1])
+                    if not code_val: continue # Bỏ qua nếu không có Code
+
                     item = {
                         "no": logic.safe_str(row[0]),
-                        "item_code": logic.safe_str(row[1]),
+                        "item_code": code_val,
                         "item_name": logic.safe_str(row[2]),
                         "specs": logic.safe_str(row[3]),
                         "qty": logic.fmt_num(logic.to_float(row[4])),
@@ -261,51 +258,62 @@ with tab2:
                         "total_buying_price_vnd": logic.fmt_num(logic.to_float(row[9])),
                         "leadtime": logic.safe_str(row[10]),
                         "supplier_name": logic.safe_str(row[11]),
-                        "image_path": "", # Ảnh xử lý sau nếu cần
-                        # Tạo các cột clean để search
+                        # Xử lý ảnh (nếu có logic lấy ảnh từ Excel, hiện tại để trống hoặc lấy path text)
+                        "image_path": logic.safe_str(row[12]) if len(row) > 12 else "", 
                         "_clean_code": logic.clean_lookup_key(row[1]),
                         "_clean_specs": logic.clean_lookup_key(row[3]),
                         "_clean_name": logic.clean_lookup_key(row[2])
                     }
-                    # Chỉ lấy dòng có Code
-                    if item["item_code"]:
-                        data_clean.append(item)
+                    data_clean.append(item)
                 
                 if data_clean:
                     df_final = pd.DataFrame(data_clean)
-                    # Lưu vào Supabase
                     backend.save_data("purchases", df_final)
-                    st.success(f"Đã import thành công {len(df_final)} dòng!")
-                    st.cache_data.clear() # Xóa cache để load lại data mới
-                    st.rerun() # Load lại trang
+                    st.success(f"✅ Đã import {len(df_final)} dòng! Đang làm mới...")
+                    st.cache_data.clear()
+                    # CHỈ RERUN KHI THÀNH CÔNG ĐỂ TRÁNH NHẤP NHÁY
+                    st.rerun()
                 else:
-                    st.warning("File Excel không có dữ liệu hợp lệ (Cột Code bị trống).")
+                    st.warning("⚠️ Không tìm thấy dữ liệu hợp lệ trong file Excel.")
                     
             except Exception as e:
-                st.error(f"Lỗi Import: {e}")
-            # --- END FIX ---
-    # Load Data
-    df_pur = backend.load_data("purchases")
-            
+                st.error(f"❌ Lỗi Import: {e}") 
+
     # Load Data
     df_pur = backend.load_data("purchases")
     
     # Search functionality
     search_term = st.text_input("🔍 Tìm kiếm code, tên, specs...", key="search_pur")
-    if search_term:
-        df_pur = df_pur[df_pur.apply(lambda row: search_term.lower() in row.astype(str).str.lower().values.sum(), axis=1)]
+    if search_term and not df_pur.empty:
+        # Tìm kiếm trên tất cả các cột
+        mask = df_pur.apply(lambda x: x.astype(str).str.contains(search_term, case=False, na=False)).any(axis=1)
+        df_pur = df_pur[mask]
 
-    # Editable Dataframe (Thay thế Treeview + Edit Popup)
+    # Cấu hình hiển thị cột (Hiện cột ảnh)
+    column_cfg = {
+        "image_path": st.column_config.ImageColumn(
+            "Ảnh SP", help="Xem ảnh sản phẩm"
+        ),
+        "total_buying_price_vnd": st.column_config.NumberColumn(
+            "Tổng Mua (VND)", format="%d"
+        ),
+         "_clean_code": None, # Ẩn cột hệ thống
+         "_clean_specs": None, # Ẩn cột hệ thống
+         "_clean_name": None # Ẩn cột hệ thống
+    }
+
+    # Editable Dataframe
     edited_pur = st.data_editor(
         df_pur, 
         num_rows="dynamic", 
         use_container_width=True,
-        key="editor_pur"
+        key="editor_pur",
+        column_config=column_cfg, # Áp dụng config ảnh
+        column_order=["image_path", "no", "item_code", "item_name", "specs", "qty", "buying_price_rmb", "exchange_rate", "buying_price_vnd", "total_buying_price_vnd", "leadtime", "supplier_name"] # Sắp xếp thứ tự cột
     )
     
-    if st.button("💾 Lưu DB NCC", type="primary"):
+    if st.button("💾 Lưu thay đổi DB NCC", type="primary"):
         backend.save_data("purchases", edited_pur)
-
 # =============================================================================
 # TAB 3: BÁO GIÁ KHÁCH HÀNG (CORE LOGIC)
 # =============================================================================
@@ -454,4 +462,5 @@ with tab6:
         df_s = backend.load_data("suppliers")
         edited_s = st.data_editor(df_s, num_rows="dynamic", key="editor_supp")
         if st.button("Lưu Master NCC"): backend.save_data("suppliers", edited_s)
+
 
