@@ -218,25 +218,27 @@ with tab1:
     m5.error(f"**TỔNG PO CHƯA THANH TOÁN**: {unpaid_count}")
 
 # =============================================================================
-# TAB 2: BÁO GIÁ NCC (DB GIÁ) - AUTO EXTRACT & UPLOAD IMAGES
+# TAB 2: BÁO GIÁ NCC (DB GIÁ) - BASE64 IMAGE VERSION
 # =============================================================================
 with tab2:
     import time
     import io
+    import base64
+    from PIL import Image as PILImage # Dùng để xử lý ảnh
     from openpyxl import load_workbook
 
-    st.subheader("Database Giá Nhà Cung Cấp (Tự động tách ảnh từ Excel)")
+    st.subheader("Database Giá Nhà Cung Cấp (Hiển thị ảnh trực tiếp)")
     
     col_tool, col_search = st.columns([1, 1])
     with col_tool:
         uploaded_file = st.file_uploader("📥 Import Excel (Có chứa ảnh)", type=['xlsx'], key="uploader_pur")
         
         if uploaded_file:
-            if st.button("🚀 BẮT ĐẦU IMPORT & TÁCH ẢNH", type="primary"):
-                status_box = st.status("Đang xử lý file Excel...", expanded=True)
+            if st.button("🚀 IMPORT & HIỂN THỊ ẢNH NGAY", type="primary"):
+                status_box = st.status("Đang xử lý dữ liệu...", expanded=True)
                 try:
-                    # 1. Đọc dữ liệu văn bản bằng Pandas
-                    status_box.write("📖 Đang đọc dữ liệu văn bản...")
+                    # 1. ĐỌC DỮ LIỆU TEXT
+                    status_box.write("📖 Đang đọc thông tin hàng hóa...")
                     df_raw = pd.read_excel(uploaded_file, header=None, dtype=str).fillna("")
                     
                     # Tìm dòng tiêu đề
@@ -247,8 +249,8 @@ with tab2:
                             start_row = i + 1
                             break
                     
-                    # 2. Đọc hình ảnh bằng Openpyxl
-                    status_box.write("🖼️ Đang quét và tách hình ảnh từ file Excel...")
+                    # 2. TÁCH VÀ XỬ LÝ ẢNH (QUAN TRỌNG)
+                    status_box.write("🖼️ Đang tách và nén ảnh để hiển thị...")
                     uploaded_file.seek(0) 
                     wb = load_workbook(uploaded_file, data_only=True)
                     ws = wb.active
@@ -257,12 +259,37 @@ with tab2:
                     if hasattr(ws, '_images'):
                         for img in ws._images:
                             row_idx = img.anchor._from.row
+                            # Lấy dữ liệu ảnh gốc
                             img_bytes = img._data()
-                            image_map[row_idx] = img_bytes
                             
-                    status_box.write(f"✅ Đã tìm thấy {len(image_map)} ảnh trong file.")
+                            try:
+                                # --- XỬ LÝ NÉN ẢNH (Để phần mềm chạy nhanh & hiện được ngay) ---
+                                # Mở ảnh bằng PIL
+                                pil_img = PILImage.open(io.BytesIO(img_bytes))
+                                
+                                # Convert sang RGB nếu là ảnh RGBA (tránh lỗi)
+                                if pil_img.mode in ("RGBA", "P"):
+                                    pil_img = pil_img.convert("RGB")
+                                    
+                                # Resize ảnh về dạng Thumbnail (Max 200px) để hiển thị nhẹ
+                                pil_img.thumbnail((200, 200))
+                                
+                                # Convert lại thành Base64 string
+                                buffer = io.BytesIO()
+                                pil_img.save(buffer, format="JPEG", quality=70) # Nén JPEG
+                                img_str = base64.b64encode(buffer.getvalue()).decode()
+                                
+                                # Tạo chuỗi Data URL để hiển thị trên Web
+                                base64_src = f"data:image/jpeg;base64,{img_str}"
+                                image_map[row_idx] = base64_src
+                                
+                            except Exception as e:
+                                print(f"Lỗi xử lý ảnh dòng {row_idx}: {e}")
+                                continue
 
-                    # 3. Ghép dữ liệu & Upload ảnh
+                    status_box.write(f"✅ Đã xử lý {len(image_map)} hình ảnh.")
+
+                    # 3. GHÉP DỮ LIỆU
                     data_clean = []
                     total_rows = len(df_raw) - start_row
                     prog_bar = status_box.progress(0)
@@ -277,40 +304,30 @@ with tab2:
                         code_val = get(1) # Cột B
                         if not code_val: continue 
 
-                        # --- XỬ LÝ ẢNH ---
-                        final_img_link = ""
-                        
-                        # Ưu tiên 1: Ảnh dán trong Excel (Embedded)
+                        # Lấy ảnh Base64 nếu có
+                        final_img = ""
                         if i in image_map:
-                            img_data = image_map[i]
-                            filename = f"{logic.safe_filename(code_val)}.png"
-                            file_obj = io.BytesIO(img_data)
-                            
-                            status_box.write(f"☁️ Upload ảnh: {code_val}...")
-                            link = backend.upload_to_drive(file_obj, filename) # Upload lên Drive
-                            if link: final_img_link = link
-                        
-                        # Ưu tiên 2: Link ảnh cũ (nếu không có ảnh mới)
+                            final_img = image_map[i]
                         else:
-                            old_path = get(12)
-                            if "http" in old_path: # Chỉ lấy nếu là link online
-                                final_img_link = old_path
+                            # Nếu không có ảnh mới, kiểm tra ảnh cũ (nếu là link online hoặc base64 cũ)
+                            old_val = get(12)
+                            if "http" in old_val or "data:image" in old_val:
+                                final_img = old_val
 
-                        # --- TẠO ITEM ---
                         item = {
-                            "no": get(0),                     # A
-                            "item_code": code_val,            # B
-                            "item_name": get(2),              # C
-                            "specs": get(3),                  # D
-                            "qty": logic.fmt_num(logic.to_float(get(4))),           # E
-                            "buying_price_rmb": logic.fmt_num(logic.to_float(get(5))), # F
-                            "total_buying_price_rmb": logic.fmt_num(logic.to_float(get(6))), # G
-                            "exchange_rate": logic.fmt_num(logic.to_float(get(7))),    # H
-                            "buying_price_vnd": logic.fmt_num(logic.to_float(get(8))), # I
-                            "total_buying_price_vnd": logic.fmt_num(logic.to_float(get(9))), # J
-                            "leadtime": get(10),              # K
-                            "supplier_name": get(11),         # L
-                            "image_path": final_img_link,     # M (Link ảnh để hiển thị)
+                            "no": get(0),                     
+                            "item_code": code_val,            
+                            "item_name": get(2),              
+                            "specs": get(3),                  
+                            "qty": logic.fmt_num(logic.to_float(get(4))),          
+                            "buying_price_rmb": logic.fmt_num(logic.to_float(get(5))), 
+                            "total_buying_price_rmb": logic.fmt_num(logic.to_float(get(6))), 
+                            "exchange_rate": logic.fmt_num(logic.to_float(get(7))),    
+                            "buying_price_vnd": logic.fmt_num(logic.to_float(get(8))), 
+                            "total_buying_price_vnd": logic.fmt_num(logic.to_float(get(9))), 
+                            "leadtime": get(10),              
+                            "supplier_name": get(11),         
+                            "image_path": final_img,     # Chứa mã ảnh Base64
                             
                             "_clean_code": logic.clean_lookup_key(code_val),
                             "_clean_specs": logic.clean_lookup_key(get(3)),
@@ -318,18 +335,18 @@ with tab2:
                         }
                         data_clean.append(item)
                     
-                    # 4. Lưu vào Database
+                    # 4. LƯU VÀO DB
                     if data_clean:
                         df_final = pd.DataFrame(data_clean)
                         backend.save_data("purchases", df_final)
                         
-                        status_box.update(label="✅ Import hoàn tất!", state="complete", expanded=False)
-                        st.success(f"Đã xử lý xong {len(df_final)} dòng.")
+                        status_box.update(label="✅ Import hoàn tất! Ảnh đã sẵn sàng.", state="complete", expanded=False)
+                        st.success(f"Đã cập nhật {len(df_final)} sản phẩm kèm hình ảnh.")
                         time.sleep(1)
                         st.rerun()
                     else:
-                        status_box.update(label="⚠️ Lỗi dữ liệu", state="error")
-                        st.error("Không tìm thấy dữ liệu hợp lệ.")
+                        status_box.update(label="⚠️ Không có dữ liệu", state="error")
+                        st.error("File không hợp lệ hoặc không có dữ liệu.")
 
                 except Exception as e:
                     st.error(f"❌ Lỗi: {e}") 
@@ -343,25 +360,22 @@ with tab2:
         mask = df_pur.apply(lambda x: x.astype(str).str.contains(search_term, case=False, na=False)).any(axis=1)
         df_pur = df_pur[mask]
 
-    # --- CẤU HÌNH HIỂN THỊ CỘT (QUAN TRỌNG NHẤT) ---
+    # --- CẤU HÌNH HIỂN THỊ ẢNH ---
     column_cfg = {
-        # Cấu hình cột image_path thành dạng ImageColumn để hiện ảnh
         "image_path": st.column_config.ImageColumn(
-            "Images", # Tên cột hiển thị
-            help="Hình ảnh sản phẩm",
-            width="small" # Kích thước ảnh (small, medium, large)
+            "Hình Ảnh", 
+            help="Ảnh sản phẩm",
+            width="small" # Hiển thị dạng thumbnail
         ),
-        "total_buying_price_vnd": st.column_config.NumberColumn("Total VND", format="%d"),
-        "buying_price_vnd": st.column_config.NumberColumn("Price VND", format="%d"),
-         "_clean_code": None, "_clean_specs": None, "_clean_name": None # Ẩn cột rác
+        "total_buying_price_vnd": st.column_config.NumberColumn("Tổng Mua (VND)", format="%d"),
+        "_clean_code": None, "_clean_specs": None, "_clean_name": None
     }
 
-    # Thứ tự cột hiển thị (Đúng 100% theo Excel: No -> Code ... -> Images)
+    # Sắp xếp cột chuẩn file Excel
     cols_order = [
-        "no", "item_code", "item_name", "specs", "qty", 
+        "image_path", "no", "item_code", "item_name", "specs", "qty", 
         "buying_price_rmb", "total_buying_price_rmb", "exchange_rate", 
-        "buying_price_vnd", "total_buying_price_vnd", "leadtime", 
-        "supplier_name", "image_path"
+        "buying_price_vnd", "total_buying_price_vnd", "leadtime", "supplier_name"
     ]
 
     edited_pur = st.data_editor(
@@ -369,8 +383,9 @@ with tab2:
         num_rows="dynamic", 
         use_container_width=True,
         key="editor_pur",
-        column_config=column_cfg, # Áp dụng config ảnh
-        column_order=cols_order   # Áp dụng thứ tự cột
+        column_config=column_cfg, 
+        column_order=cols_order,
+        height=600 # Tăng chiều cao bảng để dễ nhìn
     )
     
     if st.button("💾 Lưu thay đổi DB NCC", type="primary"):
@@ -523,6 +538,7 @@ with tab6:
         df_s = backend.load_data("suppliers")
         edited_s = st.data_editor(df_s, num_rows="dynamic", key="editor_supp")
         if st.button("Lưu Master NCC"): backend.save_data("suppliers", edited_s)
+
 
 
 
