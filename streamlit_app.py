@@ -227,9 +227,65 @@ with tab2:
     with col_tool:
         uploaded_file = st.file_uploader("📥 Import Excel (Làm mới DB)", type=['xlsx'])
         if uploaded_file:
-            # Logic import Excel (Simplified for online)
-            df_new = pd.read_excel(uploaded_file, dtype=str).fillna("")
-            backend.save_data("purchases", df_new)
+            # --- FIX LỖI IMPORT TẠI ĐÂY ---
+            try:
+                # 1. Đọc Excel không lấy header (header=None) để map theo vị trí cột (Index)
+                # Giống logic cũ: Cột 0=No, 1=Code, 2=Name...
+                df_raw = pd.read_excel(uploaded_file, header=None, dtype=str).fillna("")
+                
+                # Xác định hàng bắt đầu (Bỏ qua header nếu dòng đầu tiên chứa chữ 'Code' hoặc 'Mã')
+                start_row = 0
+                if len(df_raw) > 0:
+                    first_cell = str(df_raw.iloc[0, 1]).lower()
+                    if 'code' in first_cell or 'mã' in first_cell:
+                        start_row = 1
+                    # Trường hợp Excel có 2 dòng header, check dòng thứ 2
+                    elif len(df_raw) > 1 and ('code' in str(df_raw.iloc[1, 1]).lower()):
+                        start_row = 2
+
+                data_clean = []
+                for i in range(start_row, len(df_raw)):
+                    row = df_raw.iloc[i]
+                    # Map đúng thứ tự cột trong Database Supabase
+                    # Dựa trên logic file V4800 cũ
+                    item = {
+                        "no": logic.safe_str(row[0]),
+                        "item_code": logic.safe_str(row[1]),
+                        "item_name": logic.safe_str(row[2]),
+                        "specs": logic.safe_str(row[3]),
+                        "qty": logic.fmt_num(logic.to_float(row[4])),
+                        "buying_price_rmb": logic.fmt_num(logic.to_float(row[5])),
+                        "total_buying_price_rmb": logic.fmt_num(logic.to_float(row[6])),
+                        "exchange_rate": logic.fmt_num(logic.to_float(row[7])),
+                        "buying_price_vnd": logic.fmt_num(logic.to_float(row[8])),
+                        "total_buying_price_vnd": logic.fmt_num(logic.to_float(row[9])),
+                        "leadtime": logic.safe_str(row[10]),
+                        "supplier_name": logic.safe_str(row[11]),
+                        "image_path": "", # Ảnh xử lý sau nếu cần
+                        # Tạo các cột clean để search
+                        "_clean_code": logic.clean_lookup_key(row[1]),
+                        "_clean_specs": logic.clean_lookup_key(row[3]),
+                        "_clean_name": logic.clean_lookup_key(row[2])
+                    }
+                    # Chỉ lấy dòng có Code
+                    if item["item_code"]:
+                        data_clean.append(item)
+                
+                if data_clean:
+                    df_final = pd.DataFrame(data_clean)
+                    # Lưu vào Supabase
+                    backend.save_data("purchases", df_final)
+                    st.success(f"Đã import thành công {len(df_final)} dòng!")
+                    st.cache_data.clear() # Xóa cache để load lại data mới
+                    st.rerun() # Load lại trang
+                else:
+                    st.warning("File Excel không có dữ liệu hợp lệ (Cột Code bị trống).")
+                    
+            except Exception as e:
+                st.error(f"Lỗi Import: {e}")
+            # --- END FIX ---
+    # Load Data
+    df_pur = backend.load_data("purchases")
             
     # Load Data
     df_pur = backend.load_data("purchases")
@@ -398,3 +454,4 @@ with tab6:
         df_s = backend.load_data("suppliers")
         edited_s = st.data_editor(df_s, num_rows="dynamic", key="editor_supp")
         if st.button("Lưu Master NCC"): backend.save_data("suppliers", edited_s)
+
