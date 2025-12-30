@@ -33,11 +33,13 @@ SCHEMAS = {
 # 1. Hàm khởi tạo kết nối (có Cache)
 @st.cache_resource
 def init_supabase():
-    try:
-        # Lấy thông tin từ secrets.toml
-        url = st.secrets["supabase"]["SUPABASE_URL"]
-        key = st.secrets["supabase"]["SUPABASE_KEY"]
-        return create_client(url, key)
+    # Gọi đúng tên biến IN HOA trong Secrets
+    url = st.secrets["supabase"]["SUPABASE_URL"]
+    key = st.secrets["supabase"]["SUPABASE_KEY"]
+    return create_client(url, key)
+
+# Khởi tạo client
+supabase: Client = init_supabase()
     except Exception as e:
         st.error(f"Lỗi kết nối Supabase: {e}")
         return None
