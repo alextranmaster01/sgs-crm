@@ -1,132 +1,25 @@
 import streamlit as st
 import pandas as pd
 from supabase import create_client, Client
-# --- BẮT BUỘC PHẢI CÓ 3 DÒNG NÀY ĐỂ GOOGLE CHẠY ---
-from google.oauth2.credentials import Credentials  # <--- Bạn đang thiếu dòng này
+from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
-# --------------------------------------------------
 
-# (Phần code bên dưới giữ nguyên)
-# ... các import khác của bạn (google, etc.)
-
-# --- THÊM ĐOẠN NÀY VÀO ĐẦU FILE (SAU IMPORT) ---
-SCHEMAS = {
-    "purchases": [
-        "no", "item_code", "item_name", "specs", "qty", 
-        "buying_price_rmb", "total_buying_price_rmb", "exchange_rate", 
-        "buying_price_vnd", "total_buying_price_vnd", "leadtime", 
-        "supplier_name", "image_path", 
-        "_clean_code", "_clean_specs", "_clean_name"
-    ],
-    "customer_orders": [
-        "order_id", "customer_name", "order_date", "delivery_date",
-        "items", "total_amount", "status", "notes"
-    ],
-    "inventory": [
-        "item_code", "item_name", "stock_qty", "location", "last_updated"
-    ]
-}
-# ------------------------------------------------
-
-# ... Sau đó mới đến các hàm init_supabase, load_data ...
-# 1. Hàm khởi tạo kết nối (có Cache)
+# --- 1. KẾT NỐI SUPABASE ---
 @st.cache_resource
 def init_supabase():
-    # Gọi đúng tên biến IN HOA trong Secrets
-    url = st.secrets["supabase"]["SUPABASE_URL"]
-    key = st.secrets["supabase"]["SUPABASE_KEY"]
-    return create_client(url, key)
-
-# Khởi tạo client
-supabase: Client = init_supabase()
-    except Exception as e:
-        st.error(f"Lỗi kết nối Supabase: {e}")
-        return None
-
-# 2. Gọi hàm để lấy biến client
-supabase = init_supabase()
-
-def get_drive_service():
-    # Lấy thông tin từ secrets.toml
-    info = st.secrets["google"]
-    
-    # Tạo credentials từ Refresh Token
-    creds = Credentials(
-        None, # Access token (để None để nó tự lấy mới)
-        refresh_token=info["refresh_token"],
-        token_uri="https://oauth2.googleapis.com/token",
-        client_id=info["client_id"],
-        client_secret=info["client_secret"],
-        scopes=['https://www.googleapis.com/auth/drive']
-    )
-    
-    return build('drive', 'v3', credentials=creds)
-
-# Hàm upload giữ nguyên logic, chỉ gọi get_drive_service ở trên
-# --- Thay thế hàm upload_to_drive cũ ---
-def upload_to_drive(file_obj, filename, folder_type="images"):
     try:
-        service = get_drive_service()
-        # Lấy ID thư mục từ secrets
-        folder_id = st.secrets["google"][f"folder_id_{folder_type}"]
-        
-        # 1. KIỂM TRA FILE CŨ: Tìm file có cùng tên trong folder
-        query = f"name = '{filename}' and '{folder_id}' in parents and trashed = false"
-        results = service.files().list(q=query, fields="files(id, webContentLink)").execute()
-        files = results.get('files', [])
-        
-        media = MediaIoBaseUpload(file_obj, mimetype='image/png', resumable=True)
-        final_link = ""
-        file_id = ""
-
-        if files:
-            # 2. NẾU CÓ RỒI -> GHI ĐÈ (UPDATE) - Không tạo file rác mới
-            file_id = files[0]['id']
-            updated_file = service.files().update(
-                fileId=file_id,
-                media_body=media,
-                fields='id, webContentLink'
-            ).execute()
-            final_link = updated_file.get('webContentLink')
-        else:
-            # 3. NẾU CHƯA CÓ -> TẠO MỚI (CREATE)
-            file_metadata = {'name': filename, 'parents': [folder_id]}
-            created_file = service.files().create(
-                body=file_metadata,
-                media_body=media,
-                fields='id, webContentLink'
-            ).execute()
-            file_id = created_file.get('id')
-            final_link = created_file.get('webContentLink')
-
-        # 4. PUBLIC ẢNH (Bắt buộc để hiển thị trên phần mềm)
-        try:
-            permission = {'type': 'anyone', 'role': 'reader'}
-            service.permissions().create(fileId=file_id, body=permission).execute()
-        except:
-            pass # Nếu đã public rồi thì bỏ qua
-
-        return final_link
-
+        # Lấy thông tin từ secrets (viết hoa cho chuẩn)
+        url = st.secrets["supabase"]["SUPABASE_URL"]
+        key = st.secrets["supabase"]["SUPABASE_KEY"]
+        return create_client(url, key)
     except Exception as e:
-        st.error(f"Lỗi Upload Drive: {e}")
         return None
 
-# --- 1. CẤU HÌNH SCHEMA (ĐỂ TRÁNH LỖI KHI DB TRỐNG) ---
-SCHEMAS = {
-    "customers": ["no", "short_name", "eng_name", "vn_name", "address_1", "address_2", "contact_person", "director", "phone", "fax", "tax_code", "destination", "payment_term"],
-    "suppliers": ["no", "short_name", "eng_name", "vn_name", "address_1", "address_2", "contact_person", "director", "phone", "fax", "tax_code", "destination", "payment_term"],
-    "purchases": ["no", "item_code", "item_name", "specs", "qty", "buying_price_rmb", "total_buying_price_rmb", "exchange_rate", "buying_price_vnd", "total_buying_price_vnd", "leadtime", "supplier_name", "image_path", "_clean_code", "_clean_specs", "_clean_name"],
-    "sales_history": ["date", "quote_no", "customer", "item_code", "item_name", "specs", "qty", "total_revenue", "total_cost", "profit", "supplier", "status", "delivery_date", "po_number", "_clean_code", "_clean_specs"],
-    "tracking": ["no", "po_no", "partner", "status", "eta", "proof_image", "order_type", "last_update", "finished"],
-    "payment": ["no", "po_no", "customer", "invoice_no", "status", "due_date", "paid_date"],
-    "paid_history": ["no", "po_no", "customer", "invoice_no", "status", "due_date", "paid_date"],
-    "supplier_orders": ["no", "item_code", "item_name", "specs", "qty", "price_rmb", "total_rmb", "exchange_rate", "price_vnd", "total_vnd", "eta", "supplier", "po_number", "order_date", "pdf_path"],
-    "customer_orders": ["no", "item_code", "item_name", "specs", "qty", "unit_price", "total_price", "eta", "customer", "po_number", "order_date", "pdf_path", "base_buying_vnd", "full_cost_total", "_clean_code", "_clean_specs"]
-}
+# Khởi tạo client (Biến toàn cục)
+supabase: Client = init_supabase()
 
-# Mapping Table Names
+# --- 2. CẤU HÌNH BẢNG (TABLES) ---
 TABLES = {
     "purchases": "crm_purchases",
     "customers": "crm_customers",
@@ -139,52 +32,38 @@ TABLES = {
     "customer_orders": "db_customer_orders"
 }
 
-# --- 2. KẾT NỐI SUPABASE ---
-@st.cache_resource
-def init_supabase():
-    try:
-        url = st.secrets["supabase"]["url"]
-        key = st.secrets["supabase"]["key"]
-        return create_client(url, key)
-    except Exception as e:
-        return None
-
-supabase: Client = init_supabase()
-
+# --- 3. CÁC HÀM XỬ LÝ DATA ---
 def load_data(table_key):
-    if not supabase: return pd.DataFrame(columns=SCHEMAS.get(table_key, []))
     try:
-        response = supabase.table(TABLES[table_key]).select("*").execute()
-        data = response.data
-        if not data: return pd.DataFrame(columns=SCHEMAS.get(table_key, []))
-        df = pd.DataFrame(data)
-        for col in SCHEMAS.get(table_key, []):
-            if col not in df.columns: df[col] = ""
-        return df
+        if not supabase: return pd.DataFrame()
+        table_name = TABLES.get(table_key)
+        if not table_name: return pd.DataFrame()
+        
+        response = supabase.table(table_name).select("*").execute()
+        return pd.DataFrame(response.data)
     except Exception as e:
-        return pd.DataFrame(columns=SCHEMAS.get(table_key, []))
+        st.error(f"Lỗi tải dữ liệu {table_key}: {e}")
+        return pd.DataFrame()
 
 def save_data(table_key, df):
-    if not supabase: return
     try:
-        df_clean = df.where(pd.notnull(df), None)
-        data = df_clean.to_dict(orient='records')
-        if data:
-            supabase.table(TABLES[table_key]).upsert(data).execute()
-            st.toast(f"Đã lưu dữ liệu vào {TABLES[table_key]}", icon="💾")
+        if not supabase: return
+        table_name = TABLES.get(table_key)
+        
+        # Chuyển DataFrame thành danh sách dictionary để upload
+        data = df.to_dict(orient='records')
+        
+        # Upsert (Cập nhật hoặc Thêm mới)
+        supabase.table(table_name).upsert(data).execute()
+        st.toast(f"Đã lưu dữ liệu vào {table_name}", icon="💾")
     except Exception as e:
         st.error(f"Lỗi lưu dữ liệu: {e}")
 
-# --- 3. KẾT NỐI GOOGLE DRIVE (QUAN TRỌNG) ---
+# --- 4. KẾT NỐI GOOGLE DRIVE (OAUTH2) ---
 def get_drive_service():
-    """Tạo kết nối Google Drive API từ Refresh Token"""
     try:
-        if "google" not in st.secrets: 
-            st.error("Chưa cấu hình secrets[google]")
-            return None
-            
         creds = Credentials(
-            None, # Access Token (None để tự refresh)
+            None,
             refresh_token=st.secrets["google"]["refresh_token"],
             token_uri="https://oauth2.googleapis.com/token",
             client_id=st.secrets["google"]["client_id"],
@@ -192,58 +71,53 @@ def get_drive_service():
         )
         return build('drive', 'v3', credentials=creds)
     except Exception as e:
-        st.error(f"Lỗi Auth Google: {e}")
+        st.error(f"Lỗi xác thực Google: {e}")
         return None
 
 def upload_to_drive(file_obj, filename, folder_type="images"):
-    """
-    Upload file lên Drive -> Set quyền Public -> Trả về Link xem trực tiếp
-    """
-    service = get_drive_service()
-    if not service: return None
-    
     try:
-        # 1. Lấy ID thư mục từ secrets
-        folder_key = f"folder_id_{folder_type}"
-        if folder_key not in st.secrets["google"]:
-            st.error(f"Thiếu cấu hình '{folder_key}' trong secrets.toml")
-            return None
-        folder_id = st.secrets["google"][folder_key]
-        
-        # 2. Tạo metadata cho file
-        file_metadata = {
-            'name': filename, 
-            'parents': [folder_id]
-        }
-        
-        # 3. Chuẩn bị file để upload
-        media = MediaIoBaseUpload(file_obj, mimetype='image/png', resumable=True)
-        
-        # 4. Thực hiện Upload
-        file = service.files().create(
-            body=file_metadata, 
-            media_body=media, 
-            fields='id, webContentLink' # Yêu cầu trả về ID và Link
-        ).execute()
-        
-        file_id = file.get('id')
-        
-        # 5. QUAN TRỌNG: Cấp quyền "Anyone with link" (Reader)
-        # Nếu không có bước này, Streamlit sẽ KHÔNG hiển thị được ảnh
-        try:
-            permission = {
-                'type': 'anyone',
-                'role': 'reader',
-            }
-            service.permissions().create(
-                fileId=file_id,
-                body=permission,
-            ).execute()
-        except Exception as p_e:
-            st.warning(f"Không thể set quyền public cho ảnh (Có thể do chính sách Google Workspace): {p_e}")
+        service = get_drive_service()
+        if not service: return None
 
-        # 6. Trả về link hiển thị (webContentLink)
-        return file.get('webContentLink')
+        folder_id = st.secrets["google"][f"folder_id_{folder_type}"]
+        
+        # A. KIỂM TRA FILE CŨ (Chống trùng lặp)
+        query = f"name = '{filename}' and '{folder_id}' in parents and trashed = false"
+        results = service.files().list(q=query, fields="files(id, webContentLink)").execute()
+        files = results.get('files', [])
+        
+        media = MediaIoBaseUpload(file_obj, mimetype='image/png', resumable=True)
+        final_link = ""
+        file_id = ""
+
+        if files:
+            # B. NẾU CÓ RỒI -> GHI ĐÈ (UPDATE)
+            file_id = files[0]['id']
+            updated_file = service.files().update(
+                fileId=file_id,
+                media_body=media,
+                fields='id, webContentLink'
+            ).execute()
+            final_link = updated_file.get('webContentLink')
+        else:
+            # C. NẾU CHƯA CÓ -> TẠO MỚI (CREATE)
+            file_metadata = {'name': filename, 'parents': [folder_id]}
+            created_file = service.files().create(
+                body=file_metadata,
+                media_body=media,
+                fields='id, webContentLink'
+            ).execute()
+            file_id = created_file.get('id')
+            final_link = created_file.get('webContentLink')
+
+        # D. PUBLIC ẢNH
+        try:
+            permission = {'type': 'anyone', 'role': 'reader'}
+            service.permissions().create(fileId=file_id, body=permission).execute()
+        except:
+            pass 
+
+        return final_link
 
     except Exception as e:
         st.error(f"Lỗi Upload Drive: {e}")
