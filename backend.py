@@ -9,17 +9,17 @@ from googleapiclient.http import MediaIoBaseUpload
 @st.cache_resource
 def init_supabase():
     try:
-        # Lấy thông tin từ secrets (viết hoa cho chuẩn)
+        # Đảm bảo trong Secrets bạn đang để chữ IN HOA: SUPABASE_URL, SUPABASE_KEY
         url = st.secrets["supabase"]["SUPABASE_URL"]
         key = st.secrets["supabase"]["SUPABASE_KEY"]
         return create_client(url, key)
     except Exception as e:
         return None
 
-# Khởi tạo client (Biến toàn cục)
 supabase: Client = init_supabase()
 
-# --- 2. CẤU HÌNH BẢNG (TABLES) ---
+# --- 2. CẤU HÌNH BẢNG & CỘT (SCHEMAS) ---
+# Đây là phần quan trọng để tránh lỗi KeyError khi bảng rỗng
 TABLES = {
     "purchases": "crm_purchases",
     "customers": "crm_customers",
@@ -32,34 +32,55 @@ TABLES = {
     "customer_orders": "db_customer_orders"
 }
 
+SCHEMAS = {
+    "payment": ["id", "order_id", "customer_name", "amount", "status", "payment_date", "notes"],
+    "customer_orders": ["id", "order_id", "customer_name", "total_price", "order_date", "status"],
+    "purchases": ["no", "item_code", "item_name", "specs", "qty", "buying_price_rmb", "total_buying_price_rmb", "exchange_rate", "buying_price_vnd", "total_buying_price_vnd", "leadtime", "supplier_name", "image_path"],
+    "tracking": ["id", "order_id", "status", "update_time", "location"],
+    "customers": ["id", "short_name", "full_name", "address", "tax_code", "contact"],
+    "suppliers": ["id", "short_name", "full_name", "contact", "products"],
+    "sales_history": ["id", "order_id", "profit", "date"],
+    "paid_history": ["id", "order_id", "amount", "date"]
+}
+
 # --- 3. CÁC HÀM XỬ LÝ DATA ---
 def load_data(table_key):
+    """Tải dữ liệu, nếu rỗng thì trả về DataFrame có cột sẵn theo Schema"""
     try:
-        if not supabase: return pd.DataFrame()
+        # Nếu chưa kết nối được Supabase, trả về bảng rỗng có cột
+        if not supabase: 
+            return pd.DataFrame(columns=SCHEMAS.get(table_key, []))
+            
         table_name = TABLES.get(table_key)
         if not table_name: return pd.DataFrame()
         
         response = supabase.table(table_name).select("*").execute()
-        return pd.DataFrame(response.data)
+        data = response.data
+        
+        # QUAN TRỌNG: Nếu data rỗng, trả về DataFrame có cột chuẩn
+        if not data:
+            return pd.DataFrame(columns=SCHEMAS.get(table_key, []))
+            
+        return pd.DataFrame(data)
     except Exception as e:
-        st.error(f"Lỗi tải dữ liệu {table_key}: {e}")
-        return pd.DataFrame()
+        # st.error(f"Lỗi tải {table_key}: {e}") # Tắt thông báo lỗi cho đỡ rối
+        return pd.DataFrame(columns=SCHEMAS.get(table_key, []))
 
 def save_data(table_key, df):
     try:
         if not supabase: return
         table_name = TABLES.get(table_key)
-        
-        # Chuyển DataFrame thành danh sách dictionary để upload
         data = df.to_dict(orient='records')
         
-        # Upsert (Cập nhật hoặc Thêm mới)
+        # Nếu data rỗng thì không lưu gì cả
+        if not data: return
+
         supabase.table(table_name).upsert(data).execute()
-        st.toast(f"Đã lưu dữ liệu vào {table_name}", icon="💾")
+        st.toast(f"Đã lưu thành công!", icon="💾")
     except Exception as e:
         st.error(f"Lỗi lưu dữ liệu: {e}")
 
-# --- 4. KẾT NỐI GOOGLE DRIVE (OAUTH2) ---
+# --- 4. KẾT NỐI GOOGLE DRIVE ---
 def get_drive_service():
     try:
         creds = Credentials(
@@ -71,7 +92,6 @@ def get_drive_service():
         )
         return build('drive', 'v3', credentials=creds)
     except Exception as e:
-        st.error(f"Lỗi xác thực Google: {e}")
         return None
 
 def upload_to_drive(file_obj, filename, folder_type="images"):
@@ -81,7 +101,7 @@ def upload_to_drive(file_obj, filename, folder_type="images"):
 
         folder_id = st.secrets["google"][f"folder_id_{folder_type}"]
         
-        # A. KIỂM TRA FILE CŨ (Chống trùng lặp)
+        # A. CHỐNG TRÙNG LẶP
         query = f"name = '{filename}' and '{folder_id}' in parents and trashed = false"
         results = service.files().list(q=query, fields="files(id, webContentLink)").execute()
         files = results.get('files', [])
@@ -91,31 +111,21 @@ def upload_to_drive(file_obj, filename, folder_type="images"):
         file_id = ""
 
         if files:
-            # B. NẾU CÓ RỒI -> GHI ĐÈ (UPDATE)
+            # GHI ĐÈ
             file_id = files[0]['id']
-            updated_file = service.files().update(
-                fileId=file_id,
-                media_body=media,
-                fields='id, webContentLink'
-            ).execute()
+            updated_file = service.files().update(fileId=file_id, media_body=media, fields='id, webContentLink').execute()
             final_link = updated_file.get('webContentLink')
         else:
-            # C. NẾU CHƯA CÓ -> TẠO MỚI (CREATE)
+            # TẠO MỚI
             file_metadata = {'name': filename, 'parents': [folder_id]}
-            created_file = service.files().create(
-                body=file_metadata,
-                media_body=media,
-                fields='id, webContentLink'
-            ).execute()
+            created_file = service.files().create(body=file_metadata, media_body=media, fields='id, webContentLink').execute()
             file_id = created_file.get('id')
             final_link = created_file.get('webContentLink')
 
-        # D. PUBLIC ẢNH
+        # PUBLIC FILE
         try:
-            permission = {'type': 'anyone', 'role': 'reader'}
-            service.permissions().create(fileId=file_id, body=permission).execute()
-        except:
-            pass 
+            service.permissions().create(fileId=file_id, body={'type': 'anyone', 'role': 'reader'}).execute()
+        except: pass 
 
         return final_link
 
