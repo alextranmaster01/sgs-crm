@@ -49,14 +49,13 @@ SCHEMAS = {
 
 # --- 3. CÁC HÀM XỬ LÝ DATA ---
 def load_data(table_key):
-    """Tải dữ liệu an toàn, không bao giờ crash"""
     default_cols = SCHEMAS.get(table_key, [])
     try:
         if not supabase: return pd.DataFrame(columns=default_cols)
         
         table_name = TABLES.get(table_key)
-        if not table_name: return pd.DataFrame(columns=default_cols)
         
+        # Thử tải dữ liệu
         response = supabase.table(table_name).select("*").execute()
         data = response.data
         
@@ -64,8 +63,10 @@ def load_data(table_key):
             return pd.DataFrame(columns=default_cols)
             
         return pd.DataFrame(data)
+
     except Exception as e:
-        # Nếu lỗi, trả về bảng rỗng đúng chuẩn cột để app vẫn chạy
+        # NẾU CÓ LỖI (VD: Thiếu bảng), NÓ SẼ HIỆN RA Ở ĐÂY
+        st.warning(f"⚠️ Không tải được bảng '{table_key}'. Lỗi: {e}")
         return pd.DataFrame(columns=default_cols)
 
 def save_data(table_key, df):
