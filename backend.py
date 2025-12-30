@@ -64,48 +64,53 @@ def get_drive_service():
     return build('drive', 'v3', credentials=creds)
 
 # Hàm upload giữ nguyên logic, chỉ gọi get_drive_service ở trên
+# --- Thay thế hàm upload_to_drive cũ ---
 def upload_to_drive(file_obj, filename, folder_type="images"):
-    service = get_drive_service()
-    if not service:
-        return None
-        
     try:
-        # Lấy ID folder từ secrets (hoặc điền trực tiếp ID vào đây)
-        # folder_id = st.secrets["google"]["folder_id_images"] 
-        folder_id = "17QK8rGlwcwcSE1bXb8M7DF0vn5VpQqXO" 
-
-        file_metadata = {
-            'name': filename,
-            'parents': [folder_id]
-        }
+        service = get_drive_service()
+        # Lấy ID thư mục từ secrets
+        folder_id = st.secrets["google"][f"folder_id_{folder_type}"]
+        
+        # 1. KIỂM TRA FILE CŨ: Tìm file có cùng tên trong folder
+        query = f"name = '{filename}' and '{folder_id}' in parents and trashed = false"
+        results = service.files().list(q=query, fields="files(id, webContentLink)").execute()
+        files = results.get('files', [])
         
         media = MediaIoBaseUpload(file_obj, mimetype='image/png', resumable=True)
-        
-        # 1. Tạo file
-        file = service.files().create(
-            body=file_metadata,
-            media_body=media,
-            fields='id, webContentLink'
-        ).execute()
-        
-        file_id = file.get('id')
-        
-        # 2. BƯỚC QUAN TRỌNG: Cấp quyền "Anyone with the link" (Public)
-        permission = {
-            'type': 'anyone',
-            'role': 'reader',
-        }
-        service.permissions().create(
-            fileId=file_id,
-            body=permission,
-            fields='id',
-        ).execute()
-        
-        # 3. Trả về link xem trực tiếp
-        return file.get('webContentLink')
-        
+        final_link = ""
+        file_id = ""
+
+        if files:
+            # 2. NẾU CÓ RỒI -> GHI ĐÈ (UPDATE) - Không tạo file rác mới
+            file_id = files[0]['id']
+            updated_file = service.files().update(
+                fileId=file_id,
+                media_body=media,
+                fields='id, webContentLink'
+            ).execute()
+            final_link = updated_file.get('webContentLink')
+        else:
+            # 3. NẾU CHƯA CÓ -> TẠO MỚI (CREATE)
+            file_metadata = {'name': filename, 'parents': [folder_id]}
+            created_file = service.files().create(
+                body=file_metadata,
+                media_body=media,
+                fields='id, webContentLink'
+            ).execute()
+            file_id = created_file.get('id')
+            final_link = created_file.get('webContentLink')
+
+        # 4. PUBLIC ẢNH (Bắt buộc để hiển thị trên phần mềm)
+        try:
+            permission = {'type': 'anyone', 'role': 'reader'}
+            service.permissions().create(fileId=file_id, body=permission).execute()
+        except:
+            pass # Nếu đã public rồi thì bỏ qua
+
+        return final_link
+
     except Exception as e:
-        st.error(f"Lỗi khi upload file: {str(e)}")
+        st.error(f"Lỗi Upload Drive: {e}")
         return None
 
 # --- 1. CẤU HÌNH SCHEMA (ĐỂ TRÁNH LỖI KHI DB TRỐNG) ---
