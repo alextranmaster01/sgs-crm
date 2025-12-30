@@ -228,108 +228,90 @@ with tab2:
         uploaded_file = st.file_uploader("📥 Import Excel (Làm mới DB)", type=['xlsx'], key="uploader_pur")
         
         if uploaded_file:
-            # 1. TẠO ID FILE ĐỂ CHỐNG NHẤP NHÁY (LOOP)
-            file_id = f"{uploaded_file.name}_{uploaded_file.size}"
-            if "processed_file_id" not in st.session_state: st.session_state.processed_file_id = ""
-            
-            # Chỉ chạy code xử lý khi đây là file mới
-            if st.session_state.processed_file_id != file_id:
+            # Nút xác nhận Import (Để bạn kiểm soát khi nào chạy)
+            if st.button("🚀 BẮT ĐẦU IMPORT", type="primary"):
                 try:
-                    # 2. ĐỌC FILE EXCEL (Lấy toàn bộ dữ liệu dạng chuỗi để giữ nguyên format)
-                    df_raw = pd.read_excel(uploaded_file, header=None, dtype=str).fillna("")
-                    
-                    # Tìm dòng tiêu đề (Dòng chứa chữ 'Item code' hoặc 'Mã hàng')
-                    start_row = 0
-                    for i in range(min(10, len(df_raw))):
-                        row_str = str(df_raw.iloc[i].values).lower()
-                        if 'item code' in row_str or 'mã hàng' in row_str:
-                            start_row = i + 1 # Dữ liệu bắt đầu ngay sau dòng tiêu đề
-                            break
-                    
-                    # 3. MAPPING DỮ LIỆU (THEO ĐÚNG THỨ TỰ 13 CỘT TRONG FILE CỦA BẠN)
-                    data_clean = []
-                    
-                    # Lặp qua từng dòng dữ liệu
-                    for i in range(start_row, len(df_raw)):
-                        row = df_raw.iloc[i]
+                    with st.spinner("Đang đọc file và đẩy lên Server..."):
+                        # 1. Đọc file Excel
+                        df_raw = pd.read_excel(uploaded_file, header=None, dtype=str).fillna("")
                         
-                        # Hàm lấy dữ liệu an toàn (tránh lỗi nếu excel thiếu cột)
-                        def get(idx): 
-                            return logic.safe_str(row[idx]) if idx < len(row) else ""
+                        # 2. Tìm dòng tiêu đề (chứa chữ "Item code")
+                        start_row = 0
+                        for i in range(min(20, len(df_raw))):
+                            row_str = str(df_raw.iloc[i].values).lower()
+                            if 'item code' in row_str or 'mã hàng' in row_str:
+                                start_row = i + 1
+                                break
                         
-                        # Cột 1 là Item Code (bắt buộc phải có)
-                        code_val = get(1) 
-                        if not code_val: continue 
-
-                        item = {
-                            # Mapping chính xác theo file BUYING PRICE-ALL-OK
-                            "no": get(0),                     # Cột A: No
-                            "item_code": code_val,            # Cột B: Item code
-                            "item_name": get(2),              # Cột C: Item name
-                            "specs": get(3),                  # Cột D: Specs
-                            "qty": logic.fmt_num(logic.to_float(get(4))),           # Cột E: Q'ty
-                            "buying_price_rmb": logic.fmt_num(logic.to_float(get(5))), # Cột F: Buying price(RMB)
-                            "total_buying_price_rmb": logic.fmt_num(logic.to_float(get(6))), # Cột G: Total...
-                            "exchange_rate": logic.fmt_num(logic.to_float(get(7))),    # Cột H: Exchange rate
-                            "buying_price_vnd": logic.fmt_num(logic.to_float(get(8))), # Cột I: Buying price(VND)
-                            "total_buying_price_vnd": logic.fmt_num(logic.to_float(get(9))), # Cột J: Total...
-                            "leadtime": get(10),              # Cột K: Leadtime
-                            "supplier_name": get(11),         # Cột L: Supplier name
-                            "image_path": get(12),            # Cột M: Image
+                        # 3. Quét dữ liệu
+                        data_clean = []
+                        for i in range(start_row, len(df_raw)):
+                            row = df_raw.iloc[i]
                             
-                            # Tạo các cột phụ để tìm kiếm
-                            "_clean_code": logic.clean_lookup_key(code_val),
-                            "_clean_specs": logic.clean_lookup_key(get(3)),
-                            "_clean_name": logic.clean_lookup_key(get(2))
-                        }
-                        data_clean.append(item)
-                    
-                    # 4. LƯU VÀO DATABASE
-                    if data_clean:
-                        df_final = pd.DataFrame(data_clean)
-                        backend.save_data("purchases", df_final)
+                            # Hàm lấy dữ liệu an toàn
+                            def get(idx): 
+                                return logic.safe_str(row[idx]) if idx < len(row) else ""
+                            
+                            code_val = get(1) # Cột B là Code
+                            if not code_val: continue 
+
+                            # Mapping CỨNG 100% theo file của bạn
+                            item = {
+                                "no": get(0),                     # Cột A
+                                "item_code": code_val,            # Cột B
+                                "item_name": get(2),              # Cột C
+                                "specs": get(3),                  # Cột D
+                                "qty": logic.fmt_num(logic.to_float(get(4))),           # Cột E
+                                "buying_price_rmb": logic.fmt_num(logic.to_float(get(5))), # Cột F
+                                "total_buying_price_rmb": logic.fmt_num(logic.to_float(get(6))), # Cột G
+                                "exchange_rate": logic.fmt_num(logic.to_float(get(7))),    # Cột H
+                                "buying_price_vnd": logic.fmt_num(logic.to_float(get(8))), # Cột I
+                                "total_buying_price_vnd": logic.fmt_num(logic.to_float(get(9))), # Cột J
+                                "leadtime": get(10),              # Cột K
+                                "supplier_name": get(11),         # Cột L
+                                "image_path": get(12),            # Cột M
+                                
+                                # Cột hệ thống
+                                "_clean_code": logic.clean_lookup_key(code_val),
+                                "_clean_specs": logic.clean_lookup_key(get(3)),
+                                "_clean_name": logic.clean_lookup_key(get(2))
+                            }
+                            data_clean.append(item)
                         
-                        # Đánh dấu đã xử lý xong file này
-                        st.session_state.processed_file_id = file_id
-                        
-                        st.success(f"✅ Đã import thành công {len(df_final)} dòng! (Bao gồm cả cột Ảnh)")
-                        
-                        # Xóa cache và reload lại trang
-                        st.cache_data.clear()
-                        import time
-                        time.sleep(1)
-                        st.rerun()
-                    else:
-                        st.warning("⚠️ File không có dữ liệu (Kiểm tra lại cột Item Code).")
-                        
+                        # 4. Lưu vào Supabase
+                        if data_clean:
+                            df_final = pd.DataFrame(data_clean)
+                            backend.save_data("purchases", df_final)
+                            st.success(f"✅ Thành công! Đã lưu {len(df_final)} dòng.")
+                            time.sleep(1)
+                            st.rerun()
+                        else:
+                            st.error("⚠️ Không đọc được dòng nào. Hãy kiểm tra xem file có cột 'Item code' không.")
+
                 except Exception as e:
                     st.error(f"❌ Lỗi: {e}") 
 
-    # Load Data từ Server
+    # Load Data & Hiển thị
     df_pur = backend.load_data("purchases")
     
-    # Tính năng tìm kiếm
     search_term = st.text_input("🔍 Tìm kiếm code, tên, specs...", key="search_pur")
     if search_term and not df_pur.empty:
         mask = df_pur.apply(lambda x: x.astype(str).str.contains(search_term, case=False, na=False)).any(axis=1)
         df_pur = df_pur[mask]
 
-    # Cấu hình hiển thị bảng
     column_cfg = {
-        "image_path": st.column_config.ImageColumn("Ảnh SP", help="Xem ảnh"),
+        "image_path": st.column_config.ImageColumn("Ảnh SP"),
         "total_buying_price_vnd": st.column_config.NumberColumn("Tổng Mua (VND)", format="%d"),
-         "_clean_code": None, "_clean_specs": None, "_clean_name": None # Ẩn các cột hệ thống
+         "_clean_code": None, "_clean_specs": None, "_clean_name": None
     }
 
-    # Hiển thị bảng (Editable)
     edited_pur = st.data_editor(
         df_pur, 
         num_rows="dynamic", 
         use_container_width=True,
         key="editor_pur",
         column_config=column_cfg,
-        # Sắp xếp đúng thứ tự như file Excel
-        column_order=["no", "item_code", "item_name", "specs", "qty", "buying_price_rmb", "total_buying_price_rmb", "exchange_rate", "buying_price_vnd", "total_buying_price_vnd", "leadtime", "supplier_name", "image_path"]
+        column_order=["image_path", "no", "item_code", "item_name", "specs", "qty", "buying_price_rmb", "total_buying_price_rmb", "exchange_rate", "buying_price_vnd", "total_buying_price_vnd", "leadtime", "supplier_name"]
     )
     
     if st.button("💾 Lưu thay đổi DB NCC", type="primary"):
@@ -482,6 +464,7 @@ with tab6:
         df_s = backend.load_data("suppliers")
         edited_s = st.data_editor(df_s, num_rows="dynamic", key="editor_supp")
         if st.button("Lưu Master NCC"): backend.save_data("suppliers", edited_s)
+
 
 
 
