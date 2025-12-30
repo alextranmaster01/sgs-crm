@@ -81,11 +81,13 @@ import io
 
 @st.cache_resource
 def init_supabase():
-    # SỬA LẠI THÀNH CHỮ THƯỜNG ĐỂ KHỚP VỚI FILE SECRETS CỦA BẠN
-    # (Lưu ý: 2 dòng dưới phải thụt đầu dòng vào trong)
-    url = st.secrets["supabase"]["url"]
-    key = st.secrets["supabase"]["key"]
+    # Gọi đúng tên biến IN HOA trong Secrets
+    url = st.secrets["supabase"]["SUPABASE_URL"]
+    key = st.secrets["supabase"]["SUPABASE_KEY"]
     return create_client(url, key)
+
+# Khởi tạo client
+supabase: Client = init_supabase()
 
 # Dòng này nằm sát lề trái (không thụt vào)
 supabase: Client = init_supabase()
@@ -572,6 +574,7 @@ with tab6:
         df_s = backend.load_data("suppliers")
         edited_s = st.data_editor(df_s, num_rows="dynamic", key="editor_supp")
         if st.button("Lưu Master NCC"): backend.save_data("suppliers", edited_s)
+
 
 
 
