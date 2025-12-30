@@ -77,17 +77,17 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 import io
 # --- SUPABASE CONNECTION ---
+# --- TÌM ĐOẠN init_supabase CŨ VÀ DÁN ĐÈ ĐOẠN NÀY VÀO ---
+
 @st.cache_resource
 def init_supabase():
     # SỬA LẠI THÀNH CHỮ THƯỜNG ĐỂ KHỚP VỚI FILE SECRETS CỦA BẠN
-    # (Nhớ bấm Tab để thụt đầu dòng vào trong)
+    # (Lưu ý: 2 dòng dưới phải thụt đầu dòng vào trong)
     url = st.secrets["supabase"]["url"]
     key = st.secrets["supabase"]["key"]
     return create_client(url, key)
-# Dòng này nằm sát lề trái
-supabase: Client = init_supabase()
+
 # Dòng này nằm sát lề trái (không thụt vào)
-supabase: Client = init_supabase()
 supabase: Client = init_supabase()
 # Mapping Table Names (Giả định bạn đã tạo table trên Supabase với schema tương tự CSV)
 TABLES = {
@@ -135,42 +135,36 @@ def get_drive_service():
 
 # --- TÌM HÀM upload_to_drive CŨ VÀ THAY THẾ BẰNG ĐOẠN NÀY ---
 
+# --- TÌM ĐOẠN upload_to_drive CŨ VÀ DÁN ĐÈ ĐOẠN NÀY VÀO ---
+
 def upload_to_drive(file_obj, filename, folder_type="images"):
     try:
         service = get_drive_service()
         # Lấy ID thư mục từ secrets
         folder_id = st.secrets["google"][f"folder_id_{folder_type}"]
         
-        # BƯỚC 1: KIỂM TRA FILE ĐÃ TỒN TẠI CHƯA?
-        # Query: Tìm file có tên = filename VÀ nằm trong folder_id VÀ không nằm trong thùng rác
+        # 1. KIỂM TRA FILE ĐÃ TỒN TẠI CHƯA?
+        # Query: Tìm file trùng tên trong folder này và không nằm trong thùng rác
         query = f"name = '{filename}' and '{folder_id}' in parents and trashed = false"
         results = service.files().list(q=query, fields="files(id, webContentLink)").execute()
         files = results.get('files', [])
         
-        # Chuẩn bị nội dung file (Dùng mimetype image/png để xem trước chuẩn hơn)
         media = MediaIoBaseUpload(file_obj, mimetype='image/png', resumable=True)
-        
         final_link = ""
         file_id = ""
 
         if files:
-            # BƯỚC 2: NẾU ĐÃ CÓ -> UPDATE (GHI ĐÈ)
+            # 2. NẾU CÓ RỒI -> UPDATE (GHI ĐÈ FILE CŨ)
             file_id = files[0]['id']
-            # st.toast(f"Phát hiện ảnh cũ, đang ghi đè: {filename}")
-            
             updated_file = service.files().update(
                 fileId=file_id,
                 media_body=media,
                 fields='id, webContentLink'
             ).execute()
             final_link = updated_file.get('webContentLink')
-            
         else:
-            # BƯỚC 3: NẾU CHƯA CÓ -> CREATE (TẠO MỚI)
-            file_metadata = {
-                'name': filename, 
-                'parents': [folder_id]
-            }
+            # 3. NẾU CHƯA CÓ -> CREATE (TẠO MỚI)
+            file_metadata = {'name': filename, 'parents': [folder_id]}
             created_file = service.files().create(
                 body=file_metadata,
                 media_body=media,
@@ -179,13 +173,12 @@ def upload_to_drive(file_obj, filename, folder_type="images"):
             file_id = created_file.get('id')
             final_link = created_file.get('webContentLink')
 
-        # BƯỚC 4: SET QUYỀN PUBLIC (Để hiển thị được trên App)
-        # Luôn chạy lệnh này để đảm bảo dù mới hay cũ đều xem được
+        # 4. BẬT QUYỀN PUBLIC (Để hiển thị ảnh trên phần mềm)
         try:
             permission = {'type': 'anyone', 'role': 'reader'}
             service.permissions().create(fileId=file_id, body=permission).execute()
-        except Exception:
-            pass # Nếu đã có quyền rồi thì bỏ qua lỗi này
+        except:
+            pass 
 
         return final_link
 
@@ -579,6 +572,7 @@ with tab6:
         df_s = backend.load_data("suppliers")
         edited_s = st.data_editor(df_s, num_rows="dynamic", key="editor_supp")
         if st.button("Lưu Master NCC"): backend.save_data("suppliers", edited_s)
+
 
 
 
