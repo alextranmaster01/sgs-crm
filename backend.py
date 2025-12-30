@@ -82,6 +82,7 @@ def load_data(table_key):
         st.warning(f"⚠️ Không tải được bảng '{table_key}'. Lỗi: {e}")
         return pd.DataFrame(columns=default_cols)
 
+# --- TÌM HÀM save_data CŨ VÀ THAY THẾ BẰNG HÀM NÀY ---
 def save_data(table_key, df):
     try:
         if 'supabase' not in globals() or not supabase:
@@ -89,20 +90,44 @@ def save_data(table_key, df):
             return
 
         table_name = TABLES.get(table_key)
+        
+        # 1. LẤY DANH SÁCH CỘT CHUẨN
         valid_cols = SCHEMAS.get(table_key, [])
         
-        # Lọc bỏ cột rác, chỉ giữ cột chuẩn
+        # 2. LỌC BỎ CỘT RÁC
         if valid_cols:
-            clean_df = df[df.columns.intersection(valid_cols)]
+            clean_df = df[df.columns.intersection(valid_cols)].copy() # .copy() để tránh lỗi SettingWithCopy
         else:
-            clean_df = df
+            clean_df = df.copy()
+
+        # =========================================================
+        # 3. QUAN TRỌNG: LÀM SẠCH DỮ LIỆU SỐ (FIX LỖI 1.925)
+        # =========================================================
+        # Danh sách các cột bắt buộc phải là số
+        numeric_cols = [
+            "qty", 
+            "buying_price_rmb", "total_buying_price_rmb", 
+            "exchange_rate", 
+            "buying_price_vnd", "total_buying_price_vnd",
+            "total_price", "amount", "profit"
+        ]
+        
+        for col in numeric_cols:
+            if col in clean_df.columns:
+                # Bước 1: Chuyển về chuỗi để xử lý
+                clean_df[col] = clean_df[col].astype(str)
+                # Bước 2: Xóa dấu phẩy (,) thường dùng ngăn cách hàng nghìn (VD: 1,925 -> 1925)
+                clean_df[col] = clean_df[col].str.replace(",", "", regex=False)
+                # Bước 3: Ép kiểu về số (nếu lỗi thì thành 0)
+                clean_df[col] = pd.to_numeric(clean_df[col], errors='coerce').fillna(0)
+        # =========================================================
 
         data = clean_df.to_dict(orient='records')
         if not data: return
 
-        # Gửi lên Supabase
+        # 4. GỬI LÊN DATABASE
         supabase.table(table_name).upsert(data).execute()
-        st.toast(f"✅ Đã lưu dữ liệu vào {table_name}!", icon="💾")
+        st.toast(f"✅ Đã lưu thành công!", icon="💾")
         
     except Exception as e:
         st.error(f"❌ Lỗi Lưu Data: {e}")
