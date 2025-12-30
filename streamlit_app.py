@@ -218,27 +218,26 @@ with tab1:
     m5.error(f"**TỔNG PO CHƯA THANH TOÁN**: {unpaid_count}")
 
 # =============================================================================
-# TAB 2: BÁO GIÁ NCC (DB GIÁ) - BASE64 IMAGE VERSION
+# TAB 2: BÁO GIÁ NCC (DB GIÁ) - AUTO UPLOAD TO GOOGLE DRIVE
 # =============================================================================
 with tab2:
     import time
     import io
-    import base64
-    from PIL import Image as PILImage # Dùng để xử lý ảnh
     from openpyxl import load_workbook
 
-    st.subheader("Database Giá Nhà Cung Cấp (Hiển thị ảnh trực tiếp)")
+    st.subheader("Database Giá NCC (Tự động tách ảnh & Upload lên Drive)")
     
     col_tool, col_search = st.columns([1, 1])
     with col_tool:
         uploaded_file = st.file_uploader("📥 Import Excel (Có chứa ảnh)", type=['xlsx'], key="uploader_pur")
         
         if uploaded_file:
-            if st.button("🚀 IMPORT & HIỂN THỊ ẢNH NGAY", type="primary"):
+            # Nút bấm để bắt đầu quy trình
+            if st.button("🚀 BẮT ĐẦU IMPORT & UPLOAD DRIVE", type="primary"):
                 status_box = st.status("Đang xử lý dữ liệu...", expanded=True)
                 try:
                     # 1. ĐỌC DỮ LIỆU TEXT
-                    status_box.write("📖 Đang đọc thông tin hàng hóa...")
+                    status_box.write("📖 Đang đọc dữ liệu văn bản...")
                     df_raw = pd.read_excel(uploaded_file, header=None, dtype=str).fillna("")
                     
                     # Tìm dòng tiêu đề
@@ -249,8 +248,8 @@ with tab2:
                             start_row = i + 1
                             break
                     
-                    # 2. TÁCH VÀ XỬ LÝ ẢNH (QUAN TRỌNG)
-                    status_box.write("🖼️ Đang tách và nén ảnh để hiển thị...")
+                    # 2. TÁCH ẢNH TỪ EXCEL
+                    status_box.write("🖼️ Đang quét ảnh từ file Excel...")
                     uploaded_file.seek(0) 
                     wb = load_workbook(uploaded_file, data_only=True)
                     ws = wb.active
@@ -259,37 +258,12 @@ with tab2:
                     if hasattr(ws, '_images'):
                         for img in ws._images:
                             row_idx = img.anchor._from.row
-                            # Lấy dữ liệu ảnh gốc
                             img_bytes = img._data()
+                            image_map[row_idx] = img_bytes
                             
-                            try:
-                                # --- XỬ LÝ NÉN ẢNH (Để phần mềm chạy nhanh & hiện được ngay) ---
-                                # Mở ảnh bằng PIL
-                                pil_img = PILImage.open(io.BytesIO(img_bytes))
-                                
-                                # Convert sang RGB nếu là ảnh RGBA (tránh lỗi)
-                                if pil_img.mode in ("RGBA", "P"):
-                                    pil_img = pil_img.convert("RGB")
-                                    
-                                # Resize ảnh về dạng Thumbnail (Max 200px) để hiển thị nhẹ
-                                pil_img.thumbnail((200, 200))
-                                
-                                # Convert lại thành Base64 string
-                                buffer = io.BytesIO()
-                                pil_img.save(buffer, format="JPEG", quality=70) # Nén JPEG
-                                img_str = base64.b64encode(buffer.getvalue()).decode()
-                                
-                                # Tạo chuỗi Data URL để hiển thị trên Web
-                                base64_src = f"data:image/jpeg;base64,{img_str}"
-                                image_map[row_idx] = base64_src
-                                
-                            except Exception as e:
-                                print(f"Lỗi xử lý ảnh dòng {row_idx}: {e}")
-                                continue
+                    status_box.write(f"✅ Tìm thấy {len(image_map)} ảnh. Chuẩn bị upload lên Drive...")
 
-                    status_box.write(f"✅ Đã xử lý {len(image_map)} hình ảnh.")
-
-                    # 3. GHÉP DỮ LIỆU
+                    # 3. LOOP: GÁN DỮ LIỆU & UPLOAD
                     data_clean = []
                     total_rows = len(df_raw) - start_row
                     prog_bar = status_box.progress(0)
@@ -304,16 +278,33 @@ with tab2:
                         code_val = get(1) # Cột B
                         if not code_val: continue 
 
-                        # Lấy ảnh Base64 nếu có
-                        final_img = ""
+                        # --- LOGIC UPLOAD DRIVE ---
+                        final_img_link = ""
+                        
+                        # Trường hợp 1: Có ảnh dán trong Excel -> Upload lên Drive
                         if i in image_map:
-                            final_img = image_map[i]
+                            img_data = image_map[i]
+                            
+                            # Đặt tên file ảnh theo Mã hàng để dễ quản lý trên Drive
+                            filename = f"{logic.safe_filename(code_val)}.png"
+                            file_obj = io.BytesIO(img_data)
+                            
+                            status_box.write(f"☁️ Đang upload lên Drive: {filename}...")
+                            
+                            # GỌI HÀM BACKEND ĐỂ UPLOAD VÀO FOLDER DRIVE
+                            # Hàm này trả về Link WebContentLink (xem trực tiếp)
+                            link = backend.upload_to_drive(file_obj, filename, folder_type="images")
+                            
+                            if link:
+                                final_img_link = link
+                        
+                        # Trường hợp 2: Không có ảnh mới, giữ link cũ (nếu là link online)
                         else:
-                            # Nếu không có ảnh mới, kiểm tra ảnh cũ (nếu là link online hoặc base64 cũ)
-                            old_val = get(12)
-                            if "http" in old_val or "data:image" in old_val:
-                                final_img = old_val
+                            old_path = get(12)
+                            if "http" in old_path:
+                                final_img_link = old_path
 
+                        # --- TẠO ITEM ---
                         item = {
                             "no": get(0),                     
                             "item_code": code_val,            
@@ -327,7 +318,7 @@ with tab2:
                             "total_buying_price_vnd": logic.fmt_num(logic.to_float(get(9))), 
                             "leadtime": get(10),              
                             "supplier_name": get(11),         
-                            "image_path": final_img,     # Chứa mã ảnh Base64
+                            "image_path": final_img_link,     # Link Google Drive
                             
                             "_clean_code": logic.clean_lookup_key(code_val),
                             "_clean_specs": logic.clean_lookup_key(get(3)),
@@ -335,18 +326,18 @@ with tab2:
                         }
                         data_clean.append(item)
                     
-                    # 4. LƯU VÀO DB
+                    # 4. LƯU DB
                     if data_clean:
                         df_final = pd.DataFrame(data_clean)
                         backend.save_data("purchases", df_final)
                         
-                        status_box.update(label="✅ Import hoàn tất! Ảnh đã sẵn sàng.", state="complete", expanded=False)
-                        st.success(f"Đã cập nhật {len(df_final)} sản phẩm kèm hình ảnh.")
+                        status_box.update(label="✅ Import & Upload hoàn tất!", state="complete", expanded=False)
+                        st.success(f"Đã cập nhật {len(df_final)} dòng. Ảnh đã nằm trong folder Drive của bạn.")
                         time.sleep(1)
                         st.rerun()
                     else:
-                        status_box.update(label="⚠️ Không có dữ liệu", state="error")
-                        st.error("File không hợp lệ hoặc không có dữ liệu.")
+                        status_box.update(label="⚠️ Lỗi", state="error")
+                        st.error("Không có dữ liệu.")
 
                 except Exception as e:
                     st.error(f"❌ Lỗi: {e}") 
@@ -360,18 +351,18 @@ with tab2:
         mask = df_pur.apply(lambda x: x.astype(str).str.contains(search_term, case=False, na=False)).any(axis=1)
         df_pur = df_pur[mask]
 
-    # --- CẤU HÌNH HIỂN THỊ ẢNH ---
+    # --- CẤU HÌNH HIỂN THỊ CỘT ẢNH ---
     column_cfg = {
         "image_path": st.column_config.ImageColumn(
             "Hình Ảnh", 
-            help="Ảnh sản phẩm",
-            width="small" # Hiển thị dạng thumbnail
+            help="Ảnh từ Google Drive",
+            width="small"
         ),
         "total_buying_price_vnd": st.column_config.NumberColumn("Tổng Mua (VND)", format="%d"),
-        "_clean_code": None, "_clean_specs": None, "_clean_name": None
+         "_clean_code": None, "_clean_specs": None, "_clean_name": None
     }
 
-    # Sắp xếp cột chuẩn file Excel
+    # Thứ tự cột chuẩn
     cols_order = [
         "image_path", "no", "item_code", "item_name", "specs", "qty", 
         "buying_price_rmb", "total_buying_price_rmb", "exchange_rate", 
@@ -385,7 +376,7 @@ with tab2:
         key="editor_pur",
         column_config=column_cfg, 
         column_order=cols_order,
-        height=600 # Tăng chiều cao bảng để dễ nhìn
+        height=600
     )
     
     if st.button("💾 Lưu thay đổi DB NCC", type="primary"):
@@ -538,6 +529,7 @@ with tab6:
         df_s = backend.load_data("suppliers")
         edited_s = st.data_editor(df_s, num_rows="dynamic", key="editor_supp")
         if st.button("Lưu Master NCC"): backend.save_data("suppliers", edited_s)
+
 
 
 
