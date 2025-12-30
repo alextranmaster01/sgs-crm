@@ -1,10 +1,27 @@
 import streamlit as st
-import pandas as pd
-from supabase import create_client, Client
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
-import json
+
+def get_drive_service():
+    # Lấy thông tin từ secrets.toml
+    info = st.secrets["google"]
+    
+    # Tạo credentials từ Refresh Token
+    creds = Credentials(
+        None, # Access token (để None để nó tự lấy mới)
+        refresh_token=info["refresh_token"],
+        token_uri="https://oauth2.googleapis.com/token",
+        client_id=info["client_id"],
+        client_secret=info["client_secret"],
+        scopes=['https://www.googleapis.com/auth/drive']
+    )
+    
+    return build('drive', 'v3', credentials=creds)
+
+# Hàm upload giữ nguyên logic, chỉ gọi get_drive_service ở trên
+def upload_to_drive(file_obj, filename, folder_type="images"):
+    service = get_drive_service()
 
 # --- 1. CẤU HÌNH SCHEMA (ĐỂ TRÁNH LỖI KHI DB TRỐNG) ---
 SCHEMAS = {
