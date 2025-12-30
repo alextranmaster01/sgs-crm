@@ -77,18 +77,17 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 import io
 # --- SUPABASE CONNECTION ---
-# --- TÌM ĐOẠN init_supabase CŨ VÀ DÁN ĐÈ ĐOẠN NÀY VÀO ---
-
 @st.cache_resource
 def init_supabase():
-    # Gọi đúng tên biến IN HOA trong Secrets
-    url = st.secrets["supabase"]["SUPABASE_URL"]
-    key = st.secrets["supabase"]["SUPABASE_KEY"]
-    return create_client(url, key)
-
+    try:
+        # SỬA LẠI THÀNH CHỮ THƯỜNG ĐỂ KHỚP VỚI FILE SECRETS CỦA BẠN
+        url = st.secrets["supabase"]["url"]
+        key = st.secrets["supabase"]["key"]
+        return create_client(url, key)
+    except Exception as e:
+        return None
 # Khởi tạo client
 supabase: Client = init_supabase()
-
 # Dòng này nằm sát lề trái (không thụt vào)
 supabase: Client = init_supabase()
 # Mapping Table Names (Giả định bạn đã tạo table trên Supabase với schema tương tự CSV)
@@ -574,6 +573,7 @@ with tab6:
         df_s = backend.load_data("suppliers")
         edited_s = st.data_editor(df_s, num_rows="dynamic", key="editor_supp")
         if st.button("Lưu Master NCC"): backend.save_data("suppliers", edited_s)
+
 
 
 
