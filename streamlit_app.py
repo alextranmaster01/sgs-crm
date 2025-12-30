@@ -80,13 +80,11 @@ import io
 # --- SUPABASE CONNECTION ---
 @st.cache_resource
 def init_supabase():
-    # Bấm Tab vào đây
+# Bấm Tab vào đây
     url = st.secrets["supabase"]["SUPABASE_URL"]
     key = st.secrets["supabase"]["SUPABASE_KEY"]
     return create_client(url, key)
-
 supabase: Client = init_supabase()
-
 # Mapping Table Names (Giả định bạn đã tạo table trên Supabase với schema tương tự CSV)
 TABLES = {
     "purchases": "crm_purchases",
@@ -530,6 +528,7 @@ with tab6:
         df_s = backend.load_data("suppliers")
         edited_s = st.data_editor(df_s, num_rows="dynamic", key="editor_supp")
         if st.button("Lưu Master NCC"): backend.save_data("suppliers", edited_s)
+
 
 
 
