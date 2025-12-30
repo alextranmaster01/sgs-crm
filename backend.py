@@ -70,18 +70,34 @@ def load_data(table_key):
 
 def save_data(table_key, df):
     try:
-        if not supabase: return
+        if not supabase: 
+            st.error("Chưa kết nối được Database!")
+            return
+
         table_name = TABLES.get(table_key)
         
-        # Chỉ lấy các cột có trong DataFrame để lưu
-        data = df.to_dict(orient='records')
+        # 1. LẤY DANH SÁCH CỘT CHUẨN (SCHEMA)
+        valid_cols = SCHEMAS.get(table_key, [])
+        
+        # 2. CHỈ GIỮ LẠI CÁC CỘT HỢP LỆ (Lọc bỏ cột rác)
+        if valid_cols:
+            # Chỉ lấy những cột có tên nằm trong valid_cols
+            clean_df = df[df.columns.intersection(valid_cols)]
+        else:
+            clean_df = df
+
+        data = clean_df.to_dict(orient='records')
+        
         if not data: return
 
-        supabase.table(table_name).upsert(data).execute()
-        st.toast(f"Đã lưu dữ liệu!", icon="💾")
+        # 3. GỬI DỮ LIỆU SẠCH LÊN DATABASE
+        response = supabase.table(table_name).upsert(data).execute()
+        
+        st.toast(f"✅ Đã lưu {len(data)} dòng vào {table_name}!", icon="💾")
+        
     except Exception as e:
-        st.error(f"Lỗi lưu: {e}")
-
+        # Hiện chi tiết lỗi để biết đường sửa
+        st.error(f"❌ Lỗi Lưu Data ({table_key}): {e}")
 # --- 4. GOOGLE DRIVE ---
 def get_drive_service():
     try:
