@@ -1,389 +1,544 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
-from supabase import create_client
+import warnings
+import re
+import json
+import ast
+import io
+from datetime import datetime, timedelta
+from copy import copy
+
+# --- THƯ VIỆN ONLINE ---
+from supabase import create_client, Client
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
-from datetime import datetime, date
-import time
-import xlsxwriter
-from io import BytesIO
 
 # =============================================================================
-# 1. CẤU HÌNH HỆ THỐNG (SYSTEM CONFIG)
+# 1. SETUP & CONFIGURATION
 # =============================================================================
-st.set_page_config(
-    page_title="CRM SYSTEM PRO - HOTWIN VIETNAM",
-    page_icon="🏢",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+st.set_page_config(page_title="SGS CRM V4800 - Cloud Edition", layout="wide", page_icon="🚀")
 
-# Load Secrets
-try:
-    SUPABASE_URL = st.secrets["supabase"]["url"]
-    SUPABASE_KEY = st.secrets["supabase"]["key"]
-    GOOGLE_CLIENT_ID = st.secrets["google_auth"]["client_id"]
-    GOOGLE_CLIENT_SECRET = st.secrets["google_auth"]["client_secret"]
-    GOOGLE_REFRESH_TOKEN = st.secrets["google_auth"]["refresh_token"]
-except Exception as e:
-    st.error(f"⚠️ LỖI CẤU HÌNH (secrets.toml): {e}")
-    st.stop()
+# Tắt cảnh báo
+warnings.filterwarnings("ignore", category=UserWarning)
 
-@st.cache_resource
-def init_supabase():
-    return create_client(SUPABASE_URL, SUPABASE_KEY)
-
-supabase = init_supabase()
-
-def get_drive_service():
-    creds = Credentials(
-        None, refresh_token=GOOGLE_REFRESH_TOKEN,
-        token_uri="https://oauth2.googleapis.com/token",
-        client_id=GOOGLE_CLIENT_ID, client_secret=GOOGLE_CLIENT_SECRET
-    )
-    return build('drive', 'v3', credentials=creds)
-
-# =============================================================================
-# 2. GIAO DIỆN & STYLE (COLORFUL UI TỪ V4800)
-# =============================================================================
-def load_custom_css():
-    st.markdown("""
-    <style>
-        .stApp { background-color: #f0f4f8; }
-        /* Sidebar */
-        section[data-testid="stSidebar"] { background-color: #2c3e50; color: white; }
-        .css-17lntkn { color: white; }
-        
-        /* Headers */
-        h1 { color: #2c3e50; font-family: 'Arial', sans-serif; font-weight: bold; border-bottom: 3px solid #3498db; padding-bottom: 10px; }
-        h2 { color: #e67e22; }
-        h3 { color: #16a085; }
-        
-        /* Cards */
-        div.stMetric { background-color: #ffffff; border: 1px solid #dcdcdc; padding: 10px; border-radius: 5px; box-shadow: 2px 2px 5px rgba(0,0,0,0.1); }
-        
-        /* Tabs */
-        .stTabs [data-baseweb="tab-list"] { gap: 10px; }
-        .stTabs [data-baseweb="tab"] { height: 50px; white-space: pre-wrap; background-color: #ecf0f1; border-radius: 4px 4px 0 0; gap: 1px; padding-top: 10px; padding-bottom: 10px; }
-        .stTabs [aria-selected="true"] { background-color: #3498db; color: white; }
-        
-        /* Tables */
-        div[data-testid="stDataFrame"] { background-color: white; border-radius: 10px; padding: 10px; }
-    </style>
-    """, unsafe_allow_html=True)
-
-load_custom_css()
-
-# =============================================================================
-# 3. CORE FUNCTIONS (DATABASE & DRIVE)
-# =============================================================================
-def fetch_data(table):
-    res = supabase.table(table).select("*").execute()
-    return pd.DataFrame(res.data)
-
-def upload_image_drive(file_obj):
+# --- KHỞI TẠO KẾT NỐI (Blackbox Wrapper) ---
+def init_connection():
+    # 1. Supabase
     try:
-        service = get_drive_service()
-        folder_name = "CRM_IMAGES"
-        q = f"name='{folder_name}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
-        files = service.files().list(q=q).execute().get('files', [])
-        folder_id = files[0]['id'] if files else service.files().create(body={'name': folder_name, 'mimeType': 'application/vnd.google-apps.folder'}).execute()['id']
+        url = st.secrets["supabase"]["url"]
+        key = st.secrets["supabase"]["key"]
+        supabase: Client = create_client(url, key)
+    except Exception:
+        st.error("Chưa cấu hình Supabase secrets.")
+        return None, None
+
+    # 2. Google Drive (OAuth2 Refresh Token)
+    try:
+        creds = Credentials(
+            None, # No access token initially
+            refresh_token=st.secrets["google"]["refresh_token"],
+            token_uri="https://oauth2.googleapis.com/token",
+            client_id=st.secrets["google"]["client_id"],
+            client_secret=st.secrets["google"]["client_secret"]
+        )
+        drive_service = build('drive', 'v3', credentials=creds)
+    except Exception:
+        st.warning("Chưa cấu hình Google Drive secrets. Tính năng ảnh/file sẽ bị hạn chế.")
+        drive_service = None
+
+    return supabase, drive_service
+
+supabase, drive_service = init_connection()
+
+# =============================================================================
+# 2. GLOBAL FUNCTIONS (COPIED 100% FROM ORIGINAL - BLACKBOX)
+# =============================================================================
+# Các hàm này được coi là thư viện lõi, giữ nguyên logic xử lý.
+
+def safe_str(val):
+    if val is None: return ""
+    s = str(val).strip()
+    if s.startswith("['") and s.endswith("']"):
+        try:
+            eval_s = ast.literal_eval(s)
+            if isinstance(eval_s, list) and len(eval_s) > 0:
+                return str(eval_s[0])
+        except: pass
+    if s.startswith("'") and s.endswith("'"):
+        s = s[1:-1]
+    return "" if s.lower() == 'nan' else s
+
+def safe_filename(s): return re.sub(r"[\\/:*?\"<>|]+", "_", safe_str(s))
+
+def to_float(val):
+    try:
+        if isinstance(val, (int, float)): return float(val)
+        clean = str(val).replace(",", "").replace("%", "").strip()
+        if clean == "": return 0.0
+        return float(clean)
+    except: return 0.0
+
+def fmt_num(x):
+    try: return "{:,.0f}".format(float(x))
+    except: return "0"
+
+def clean_lookup_key(s):
+    if s is None: return ""
+    s_str = str(s)
+    try:
+        f = float(s_str)
+        if f.is_integer():
+            s_str = str(int(f))
+    except:
+        pass
+    return re.sub(r'\s+', '', s_str).lower()
+
+def clean_string_absolute(s): return clean_lookup_key(s)
+
+def parse_formula(formula, buying_price, ap_price):
+    s = str(formula).strip().upper().replace(",", "")
+    try: return float(s)
+    except: pass
+    if not s.startswith("="): return 0.0
+    expr = s[1:]
+    expr = expr.replace("BUYING PRICE", str(buying_price))
+    expr = expr.replace("BUY", str(buying_price))
+    expr = expr.replace("AP PRICE", str(ap_price))
+    expr = expr.replace("AP", str(ap_price))
+    allowed = "0123456789.+-*/()"
+    for c in expr:
+        if c not in allowed: return 0.0
+    try: return float(eval(expr))
+    except: return 0.0
+
+def calc_eta(order_date_str, leadtime_val):
+    try:
+        dt_order = datetime.strptime(order_date_str, "%d/%m/%Y")
+        lt_str = str(leadtime_val)
+        nums = re.findall(r'\d+', lt_str)
+        days = int(nums[0]) if nums else 0
+        dt_exp = dt_order + timedelta(days=days)
+        return dt_exp.strftime("%d/%m/%Y")
+    except: return ""
+
+# =============================================================================
+# 3. ONLINE DATA HANDLERS (REPLACEMENT FOR CSV IO)
+# =============================================================================
+
+TABLE_MAP = {
+    "customers_df": "crm_customers",
+    "suppliers_df": "crm_suppliers",
+    "purchases_df": "crm_purchases",
+    "sales_history_df": "crm_sales_history",
+    "tracking_df": "crm_order_tracking",
+    "payment_df": "crm_payment_tracking",
+    "paid_history_df": "crm_paid_history",
+    "db_supplier_orders": "db_supplier_orders",
+    "db_customer_orders": "db_customer_orders"
+}
+
+# Định nghĩa cột giống file cũ
+MASTER_COLUMNS = ["no", "short_name", "eng_name", "vn_name", "address_1", "address_2", "contact_person", "director", "phone", "fax", "tax_code", "destination", "payment_term"]
+PURCHASE_COLUMNS = ["no", "item_code", "item_name", "specs", "qty", "buying_price_rmb", "total_buying_price_rmb", "exchange_rate", "buying_price_vnd", "total_buying_price_vnd", "leadtime", "supplier_name", "image_path"]
+SUPPLIER_ORDER_COLS = ["no", "item_code", "item_name", "specs", "qty", "price_rmb", "total_rmb", "exchange_rate", "price_vnd", "total_vnd", "eta", "supplier", "po_number", "order_date", "pdf_path"]
+CUSTOMER_ORDER_COLS = ["no", "item_code", "item_name", "specs", "qty", "unit_price", "total_price", "eta", "customer", "po_number", "order_date", "pdf_path", "base_buying_vnd", "full_cost_total"]
+QUOTE_KH_COLUMNS = ["no", "item_code", "item_name", "specs", "qty", "buying_price_rmb", "total_buying_price_rmb", "exchange_rate", "buying_price_vnd", "total_buying_price_vnd", "ap_price", "ap_total_vnd", "unit_price", "total_price_vnd", "gap", "end_user_val", "buyer_val", "import_tax_val", "vat_val", "transportation", "mgmt_fee", "payback_val", "profit_vnd", "profit_pct", "supplier_name", "image_path", "leadtime"]
+TRACKING_COLS = ["no", "po_no", "partner", "status", "eta", "proof_image", "order_type", "last_update", "finished"]
+PAYMENT_COLS = ["no", "po_no", "customer", "invoice_no", "status", "due_date", "paid_date"]
+HISTORY_COLS = ["date", "quote_no", "customer", "item_code", "item_name", "specs", "qty", "total_revenue", "total_cost", "profit", "supplier", "status", "delivery_date", "po_number"]
+
+
+@st.cache_data(ttl=60)
+def load_data_from_supabase(table_name, cols):
+    """Thay thế load_csv"""
+    if not supabase: return pd.DataFrame(columns=cols)
+    try:
+        response = supabase.table(table_name).select("*").execute()
+        df = pd.DataFrame(response.data)
         
-        media = MediaIoBaseUpload(file_obj, mimetype=file_obj.type, resumable=True)
-        file_meta = {'name': file_obj.name, 'parents': [folder_id]}
-        file = service.files().create(body=file_meta, media_body=media, fields='id, webContentLink').execute()
-        service.permissions().create(fileId=file['id'], body={'type': 'anyone', 'role': 'reader'}).execute()
+        # Đảm bảo đủ cột
+        for c in cols:
+            if c not in df.columns: df[c] = ""
+            
+        # Clean data (safe_str)
+        for c in df.columns:
+            df[c] = df[c].apply(safe_str)
+            
+        return df[cols]
+    except Exception as e:
+        st.error(f"Lỗi tải data {table_name}: {e}")
+        return pd.DataFrame(columns=cols)
+
+def save_data_to_supabase(table_name, df, key_col="id"):
+    """Thay thế save_csv. Lưu ý: Supabase cần có cột ID unique hoặc Logic Upsert"""
+    if not supabase: return
+    try:
+        # Chuyển đổi DF sang list of dicts
+        data = df.to_dict(orient='records')
+        
+        # Với demo đơn giản, ta xóa hết và insert lại (Warning: Không tối ưu cho Big Data)
+        # Thực tế nên dùng Upsert. Ở đây giả lập hành vi 'overwrite file CSV'
+        supabase.table(table_name).delete().neq("no", "THIS_SHOULD_DELETE_ALL").execute() # Hacky way to truncate if needed or use proper truncation
+        # Cách an toàn hơn cho demo: Xóa các dòng cũ và insert mới
+        # Để đơn giản cho script convert này, ta giả định logic Insert.
+        
+        # Lưu ý: Supabase giới hạn kích thước insert.
+        batch_size = 100
+        for i in range(0, len(data), batch_size):
+            batch = data[i:i+batch_size]
+            supabase.table(table_name).upsert(batch).execute()
+            
+        st.toast(f"Đã lưu dữ liệu vào {table_name}", icon="💾")
+    except Exception as e:
+        st.error(f"Lỗi lưu data {table_name}: {e}")
+
+def upload_file_to_drive(file_obj, filename, folder_id):
+    """Thay thế lưu file ảnh local"""
+    if not drive_service: return None
+    try:
+        file_metadata = {'name': filename, 'parents': [folder_id]}
+        media = MediaIoBaseUpload(file_obj, mimetype=file_obj.type)
+        file = drive_service.files().create(body=file_metadata, media_body=media, fields='id, webContentLink').execute()
         return file.get('webContentLink')
-    except: return None
+    except Exception as e:
+        st.error(f"Upload Drive lỗi: {e}")
+        return None
 
 # =============================================================================
-# 4. EXCEL ENGINE (LOGIC XUẤT BÁO GIÁ CHUẨN FORM)
-# =============================================================================
-def generate_excel(quote_info, items_df, customer):
-    output = BytesIO()
-    wb = xlsxwriter.Workbook(output, {'in_memory': True})
-    ws = wb.add_worksheet("Báo Giá")
-    
-    # Formats
-    fmt_title = wb.add_format({'bold': True, 'font_size': 18, 'color': 'red', 'align': 'center', 'valign': 'vcenter'})
-    fmt_header = wb.add_format({'bold': True, 'bg_color': '#2980b9', 'color': 'white', 'border': 1, 'align': 'center'})
-    fmt_cell = wb.add_format({'border': 1, 'valign': 'vcenter'})
-    fmt_num = wb.add_format({'border': 1, 'num_format': '#,##0', 'align': 'right'})
-    
-    # Header Info
-    ws.merge_range('A1:F1', "CÔNG TY TNHH ĐIỆN TỬ HOTWIN VIỆT NAM", wb.add_format({'bold': True, 'font_size': 14, 'color': '#2c3e50'}))
-    ws.write('A2', "Địa chỉ: KCN Vsip, Bắc Ninh | Tel: 0123.456.789")
-    
-    ws.merge_range('A4:H4', "BẢNG BÁO GIÁ / QUOTATION", fmt_title)
-    
-    # Customer Info
-    ws.write('A6', f"Kính gửi: {customer.get('ten_cong_ty', '')}")
-    ws.write('A7', f"Người LH: {customer.get('nguoi_lien_he', '')} - SĐT: {customer.get('so_dien_thoai', '')}")
-    ws.write('F6', f"Số BG: {quote_info['so_bao_gia']}")
-    ws.write('F7', f"Ngày: {pd.to_datetime(quote_info['ngay_bao_gia']).strftime('%d/%m/%Y')}")
-
-    # Table Header
-    headers = ["STT", "Mã Hàng", "Tên Hàng / Mô Tả", "ĐVT", "SL", "Đơn Giá", "Thành Tiền", "Ghi Chú"]
-    ws.set_column('C:C', 30)
-    for i, h in enumerate(headers):
-        ws.write(9, i, h, fmt_header)
-
-    # Table Data
-    row = 10
-    total = 0
-    for idx, item in items_df.iterrows():
-        ws.write(row, 0, idx+1, fmt_cell)
-        ws.write(row, 1, item.get('ma_hang', ''), fmt_cell)
-        ws.write(row, 2, item.get('dien_giai_tuy_chinh', item.get('ten_hang', '')), fmt_cell)
-        ws.write(row, 3, item.get('don_vi', ''), fmt_cell)
-        ws.write(row, 4, item.get('so_luong', 0), wb.add_format({'border': 1, 'align': 'center'}))
-        ws.write(row, 5, item.get('don_gia_ban', 0), fmt_num)
-        ws.write(row, 6, item.get('thanh_tien', 0), fmt_num)
-        ws.write(row, 7, "", fmt_cell)
-        total += item.get('thanh_tien', 0)
-        row += 1
-
-    # Footer
-    row += 1
-    ws.write(row, 5, "TỔNG CỘNG:", wb.add_format({'bold': True, 'align': 'right'}))
-    ws.write(row, 6, total, fmt_num)
-    row += 1
-    ws.write(row, 5, "VAT (10%):", wb.add_format({'bold': True, 'align': 'right'}))
-    ws.write(row, 6, total*0.1, fmt_num)
-    row += 1
-    ws.write(row, 5, "THANH TOÁN:", wb.add_format({'bold': True, 'align': 'right', 'color': 'red'}))
-    ws.write(row, 6, total*1.1, fmt_num)
-
-    wb.close()
-    output.seek(0)
-    return output
-
-# =============================================================================
-# 5. CÁC MODULE CHỨC NĂNG (6 TABS)
+# 4. APP LOGIC & SESSION STATE
 # =============================================================================
 
-# --- TAB 2: KHO HÀNG ---
-# ... (Phần code cũ của tab1 giữ nguyên)
+# Khởi tạo Session State (giống như __init__ trong class)
+if 'data_loaded' not in st.session_state:
+    st.session_state['data_loaded'] = False
 
-    with tab2:
-        st.subheader("Thêm Mới Sản Phẩm")
-        with st.form("add_prod"):
-            c1, c2 = st.columns(2)
-            ma = c1.text_input("Mã Hàng (Bắt buộc) *")
-            ten = c2.text_input("Tên Hàng")
-            gia = c1.number_input("Giá Mua", min_value=0.0, step=1000.0)
-            ncc = c2.text_input("Nhà Cung Cấp")
-            img = st.file_uploader("Ảnh SP")
+def load_all_data():
+    if not st.session_state['data_loaded']:
+        with st.spinner('Đang tải dữ liệu từ Cloud...'):
+            st.session_state['purchases_df'] = load_data_from_supabase(TABLE_MAP['purchases_df'], PURCHASE_COLUMNS)
+            st.session_state['customers_df'] = load_data_from_supabase(TABLE_MAP['customers_df'], MASTER_COLUMNS)
+            st.session_state['suppliers_df'] = load_data_from_supabase(TABLE_MAP['suppliers_df'], MASTER_COLUMNS)
+            st.session_state['sales_history_df'] = load_data_from_supabase(TABLE_MAP['sales_history_df'], HISTORY_COLS)
+            st.session_state['tracking_df'] = load_data_from_supabase(TABLE_MAP['tracking_df'], TRACKING_COLS)
+            st.session_state['payment_df'] = load_data_from_supabase(TABLE_MAP['payment_df'], PAYMENT_COLS)
+            st.session_state['paid_history_df'] = load_data_from_supabase(TABLE_MAP['paid_history_df'], PAYMENT_COLS)
+            st.session_state['db_supplier_orders'] = load_data_from_supabase(TABLE_MAP['db_supplier_orders'], SUPPLIER_ORDER_COLS)
+            st.session_state['db_customer_orders'] = load_data_from_supabase(TABLE_MAP['db_customer_orders'], CUSTOMER_ORDER_COLS)
             
-            submit = st.form_submit_button("Lưu Sản Phẩm")
+            # Temp DataFrames (Memory only)
+            st.session_state['current_quote_df'] = pd.DataFrame(columns=QUOTE_KH_COLUMNS)
+            st.session_state['temp_supp_order_df'] = pd.DataFrame(columns=SUPPLIER_ORDER_COLS)
+            st.session_state['temp_cust_order_df'] = pd.DataFrame(columns=CUSTOMER_ORDER_COLS)
             
-            if submit:
-                if not ma:
-                    st.error("⚠️ Vui lòng nhập Mã Hàng!")
-                else:
-                    # 1. Upload ảnh trước (nếu có)
-                    url = ""
-                    if img:
-                        with st.spinner("Đang tải ảnh lên Drive..."):
-                            url = upload_image_drive(img)
-                    
-                    # 2. Gửi dữ liệu sang Supabase với Try-Except
-                    try:
-                        data = {
-                            "ma_hang": ma, 
-                            "ten_hang_vn": ten, 
-                            "gia_mua": gia, 
-                            "nha_cung_cap": ncc, 
-                            "anh_minh_hoa": url
-                        }
-                        supabase.table("products").insert(data).execute()
-                        st.success(f"✅ Đã thêm thành công: {ma}")
-                        time.sleep(1) # Đợi 1 xíu để người dùng thấy thông báo
-                        st.rerun() # Tải lại trang để cập nhật danh sách
-                        
-                    except Exception as e:
-                        # In lỗi chi tiết ra màn hình để debug
-                        st.error("❌ LỖI LƯU DỮ LIỆU!")
-                        st.warning(f"Chi tiết lỗi: {e}")
-                        st.info("💡 Gợi ý: Kiểm tra xem 'Mã Hàng' này đã có chưa? Hoặc bạn đã chạy code SQL tạo bảng chưa?")
+            # Pre-clean Keys
+            df = st.session_state['purchases_df']
+            df["_clean_code"] = df["item_code"].apply(clean_lookup_key)
+            df["_clean_specs"] = df["specs"].apply(clean_lookup_key)
+            df["_clean_name"] = df["item_name"].apply(clean_lookup_key)
+            st.session_state['purchases_df'] = df
 
-# --- TAB 3: KHÁCH HÀNG ---
-def module_customers():
-    st.markdown("## 👥 QUẢN LÝ KHÁCH HÀNG")
-    with st.expander("➕ Thêm Khách Hàng"):
-        with st.form("add_cust"):
-            c1, c2 = st.columns(2)
-            ma = c1.text_input("Mã KH *")
-            ten = c2.text_input("Tên Công Ty")
-            lh = c1.text_input("Người LH")
-            dt = c2.text_input("SĐT")
-            dc = st.text_input("Địa chỉ")
-            if st.form_submit_button("Lưu"):
-                supabase.table("customers").insert({"ma_khach_hang": ma, "ten_cong_ty": ten, "nguoi_lien_he": lh, "so_dien_thoai": dt, "dia_chi": dc}).execute()
-                st.success("Đã thêm!")
-                st.rerun()
-    
-    df = fetch_data("customers")
-    if not df.empty:
-        st.dataframe(df, use_container_width=True)
+            st.session_state['data_loaded'] = True
 
-# --- TAB 4: NHÀ CUNG CẤP (NEW) ---
-def module_suppliers():
-    st.markdown("## 🏭 QUẢN LÝ NHÀ CUNG CẤP")
+load_all_data()
+
+# =============================================================================
+# 5. UI COMPONENTS (Tương ứng các Tabs cũ)
+# =============================================================================
+
+def ui_dashboard():
+    st.header("📊 Tổng quan Dashboard")
     
-    tab1, tab2 = st.tabs(["Danh Sách NCC", "Thêm Mới NCC"])
+    col1, col2 = st.columns([3, 1])
+    with col2:
+        if st.button("🔄 CẬP NHẬT DATA"):
+            st.session_state['data_loaded'] = False
+            st.rerun()
+
+    # Calculation Logic (Copied logic)
+    try:
+        rev = st.session_state['db_customer_orders']['total_price'].apply(to_float).sum()
+        profit = st.session_state['sales_history_df']['profit'].apply(to_float).sum()
+        cost = rev - profit
+        paid_count = len(st.session_state['paid_history_df'])
+        unpaid_count = len(st.session_state['payment_df'][st.session_state['payment_df']['status'] != "Đã thanh toán"])
+        
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("TỔNG DOANH THU", fmt_num(rev))
+        c2.metric("TỔNG CHI PHÍ", fmt_num(cost))
+        c3.metric("LỢI NHUẬN", fmt_num(profit))
+        c4.metric("PO ĐÃ THANH TOÁN", paid_count)
+        c5.metric("PO CHƯA THANH TOÁN", unpaid_count, delta_color="inverse")
+        
+    except Exception as e:
+        st.error(f"Lỗi tính toán Dashboard: {e}")
+
+def ui_supplier_quote():
+    st.header("💰 Báo giá NCC (Database Giá)")
+    
+    col_act, col_search = st.columns([2, 1])
+    with col_act:
+        if st.button("💾 Lưu thay đổi xuống Cloud (DB)", type="primary"):
+            save_data_to_supabase(TABLE_MAP['purchases_df'], st.session_state['purchases_df'])
+            
+    # Thay vì Treeview, dùng Data Editor
+    edited_df = st.data_editor(
+        st.session_state['purchases_df'],
+        column_config={
+            "image_path": st.column_config.LinkColumn("Image Link"),
+            "qty": st.column_config.NumberColumn("Qty"),
+            "buying_price_rmb": st.column_config.NumberColumn("Price RMB")
+        },
+        num_rows="dynamic",
+        key="editor_purchases"
+    )
+    
+    # Logic update calculation when edited (Simplified version of on_purchase_double_click)
+    if not edited_df.equals(st.session_state['purchases_df']):
+        # Recalculate logic
+        for idx, row in edited_df.iterrows():
+            q = to_float(row.get("qty", 0))
+            p_rmb = to_float(row.get("buying_price_rmb", 0))
+            ex = to_float(row.get("exchange_rate", 0))
+            
+            edited_df.at[idx, "total_buying_price_rmb"] = fmt_num(q * p_rmb)
+            edited_df.at[idx, "buying_price_vnd"] = fmt_num(p_rmb * ex)
+            edited_df.at[idx, "total_buying_price_vnd"] = fmt_num(q * p_rmb * ex)
+            
+            # Clean keys
+            edited_df.at[idx, "_clean_code"] = clean_lookup_key(row.get("item_code"))
+            edited_df.at[idx, "_clean_specs"] = clean_lookup_key(row.get("specs"))
+            edited_df.at[idx, "_clean_name"] = clean_lookup_key(row.get("item_name"))
+            
+        st.session_state['purchases_df'] = edited_df
+        # Tự động rerun để refresh view nếu cần, hoặc chờ nút Save
+
+def ui_customer_quote():
+    st.header("📝 Báo giá Khách Hàng")
+    tab1, tab2 = st.tabs(["Tạo Báo Giá", "Tra Cứu Lịch Sử"])
     
     with tab1:
-        df = fetch_data("suppliers")
-        if not df.empty:
-            st.dataframe(df, use_container_width=True)
-        else:
-            st.info("Chưa có dữ liệu nhà cung cấp.")
-            
-    with tab2:
-        with st.form("add_sup"):
-            c1, c2 = st.columns(2)
-            ma = c1.text_input("Mã NCC *")
-            ten = c2.text_input("Tên NCC")
-            lh = c1.text_input("Người LH")
-            dt = c2.text_input("SĐT")
-            email = st.text_input("Email")
-            if st.form_submit_button("Lưu Nhà Cung Cấp"):
-                supabase.table("suppliers").insert({"ma_nha_cung_cap": ma, "ten_nha_cung_cap": ten, "nguoi_lien_he": lh, "so_dien_thoai": dt, "email": email}).execute()
-                st.success("Đã thêm NCC!")
-                st.rerun()
+        # 1. Thông tin chung
+        c1, c2, c3 = st.columns(3)
+        cust_list = st.session_state['customers_df']["short_name"].tolist()
+        sel_cust = c1.selectbox("Khách hàng", cust_list)
+        quote_name = c2.text_input("Tên Báo Giá")
+        
+        if c3.button("✨ Reset Báo Giá"):
+             st.session_state['current_quote_df'] = pd.DataFrame(columns=QUOTE_KH_COLUMNS)
+             st.rerun()
 
-# --- TAB 5: TẠO BÁO GIÁ ---
-def module_quotation():
-    st.markdown("## 📝 TẠO BÁO GIÁ MỚI")
-    if 'cart' not in st.session_state: st.session_state.cart = []
+        # 2. Tham số
+        with st.expander("Tham số chi phí (%)"):
+            cc1, cc2, cc3, cc4 = st.columns(4)
+            p_end = cc1.number_input("End User %", value=0.0)
+            p_buy = cc2.number_input("Buyer %", value=0.0)
+            p_tax = cc3.number_input("Tax %", value=0.0)
+            p_vat = cc4.number_input("VAT %", value=0.0)
+            # ... thêm các biến khác nếu cần
+        
+        # 3. Main Editor
+        st.subheader("Chi tiết Báo Giá")
+        
+        # Helper recalculate (Ported logic)
+        def recalculate_quote():
+            df = st.session_state['current_quote_df']
+            for i, r in df.iterrows():
+                qty = to_float(r["qty"]); buy_vnd = to_float(r["buying_price_vnd"]); t_buy = qty * buy_vnd
+                ap = to_float(r["ap_price"]); unit = to_float(r["unit_price"])
+                ap_tot = ap * qty; total = unit * qty; gap = total - ap_tot
+                
+                # Chi phí đơn giản hóa cho demo (Copy full logic in real impl)
+                tax = t_buy * (p_tax/100)
+                prof = gap - tax # Simplified logic form original
+                
+                df.at[i, "total_price_vnd"] = fmt_num(total)
+                df.at[i, "profit_vnd"] = fmt_num(prof)
+            st.session_state['current_quote_df'] = df
+
+        edited_quote = st.data_editor(
+            st.session_state['current_quote_df'],
+            num_rows="dynamic",
+            column_config={
+                "qty": st.column_config.NumberColumn("Qty"),
+                "buying_price_vnd": st.column_config.NumberColumn("Buy VND"),
+                "ap_price": st.column_config.NumberColumn("AP Price"),
+                "unit_price": st.column_config.NumberColumn("Unit Price")
+            },
+            key="editor_quote"
+        )
+        
+        if st.button("🔄 Tính Toán Lợi Nhuận"):
+            st.session_state['current_quote_df'] = edited_quote
+            recalculate_quote()
+            st.rerun()
+
+        if st.button("💾 Lưu Lịch Sử (Sales History)"):
+            # Logic Save History
+            new_hist = []
+            d = datetime.now().strftime("%d/%m/%Y")
+            for idx, r in edited_quote.iterrows():
+                new_hist.append({
+                    "date":d, "quote_no":quote_name, "customer":sel_cust,
+                    "item_code":r["item_code"], "item_name":r["item_name"],
+                    "qty":r["qty"], "total_revenue":r["total_price_vnd"],
+                    "profit":r["profit_vnd"], "supplier":r["supplier_name"],
+                    "status":"Pending"
+                })
+            new_df = pd.DataFrame(new_hist)
+            # Append to session state
+            st.session_state['sales_history_df'] = pd.concat([st.session_state['sales_history_df'], new_df], ignore_index=True)
+            # Save to Cloud
+            save_data_to_supabase(TABLE_MAP['sales_history_df'], st.session_state['sales_history_df'])
     
-    # Select Customer
-    custs = fetch_data("customers")
-    cust_opts = [f"{r['ma_khach_hang']} - {r['ten_cong_ty']}" for i, r in custs.iterrows()] if not custs.empty else []
-    sel_cust = st.selectbox("Chọn Khách Hàng:", [""] + cust_opts)
+    with tab2:
+        st.subheader("Tra cứu lịch sử")
+        kw = st.text_input("Từ khóa tìm kiếm")
+        if kw:
+            df_hist = st.session_state['sales_history_df']
+            # Simple search logic
+            mask = df_hist.apply(lambda x: x.astype(str).str.contains(kw, case=False).any(), axis=1)
+            st.dataframe(df_hist[mask])
+
+def ui_orders():
+    st.header("📦 Quản lý Đơn Hàng")
+    tab_ncc, tab_kh = st.tabs(["1. Đặt Hàng NCC", "2. PO Khách Hàng"])
     
+    with tab_ncc:
+        c1, c2 = st.columns(2)
+        po_ncc = c1.text_input("Số PO NCC")
+        supp_name = c2.selectbox("Nhà Cung Cấp", st.session_state['suppliers_df']["short_name"].tolist())
+        
+        st.subheader("Danh sách mặt hàng đặt")
+        edited_ncc = st.data_editor(st.session_state['temp_supp_order_df'], num_rows="dynamic", key="order_ncc_edit")
+        
+        if st.button("🚀 Xác nhận Đặt Hàng (Tạo Tracking)"):
+            # Logic Action Confirm
+            edited_ncc["po_number"] = po_ncc
+            edited_ncc["supplier"] = supp_name
+            edited_ncc["order_date"] = datetime.now().strftime("%d/%m/%Y")
+            
+            # Save to DB Orders
+            st.session_state['db_supplier_orders'] = pd.concat([st.session_state['db_supplier_orders'], edited_ncc], ignore_index=True)
+            save_data_to_supabase(TABLE_MAP['db_supplier_orders'], st.session_state['db_supplier_orders'])
+            
+            # Create Tracking
+            new_tracks = []
+            for _, r in edited_ncc.iterrows():
+                new_tracks.append({
+                    "po_no": po_ncc, "partner": supp_name, "status": "Đã đặt hàng",
+                    "order_type": "NCC", "last_update": datetime.now().strftime("%d/%m/%Y"), "finished": "0"
+                })
+            # Add unique Logic in real app to avoid dupes per item, here simplify per PO
+            if len(new_tracks) > 0:
+                track_df = pd.DataFrame([new_tracks[0]]) # Track theo PO
+                st.session_state['tracking_df'] = pd.concat([st.session_state['tracking_df'], track_df], ignore_index=True)
+                save_data_to_supabase(TABLE_MAP['tracking_df'], st.session_state['tracking_df'])
+                
+            st.success("Đã tạo đơn hàng NCC!")
+            st.session_state['temp_supp_order_df'] = pd.DataFrame(columns=SUPPLIER_ORDER_COLS)
+            st.rerun()
+
+    with tab_kh:
+        st.info("Logic tương tự tab NCC (Map các cột PO Khách Hàng)")
+        # Implement similar to above for Customer Orders
+
+def ui_tracking_payment():
+    st.header("🚚 Theo dõi & Thanh toán")
+    
+    # 1. Tracking View
+    st.subheader("Đang theo dõi (Tracking)")
+    track_df = st.session_state['tracking_df']
+    active_track = track_df[track_df['finished']=="0"]
+    
+    edited_track = st.data_editor(
+        active_track, 
+        column_config={
+            "status": st.column_config.SelectboxColumn("Trạng thái", options=["Đã đặt hàng", "Hàng về", "Đã giao hàng"]),
+            "proof_image": st.column_config.LinkColumn("Ảnh Proof")
+        },
+        key="track_editor"
+    )
+    
+    # Upload Image Logic
+    uploaded_file = st.file_uploader("Upload ảnh Proof cho dòng đang chọn")
+    if uploaded_file and drive_service:
+        # Trong Streamlit, việc chọn dòng khó hơn Tkinter.
+        # Ta dùng Selectbox để chọn PO cần up ảnh
+        po_to_up = st.selectbox("Chọn PO để gán ảnh", active_track["po_no"].unique())
+        if st.button("Upload lên Drive"):
+            folder_id = st.secrets["google"]["drive_folder_id"]
+            link = upload_file_to_drive(uploaded_file, f"proof_{po_to_up}.png", folder_id)
+            if link:
+                # Update DB
+                idx = track_df[track_df["po_no"] == po_to_up].index
+                track_df.loc[idx, "proof_image"] = link
+                st.session_state['tracking_df'] = track_df
+                save_data_to_supabase(TABLE_MAP['tracking_df'], track_df)
+                st.success("Upload thành công!")
+
+    if st.button("💾 Cập nhật Trạng Thái Tracking"):
+        # Update logic: If status == "Đã giao hàng" -> Move to Payment
+        # Merge edited back to main df
+        st.session_state['tracking_df'].update(edited_track)
+        save_data_to_supabase(TABLE_MAP['tracking_df'], st.session_state['tracking_df'])
+        st.success("Đã lưu Tracking")
+
     st.divider()
     
-    # Add Items
-    c1, c2, c3 = st.columns([2, 1, 1])
-    prods = fetch_data("products")
-    prod_opts = [f"{r['ma_hang']} | {r['ten_hang_vn']}" for i, r in prods.iterrows()] if not prods.empty else []
-    sel_prod = c1.selectbox("Chọn SP:", [""] + prod_opts)
+    # 2. Payment View
+    st.subheader("Thanh Toán")
+    pay_df = st.session_state['payment_df']
+    unpaid = pay_df[pay_df["status"] != "Đã thanh toán"]
     
-    if sel_prod:
-        ma_hang = sel_prod.split(" | ")[0]
-        p_data = prods[prods['ma_hang'] == ma_hang].iloc[0]
-        gia_mua = float(p_data['gia_mua'] or 0)
-        
-        qty = c2.number_input("Số lượng", 1, 1000, 1)
-        margin = c3.number_input("Margin (%)", 0.0, 100.0, 20.0)
-        gia_ban = gia_mua * (1 + margin/100)
-        
-        st.info(f"Giá mua: {gia_mua:,.0f} -> Giá bán đề xuất: {gia_ban:,.0f}")
-        
-        if st.button("➕ Thêm vào List"):
-            st.session_state.cart.append({
-                "ma_hang": ma_hang, "ten_hang": p_data['ten_hang_vn'], "don_vi": p_data['don_vi'],
-                "so_luong": qty, "don_gia_ban": gia_ban, "thanh_tien": qty*gia_ban
-            })
-
-    # Cart Review
-    if st.session_state.cart:
-        df_cart = pd.DataFrame(st.session_state.cart)
-        st.dataframe(df_cart, use_container_width=True)
-        
-        if st.button("💾 LƯU BÁO GIÁ"):
-            try:
-                # Save Header
-                ma_kh = sel_cust.split(" - ")[0] if sel_cust else ""
-                so_bg = f"BG-{int(time.time())}"
-                total = df_cart['thanh_tien'].sum()
-                
-                supabase.table("quotations").insert({
-                    "so_bao_gia": so_bg, "ma_khach_hang": ma_kh, 
-                    "ngay_bao_gia": datetime.now().isoformat(), "tong_tien_sau_vat": total*1.1
-                }).execute()
-                
-                # Save Items
-                items = []
-                for i, r in df_cart.iterrows():
-                    items.append({
-                        "so_bao_gia": so_bg, "ma_hang": r['ma_hang'], 
-                        "so_luong": r['so_luong'], "don_gia_ban": r['don_gia_ban'], "thanh_tien": r['thanh_tien']
-                    })
-                supabase.table("quotation_items").insert(items).execute()
-                
-                st.success(f"Đã lưu: {so_bg}")
-                st.session_state.cart = []
-                st.rerun()
-            except Exception as e: st.error(f"Lỗi: {e}")
-
-# --- TAB 6: QUẢN LÝ ĐƠN HÀNG (HISTORY) ---
-def module_history():
-    st.markdown("## 🗂️ LỊCH SỬ BÁO GIÁ")
+    st.dataframe(unpaid)
     
-    quotes = fetch_data("quotations")
-    if not quotes.empty:
-        # Show List
-        st.dataframe(quotes[['so_bao_gia', 'ngay_bao_gia', 'ma_khach_hang', 'tong_tien_sau_vat']], use_container_width=True)
-        
-        # Detail View & Export
-        st.divider()
-        st.subheader("Chi tiết & Xuất lại Excel")
-        sel_bg = st.selectbox("Chọn Số Báo Giá để xem:", quotes['so_bao_gia'].unique())
-        
-        if sel_bg:
-            # Get Items
-            items = supabase.table("quotation_items").select("*").eq("so_bao_gia", sel_bg).execute()
-            df_items = pd.DataFrame(items.data)
-            st.dataframe(df_items)
+    po_pay = st.selectbox("Chọn PO xác nhận thanh toán", unpaid["po_no"].unique() if not unpaid.empty else [])
+    if st.button("Xác nhận Đã Thanh Toán"):
+        if po_pay:
+            mask = st.session_state['payment_df']["po_no"] == po_pay
+            st.session_state['payment_df'].loc[mask, "status"] = "Đã thanh toán"
+            st.session_state['payment_df'].loc[mask, "paid_date"] = datetime.now().strftime("%d/%m/%Y")
             
-            # Get Info for Excel
-            q_info = quotes[quotes['so_bao_gia'] == sel_bg].iloc[0]
-            cust_info = supabase.table("customers").select("*").eq("ma_khach_hang", q_info['ma_khach_hang']).execute()
-            c_data = cust_info.data[0] if cust_info.data else {}
+            # Move to Paid History
+            paid_row = st.session_state['payment_df'][mask]
+            st.session_state['paid_history_df'] = pd.concat([st.session_state['paid_history_df'], paid_row], ignore_index=True)
             
-            # Export Button
-            excel_data = generate_excel(q_info, df_items, c_data)
-            st.download_button("📥 Tải File Excel", excel_data, f"{sel_bg}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-    else:
-        st.info("Chưa có lịch sử báo giá.")
+            save_data_to_supabase(TABLE_MAP['payment_df'], st.session_state['payment_df'])
+            save_data_to_supabase(TABLE_MAP['paid_history_df'], st.session_state['paid_history_df'])
+            st.success(f"PO {po_pay} đã thanh toán!")
+            st.rerun()
+
+def ui_master_data():
+    st.header("⚙️ Master Data")
+    tab1, tab2 = st.tabs(["Khách hàng", "Nhà cung cấp"])
+    
+    with tab1:
+        st.data_editor(st.session_state['customers_df'], num_rows="dynamic", key="edit_cust")
+        if st.button("Lưu Khách Hàng"):
+            save_data_to_supabase(TABLE_MAP['customers_df'], st.session_state['customers_df'])
+            
+    with tab2:
+        st.data_editor(st.session_state['suppliers_df'], num_rows="dynamic", key="edit_supp")
+        if st.button("Lưu NCC"):
+            save_data_to_supabase(TABLE_MAP['suppliers_df'], st.session_state['suppliers_df'])
 
 # =============================================================================
-# 6. MAIN APP NAVIGATOR
+# 6. MAIN APP LAYOUT
 # =============================================================================
-def main():
-    with st.sidebar:
-        st.title("HOTWIN CRM")
-        st.write("---")
-        menu = st.radio("CHỨC NĂNG", [
-            "🏠 Dashboard", 
-            "📦 Kho Hàng (Products)", 
-            "👥 Khách Hàng (Customers)", 
-            "🏭 Nhà Cung Cấp (Suppliers)", 
-            "📝 Tạo Báo Giá (Quotations)",
-            "🗂️ Quản Lý Đơn (Orders)"
-        ])
-    
-    if menu == "🏠 Dashboard":
-        st.header("TỔNG QUAN HỆ THỐNG")
-        try:
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Sản Phẩm", supabase.table("products").select("id", count="exact").execute().count)
-            c2.metric("Khách Hàng", supabase.table("customers").select("id", count="exact").execute().count)
-            c3.metric("Nhà Cung Cấp", supabase.table("suppliers").select("id", count="exact").execute().count)
-            c4.metric("Đơn Báo Giá", supabase.table("quotations").select("id", count="exact").execute().count)
-        except: st.error("Chưa kết nối DB")
-        
-    elif menu == "📦 Kho Hàng (Products)": module_products()
-    elif menu == "👥 Khách Hàng (Customers)": module_customers()
-    elif menu == "🏭 Nhà Cung Cấp (Suppliers)": module_suppliers()
-    elif menu == "📝 Tạo Báo Giá (Quotations)": module_quotation()
-    elif menu == "🗂️ Quản Lý Đơn (Orders)": module_history()
 
-if __name__ == "__main__":
-    main()
+menu = ["Dashboard", "Báo giá NCC", "Báo giá KH", "Đơn hàng", "Tracking & Payment", "Master Data"]
+choice = st.sidebar.selectbox("Menu", menu)
 
+if choice == "Dashboard":
+    ui_dashboard()
+elif choice == "Báo giá NCC":
+    ui_supplier_quote()
+elif choice == "Báo giá KH":
+    ui_customer_quote()
+elif choice == "Đơn hàng":
+    ui_orders()
+elif choice == "Tracking & Payment":
+    ui_tracking_payment()
+elif choice == "Master Data":
+    ui_master_data()
