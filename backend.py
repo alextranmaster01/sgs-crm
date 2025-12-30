@@ -6,18 +6,18 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 
 # --- 1. KẾT NỐI SUPABASE ---
+# --- COPY ĐOẠN NÀY DÁN ĐÈ VÀO HÀM init_supabase CŨ ---
 @st.cache_resource
 def init_supabase():
     try:
-        # Đảm bảo trong Secrets bạn đang để chữ IN HOA: SUPABASE_URL, SUPABASE_KEY
-        url = st.secrets["supabase"]["SUPABASE_URL"]
-        key = st.secrets["supabase"]["SUPABASE_KEY"]
+        # SỬA LẠI THÀNH CHỮ THƯỜNG ĐỂ KHỚP VỚI FILE SECRETS CỦA BẠN
+        url = st.secrets["supabase"]["url"]
+        key = st.secrets["supabase"]["key"]
         return create_client(url, key)
     except Exception as e:
         return None
-
+# Khởi tạo client
 supabase: Client = init_supabase()
-
 # --- 2. CẤU HÌNH BẢNG & CỘT (SCHEMAS) ---
 # Đây là phần quan trọng để tránh lỗi KeyError khi bảng rỗng
 TABLES = {
