@@ -1,9 +1,14 @@
 import streamlit as st
-from supabase import create_client, Client # <--- Đảm bảo có dòng import này
-# File: backend.py
 import pandas as pd
-import streamlit as st
 from supabase import create_client, Client
+
+# --- BẮT BUỘC PHẢI CÓ 3 DÒNG NÀY ĐỂ GOOGLE CHẠY ---
+from google.oauth2.credentials import Credentials  # <--- Bạn đang thiếu dòng này
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseUpload
+# --------------------------------------------------
+
+# (Phần code bên dưới giữ nguyên)
 # ... các import khác của bạn (google, etc.)
 
 # --- THÊM ĐOẠN NÀY VÀO ĐẦU FILE (SAU IMPORT) ---
