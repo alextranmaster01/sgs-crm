@@ -308,67 +308,72 @@ with tab2:
                     status_box.write(f"✅ Tìm thấy {len(image_map)} ảnh. Chuẩn bị upload lên Drive...")
 
                     # 3. LOOP: GÁN DỮ LIỆU & UPLOAD
-                    data_clean = []
-                    total_rows = len(df_raw) - start_row
-                    prog_bar = status_box.progress(0)
-                    
-                    for idx, i in enumerate(range(start_row, len(df_raw))):
-                        prog_bar.progress((idx + 1) / total_rows)
-                        row = df_raw.iloc[i]
-                        
-                        def get(col_idx): 
-                            return logic.safe_str(row[col_idx]) if col_idx < len(row) else ""
-                        
-                        code_val = get(1) # Cột B
-                        if not code_val: continue 
+                    # --- TÌM ĐOẠN XỬ LÝ UPLOAD FILE EXCEL VÀ THAY THẾ ---
 
-                        # --- LOGIC UPLOAD DRIVE ---
-                        final_img_link = ""
-                        
-                        # Trường hợp 1: Có ảnh dán trong Excel -> Upload lên Drive
-                        if i in image_map:
-                            img_data = image_map[i]
-                            
-                            # Đặt tên file ảnh theo Mã hàng để dễ quản lý trên Drive
-                            filename = f"{logic.safe_filename(code_val)}.png"
-                            file_obj = io.BytesIO(img_data)
-                            
-                            status_box.write(f"☁️ Đang upload lên Drive: {filename}...")
-                            
-                            # GỌI HÀM BACKEND ĐỂ UPLOAD VÀO FOLDER DRIVE
-                            # Hàm này trả về Link WebContentLink (xem trực tiếp)
-                            link = backend.upload_to_drive(file_obj, filename, folder_type="images")
-                            
-                            if link:
-                                final_img_link = link
-                        
-                        # Trường hợp 2: Không có ảnh mới, giữ link cũ (nếu là link online)
-                        else:
-                            old_path = get(12)
-                            if "http" in old_path:
-                                final_img_link = old_path
+# ... (đoạn import và đọc file excel giữ nguyên)
 
-                        # --- TẠO ITEM ---
-                        item = {
-                            "no": get(0),                     
-                            "item_code": code_val,            
-                            "item_name": get(2),              
-                            "specs": get(3),                  
-                            "qty": logic.fmt_num(logic.to_float(get(4))),          
-                            "buying_price_rmb": logic.fmt_num(logic.to_float(get(5))), 
-                            "total_buying_price_rmb": logic.fmt_num(logic.to_float(get(6))), 
-                            "exchange_rate": logic.fmt_num(logic.to_float(get(7))),    
-                            "buying_price_vnd": logic.fmt_num(logic.to_float(get(8))), 
-                            "total_buying_price_vnd": logic.fmt_num(logic.to_float(get(9))), 
-                            "leadtime": get(10),              
-                            "supplier_name": get(11),         
-                            "image_path": final_img_link,     # Link Google Drive
-                            
-                            "_clean_code": logic.clean_lookup_key(code_val),
-                            "_clean_specs": logic.clean_lookup_key(get(3)),
-                            "_clean_name": logic.clean_lookup_key(get(2))
-                        }
-                        data_clean.append(item)
+# 3. LOOP: GÁN DỮ LIỆU & UPLOAD
+data_clean = []
+total_rows = len(df_raw) - start_row
+prog_bar = status_box.progress(0)
+
+for idx, i in enumerate(range(start_row, len(df_raw))):
+    prog_bar.progress((idx + 1) / total_rows)
+    row = df_raw.iloc[i]
+    
+    # Hàm lấy giá trị an toàn
+    def get(col_idx): 
+        return logic.safe_str(row[col_idx]) if col_idx < len(row) else ""
+    
+    code_val = get(1) # Cột Mã Hàng
+    if not code_val: continue 
+
+    # --- LOGIC UPLOAD DRIVE ---
+    final_img_link = ""
+    
+    # Trường hợp 1: Có ảnh dán trong Excel
+    if i in image_map:
+        img_data = image_map[i]
+        filename = f"{logic.safe_filename(code_val)}.png"
+        file_obj = io.BytesIO(img_data)
+        
+        status_box.write(f"☁️ Đang upload: {filename}...")
+        
+        # GỌI HÀM BACKEND ĐỂ UPLOAD
+        link = backend.upload_to_drive(file_obj, filename, folder_type="images")
+        
+        if link:
+            final_img_link = link
+        else:
+            status_box.write(f"⚠️ Không lấy được link cho {filename}")
+
+    # Trường hợp 2: Không có ảnh mới -> Giữ nguyên link cũ (nếu có)
+    else:
+        old_path = get(12) # Giả sử cột 12 chứa link ảnh cũ
+        if "http" in old_path:
+            final_img_link = old_path
+
+    # --- TẠO ITEM ---
+    item = {
+        "no": get(0),                      
+        "item_code": code_val,             
+        "item_name": get(2),               
+        "specs": get(3),                   
+        "qty": logic.fmt_num(logic.to_float(get(4))),           
+        "buying_price_rmb": logic.fmt_num(logic.to_float(get(5))), 
+        "total_buying_price_rmb": logic.fmt_num(logic.to_float(get(6))), 
+        "exchange_rate": logic.fmt_num(logic.to_float(get(7))),    
+        "buying_price_vnd": logic.fmt_num(logic.to_float(get(8))), 
+        "total_buying_price_vnd": logic.fmt_num(logic.to_float(get(9))), 
+        "leadtime": get(10),               
+        "supplier_name": get(11),          
+        "image_path": final_img_link,      # Link này QUAN TRỌNG NHẤT
+        
+        "_clean_code": logic.clean_lookup_key(code_val),
+        "_clean_specs": logic.clean_lookup_key(get(3)),
+        "_clean_name": logic.clean_lookup_key(get(2))
+    }
+    data_clean.append(item)
                     
                     # 4. LƯU DB
                     if data_clean:
@@ -387,15 +392,13 @@ with tab2:
                     st.error(f"❌ Lỗi: {e}") 
 
     # Load Data & Hiển thị
+    # Load Data & Hiển thị
     df_pur = backend.load_data("purchases")
     
-    # Tìm kiếm
-    search_term = st.text_input("🔍 Tìm kiếm code, tên...", key="search_pur")
-    if search_term and not df_pur.empty:
-        mask = df_pur.apply(lambda x: x.astype(str).str.contains(search_term, case=False, na=False)).any(axis=1)
-        df_pur = df_pur[mask]
+    # ... (đoạn tìm kiếm giữ nguyên) ...
 
     # --- CẤU HÌNH HIỂN THỊ CỘT ẢNH ---
+    # Phải có đoạn này ảnh mới hiện ra được!
     column_cfg = {
         "image_path": st.column_config.ImageColumn(
             "Hình Ảnh", 
@@ -403,10 +406,16 @@ with tab2:
             width="small"
         ),
         "total_buying_price_vnd": st.column_config.NumberColumn("Tổng Mua (VND)", format="%d"),
-         "_clean_code": None, "_clean_specs": None, "_clean_name": None
+        
+        # Ẩn các cột rác đi cho đẹp
+        "_clean_code": None, 
+        "_clean_specs": None, 
+        "_clean_name": None,
+        "id": None, 
+        "created_at": None
     }
 
-    # Thứ tự cột chuẩn
+    # Thứ tự cột hiển thị (Đưa cột ảnh lên đầu cho dễ thấy)
     cols_order = [
         "image_path", "no", "item_code", "item_name", "specs", "qty", 
         "buying_price_rmb", "total_buying_price_rmb", "exchange_rate", 
@@ -573,6 +582,7 @@ with tab6:
         df_s = backend.load_data("suppliers")
         edited_s = st.data_editor(df_s, num_rows="dynamic", key="editor_supp")
         if st.button("Lưu Master NCC"): backend.save_data("suppliers", edited_s)
+
 
 
 
