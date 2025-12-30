@@ -4,10 +4,9 @@ from supabase import create_client, Client
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
-import io
+import json
 
-# --- 1. ĐỊNH NGHĨA CẤU TRÚC CỘT (SCHEMA) ---
-# Giúp phần mềm biết tên cột ngay cả khi DB trống
+# --- 1. CẤU HÌNH SCHEMA (ĐỂ TRÁNH LỖI KHI DB TRỐNG) ---
 SCHEMAS = {
     "customers": ["no", "short_name", "eng_name", "vn_name", "address_1", "address_2", "contact_person", "director", "phone", "fax", "tax_code", "destination", "payment_term"],
     "suppliers": ["no", "short_name", "eng_name", "vn_name", "address_1", "address_2", "contact_person", "director", "phone", "fax", "tax_code", "destination", "payment_term"],
@@ -33,7 +32,7 @@ TABLES = {
     "customer_orders": "db_customer_orders"
 }
 
-# --- 2. SUPABASE CONNECTION ---
+# --- 2. KẾT NỐI SUPABASE ---
 @st.cache_resource
 def init_supabase():
     try:
@@ -41,57 +40,44 @@ def init_supabase():
         key = st.secrets["supabase"]["key"]
         return create_client(url, key)
     except Exception as e:
-        st.error(f"Thiếu cấu hình Supabase trong secrets.toml: {e}")
         return None
 
 supabase: Client = init_supabase()
 
 def load_data(table_key):
-    """
-    Tải dữ liệu và đảm bảo luôn có đủ cột (ngay cả khi DB trống)
-    """
     if not supabase: return pd.DataFrame(columns=SCHEMAS.get(table_key, []))
-    
     try:
         response = supabase.table(TABLES[table_key]).select("*").execute()
         data = response.data
-        
-        # Nếu data rỗng, trả về DataFrame rỗng nhưng CÓ ĐỦ CỘT
-        if not data:
-            return pd.DataFrame(columns=SCHEMAS.get(table_key, []))
-            
+        if not data: return pd.DataFrame(columns=SCHEMAS.get(table_key, []))
         df = pd.DataFrame(data)
-        
-        # Đảm bảo các cột bắt buộc phải có (tránh trường hợp DB thiếu cột)
-        expected_cols = SCHEMAS.get(table_key, [])
-        for col in expected_cols:
-            if col not in df.columns:
-                df[col] = "" # Tạo cột trống nếu thiếu
-                
+        for col in SCHEMAS.get(table_key, []):
+            if col not in df.columns: df[col] = ""
         return df
     except Exception as e:
-        st.error(f"Lỗi tải dữ liệu {table_key}: {e}")
         return pd.DataFrame(columns=SCHEMAS.get(table_key, []))
 
 def save_data(table_key, df):
     if not supabase: return
     try:
-        # Chuyển đổi NaN thành None để Supabase hiểu là null
         df_clean = df.where(pd.notnull(df), None)
         data = df_clean.to_dict(orient='records')
-        
         if data:
             supabase.table(TABLES[table_key]).upsert(data).execute()
             st.toast(f"Đã lưu dữ liệu vào {TABLES[table_key]}", icon="💾")
     except Exception as e:
         st.error(f"Lỗi lưu dữ liệu: {e}")
 
-# --- 3. GOOGLE DRIVE CONNECTION (OAUTH2) ---
+# --- 3. KẾT NỐI GOOGLE DRIVE (QUAN TRỌNG) ---
 def get_drive_service():
+    """Tạo kết nối Google Drive API từ Refresh Token"""
     try:
-        if "google" not in st.secrets: return None
+        if "google" not in st.secrets: 
+            st.error("Chưa cấu hình secrets[google]")
+            return None
+            
         creds = Credentials(
-            None,
+            None, # Access Token (None để tự refresh)
             refresh_token=st.secrets["google"]["refresh_token"],
             token_uri="https://oauth2.googleapis.com/token",
             client_id=st.secrets["google"]["client_id"],
@@ -99,27 +85,59 @@ def get_drive_service():
         )
         return build('drive', 'v3', credentials=creds)
     except Exception as e:
-        st.error(f"Lỗi cấu hình Google Drive: {e}")
+        st.error(f"Lỗi Auth Google: {e}")
         return None
 
 def upload_to_drive(file_obj, filename, folder_type="images"):
+    """
+    Upload file lên Drive -> Set quyền Public -> Trả về Link xem trực tiếp
+    """
     service = get_drive_service()
     if not service: return None
     
     try:
-        # Lấy folder ID từ secrets, nếu không có thì báo lỗi nhẹ
+        # 1. Lấy ID thư mục từ secrets
         folder_key = f"folder_id_{folder_type}"
         if folder_key not in st.secrets["google"]:
-            st.warning(f"Chưa cấu hình '{folder_key}' trong secrets.toml")
+            st.error(f"Thiếu cấu hình '{folder_key}' trong secrets.toml")
             return None
-
         folder_id = st.secrets["google"][folder_key]
         
-        file_metadata = {'name': filename, 'parents': [folder_id]}
-        media = MediaIoBaseUpload(file_obj, mimetype='application/octet-stream')
+        # 2. Tạo metadata cho file
+        file_metadata = {
+            'name': filename, 
+            'parents': [folder_id]
+        }
         
-        file = service.files().create(body=file_metadata, media_body=media, fields='id, webContentLink').execute()
+        # 3. Chuẩn bị file để upload
+        media = MediaIoBaseUpload(file_obj, mimetype='image/png', resumable=True)
+        
+        # 4. Thực hiện Upload
+        file = service.files().create(
+            body=file_metadata, 
+            media_body=media, 
+            fields='id, webContentLink' # Yêu cầu trả về ID và Link
+        ).execute()
+        
+        file_id = file.get('id')
+        
+        # 5. QUAN TRỌNG: Cấp quyền "Anyone with link" (Reader)
+        # Nếu không có bước này, Streamlit sẽ KHÔNG hiển thị được ảnh
+        try:
+            permission = {
+                'type': 'anyone',
+                'role': 'reader',
+            }
+            service.permissions().create(
+                fileId=file_id,
+                body=permission,
+            ).execute()
+        except Exception as p_e:
+            st.warning(f"Không thể set quyền public cho ảnh (Có thể do chính sách Google Workspace): {p_e}")
+
+        # 6. Trả về link hiển thị (webContentLink)
         return file.get('webContentLink')
+
     except Exception as e:
         st.error(f"Lỗi Upload Drive: {e}")
         return None
