@@ -41,64 +41,98 @@ try:
 except Exception as e:
     st.error(f"Lỗi cấu hình secrets.toml: {e}")
     st.stop()
-
 # =============================================================================
-# 2. GOOGLE DRIVE MODULE (OAUTH2 REFRESH TOKEN)
+# CẬP NHẬT LẠI PHẦN KẾT NỐI GOOGLE DRIVE (Copy đè vào phần cũ)
 # =============================================================================
 class GoogleDriveService:
     def __init__(self):
-        self.creds = Credentials(
-            None,
-            refresh_token=GOOGLE_REFRESH_TOKEN,
-            token_uri="https://oauth2.googleapis.com/token",
-            client_id=GOOGLE_CLIENT_ID,
-            client_secret=GOOGLE_CLIENT_SECRET
-        )
-        self.service = build('drive', 'v3', credentials=self.creds)
+        try:
+            # Lấy thông tin từ secrets
+            self.client_id = st.secrets["google"]["client_id"]
+            self.client_secret = st.secrets["google"]["client_secret"]
+            self.refresh_token = st.secrets["google"]["refresh_token"]
+            
+            # Cấu hình Credentials chuẩn xác
+            self.creds = Credentials(
+                None, # Access token (để None để tự động lấy từ refresh token)
+                refresh_token=self.refresh_token,
+                token_uri="https://oauth2.googleapis.com/token",
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            
+            # Thử khởi tạo service để bắt lỗi ngay lập tức nếu sai key
+            self.service = build('drive', 'v3', credentials=self.creds)
+            
+            # Test thử kết nối bằng cách gọi lệnh nhẹ nhất
+            self.service.files().list(pageSize=1).execute()
+            print("✅ Đã kết nối Google Drive thành công với Key mới!")
+            
+        except Exception as e:
+            st.error("❌ LỖI KẾT NỐI GOOGLE DRIVE (MÃ MỚI BỊ TỪ CHỐI)")
+            st.warning(f"Chi tiết lỗi: {e}")
+            st.info("""
+            Cách khắc phục:
+            1. Vào Google OAuth Playground > Bấm Bánh răng ⚙️.
+            2. Điền Client ID & Secret CỦA BẠN vào (Đừng dùng mặc định).
+            3. Lấy lại Refresh Token và dán vào secrets.toml.
+            """)
+            st.stop()
 
     def get_or_create_folder(self, folder_name, parent_id):
         """Tìm thư mục, nếu chưa có thì tạo mới"""
-        query = f"mimeType='application/vnd.google-apps.folder' and name='{folder_name}' and '{parent_id}' in parents and trashed=false"
-        results = self.service.files().list(q=query, fields="files(id)").execute()
-        files = results.get('files', [])
-        if files:
-            return files[0]['id']
-        else:
-            meta = {'name': folder_name, 'mimeType': 'application/vnd.google-apps.folder', 'parents': [parent_id]}
-            folder = self.service.files().create(body=meta, fields='id').execute()
-            return folder.get('id')
+        try:
+            query = f"mimeType='application/vnd.google-apps.folder' and name='{folder_name}' and '{parent_id}' in parents and trashed=false"
+            results = self.service.files().list(q=query, fields="files(id)").execute()
+            files = results.get('files', [])
+            if files:
+                return files[0]['id']
+            else:
+                meta = {'name': folder_name, 'mimeType': 'application/vnd.google-apps.folder', 'parents': [parent_id]}
+                folder = self.service.files().create(body=meta, fields='id').execute()
+                return folder.get('id')
+        except Exception as e:
+            st.error(f"Lỗi khi tạo folder '{folder_name}': {e}")
+            return None
 
     def upload_bytes(self, data_bytes, file_name, folder_id, mime_type='application/octet-stream'):
         """Upload file từ bộ nhớ lên Drive"""
-        # Kiểm tra file trùng tên để update thay vì tạo mới (tránh rác)
-        query = f"name='{file_name}' and '{folder_id}' in parents and trashed=false"
-        results = self.service.files().list(q=query, fields="files(id)").execute()
-        files = results.get('files', [])
-        
-        media = MediaIoBaseUpload(data_bytes, mimetype=mime_type, resumable=True)
-        
-        if files:
-            file_id = files[0]['id']
-            self.service.files().update(fileId=file_id, media_body=media).execute()
-        else:
-            meta = {'name': file_name, 'parents': [folder_id]}
-            res = self.service.files().create(body=meta, media_body=media, fields='id').execute()
-            file_id = res.get('id')
+        try:
+            # Kiểm tra file trùng tên
+            query = f"name='{file_name}' and '{folder_id}' in parents and trashed=false"
+            results = self.service.files().list(q=query, fields="files(id)").execute()
+            files = results.get('files', [])
             
-        # Cấp quyền public read (để hiển thị ảnh trong app)
-        self.service.permissions().create(fileId=file_id, body={'role': 'reader', 'type': 'anyone'}).execute()
-        return f"https://drive.google.com/uc?id={file_id}"
+            media = MediaIoBaseUpload(data_bytes, mimetype=mime_type, resumable=True)
+            
+            if files:
+                file_id = files[0]['id']
+                self.service.files().update(fileId=file_id, media_body=media).execute()
+            else:
+                meta = {'name': file_name, 'parents': [folder_id]}
+                res = self.service.files().create(body=meta, media_body=media, fields='id').execute()
+                file_id = res.get('id')
+                
+            # Cấp quyền public read
+            self.service.permissions().create(fileId=file_id, body={'role': 'reader', 'type': 'anyone'}).execute()
+            return f"https://drive.google.com/uc?id={file_id}"
+        except Exception as e:
+            st.error(f"Lỗi upload file '{file_name}': {e}")
+            return ""
 
     def download_file(self, file_id):
-        request = self.service.files().get_media(fileId=file_id)
-        fh = io.BytesIO()
-        downloader = request.execute()
-        fh.write(downloader)
-        fh.seek(0)
-        return fh
+        try:
+            request = self.service.files().get_media(fileId=file_id)
+            fh = io.BytesIO()
+            downloader = request.execute()
+            fh.write(downloader)
+            fh.seek(0)
+            return fh
+        except Exception as e:
+            st.error(f"Lỗi download file: {e}")
+            return None
 
 drive_service = GoogleDriveService()
-
 # =============================================================================
 # 3. HELPER FUNCTIONS (LOGIC & UTILS)
 # =============================================================================
@@ -478,3 +512,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
