@@ -64,6 +64,47 @@ def get_drive_service():
 # Hàm upload giữ nguyên logic, chỉ gọi get_drive_service ở trên
 def upload_to_drive(file_obj, filename, folder_type="images"):
     service = get_drive_service()
+    if not service:
+        return None
+        
+    try:
+        # Lấy ID folder từ secrets (hoặc điền trực tiếp ID vào đây)
+        # folder_id = st.secrets["google"]["folder_id_images"] 
+        folder_id = "PASTE_ID_FOLDER_CUA_BAN_VAO_DAY" 
+
+        file_metadata = {
+            'name': filename,
+            'parents': [folder_id]
+        }
+        
+        media = MediaIoBaseUpload(file_obj, mimetype='image/png', resumable=True)
+        
+        # 1. Tạo file
+        file = service.files().create(
+            body=file_metadata,
+            media_body=media,
+            fields='id, webContentLink'
+        ).execute()
+        
+        file_id = file.get('id')
+        
+        # 2. BƯỚC QUAN TRỌNG: Cấp quyền "Anyone with the link" (Public)
+        permission = {
+            'type': 'anyone',
+            'role': 'reader',
+        }
+        service.permissions().create(
+            fileId=file_id,
+            body=permission,
+            fields='id',
+        ).execute()
+        
+        # 3. Trả về link xem trực tiếp
+        return file.get('webContentLink')
+        
+    except Exception as e:
+        st.error(f"Lỗi khi upload file: {str(e)}")
+        return None
 
 # --- 1. CẤU HÌNH SCHEMA (ĐỂ TRÁNH LỖI KHI DB TRỐNG) ---
 SCHEMAS = {
