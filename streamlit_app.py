@@ -1,8 +1,8 @@
 # =============================================================================
-# CRM SYSTEM - ULTIMATE HYBRID EDITION (FINAL FIXED)
+# CRM SYSTEM - ULTIMATE HYBRID EDITION (FINAL FIXED V4803)
 # UI STANDARD: V4800 (Colorful, 3D Cards, Layout)
 # CORE ENGINE: V6023 (Supabase, Google Drive OAuth2 Refresh Token)
-# FEATURES: Full Modules (Dashboard, Inventory, Quote, PO, Tracking, Master Data)
+# FEATURES: Full Modules + Inventory Import Fix + Master Data Tabs
 # =============================================================================
 
 import streamlit as st
@@ -171,7 +171,7 @@ class CRMBackend:
             
             file = self.drive_service.files().create(body=meta, media_body=media, fields='id, webViewLink, thumbnailLink').execute()
             
-            # Tạo link hiển thị trực tiếp (Hack link Google Drive để hiển thị trong App)
+            # Tạo link hiển thị trực tiếp
             file_id = file.get('id')
             direct_link = f"https://drive.google.com/uc?export=view&id={file_id}"
             
@@ -278,7 +278,7 @@ with st.sidebar:
         "⚙️ MASTER DATA"
     ])
     st.markdown("---")
-    st.caption("Phiên bản: V4800 Online Ultimate")
+    st.caption("Phiên bản: V4802 - Fixed Import")
 
 # -----------------------------------------------------------------------------
 # TAB 1: DASHBOARD
@@ -297,18 +297,52 @@ if menu == "📊 DASHBOARD":
         with c1: st.markdown(f'<div class="dashboard-card card-sales"><div class="card-title">DOANH SỐ</div><div class="card-value">{sales:,.0f}</div></div>', unsafe_allow_html=True)
         with c2: st.markdown(f'<div class="dashboard-card card-profit"><div class="card-title">LỢI NHUẬN</div><div class="card-value">{profit:,.0f}</div></div>', unsafe_allow_html=True)
         with c3: st.markdown(f'<div class="dashboard-card card-orders"><div class="card-title">ĐƠN HÀNG</div><div class="card-value">{orders}</div></div>', unsafe_allow_html=True)
-        
-        st.divider()
-        st.subheader("Hoạt động gần đây")
-        # Placeholder for charts if needed
     except: st.error("Lỗi kết nối Dashboard - Kiểm tra Supabase")
 
 # -----------------------------------------------------------------------------
-# TAB 2: KHO HÀNG (TÍNH NĂNG ĐẶC BIỆT: CLICK XEM ẢNH)
+# TAB 2: KHO HÀNG (TÍNH NĂNG ĐẶC BIỆT: CLICK XEM ẢNH + IMPORT EXCEL FIXED)
 # -----------------------------------------------------------------------------
 elif menu == "📦 KHO HÀNG (IMAGES)":
-    st.markdown("## 📦 TRA CỨU & HÌNH ẢNH SẢN PHẨM")
+    st.markdown("## 📦 QUẢN LÝ KHO HÀNG & HÌNH ẢNH")
     
+    # --- MODULE IMPORT EXCEL (ĐÃ THÊM VÀO ĐÂY) ---
+    with st.expander("📥 NHẬP DỮ LIỆU TỪ EXCEL (IMPORT)", expanded=False):
+        st.info("Upload file Excel (Cột: Specs, Item name, Buying price...)")
+        up_inv = st.file_uploader("Chọn file Excel", type=['xlsx'], key="inv_import")
+        if up_inv and st.button("Bắt đầu Import"):
+            try:
+                df_inv = pd.read_excel(up_inv)
+                # Chuẩn hóa tên cột
+                df_inv.columns = [str(c).lower().strip() for c in df_inv.columns]
+                
+                records = []
+                for _, row in df_inv.iterrows():
+                    # Map cột linh hoạt
+                    price = row.get('buying price\n(rmb)', 0) or row.get('buying price (rmb)', 0) or row.get('price', 0)
+                    specs = row.get('specs', '') or row.get('item code', '')
+                    
+                    if specs: 
+                        records.append({
+                            "specs": str(specs).strip(),
+                            "buying_price_rmb": float(price) if pd.notnull(price) else 0,
+                            "supplier_name": str(row.get('supplier', 'Unknown')),
+                            "exchange_rate": 3600
+                        })
+                
+                if records:
+                    # Batch insert
+                    batch_size = 1000
+                    for i in range(0, len(records), batch_size):
+                        backend.supabase.table("crm_purchases").insert(records[i:i+batch_size]).execute()
+                    st.success(f"✅ Đã import {len(records)} dòng!")
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.warning("File không có dữ liệu hợp lệ.")
+            except Exception as e:
+                st.error(f"Lỗi Import: {e}")
+
+    # --- TRA CỨU & XEM ẢNH ---
     col_search, col_upload = st.columns([3, 1])
     search = col_search.text_input("🔍 Tìm kiếm (Specs/Tên)...", placeholder="Nhập mã hàng...")
     
@@ -507,11 +541,12 @@ elif menu == "🚚 VẬN ĐƠN (TRACKING)":
             st.success("Updated!")
 
 # -----------------------------------------------------------------------------
-# TAB 6: MASTER DATA (ĐẦY ĐỦ 3 MODULE NHƯ V4800)
+# TAB 6: MASTER DATA (ĐẦY ĐỦ 3 TABS NHƯ V4800)
 # -----------------------------------------------------------------------------
 elif menu == "⚙️ MASTER DATA":
     st.markdown("## ⚙️ QUẢN LÝ DỮ LIỆU GỐC")
     
+    # Chia 3 Sub-tabs chuẩn V4800
     t_price, t_cust, t_supp = st.tabs(["BẢNG GIÁ VỐN", "DANH SÁCH KHÁCH HÀNG", "DANH SÁCH NCC"])
     
     # 1. BẢNG GIÁ
@@ -533,19 +568,18 @@ elif menu == "⚙️ MASTER DATA":
             backend.supabase.table("crm_purchases").insert(recs).execute()
             st.success("Đã xong!")
 
-    # 2. KHÁCH HÀNG (THÊM MỚI VÀO)
+    # 2. KHÁCH HÀNG
     with t_cust:
         st.info("Import Danh Sách Khách Hàng (Customer)")
         up_c = st.file_uploader("File Customer", type=['xlsx'], key="up_c")
         if up_c and st.button("Update Customers"):
             df = pd.read_excel(up_c)
-            # Giả định cột: Name, Address, Tax
-            # Bạn cần tạo bảng crm_customers trên Supabase trước nếu chưa có
-            st.warning("Đang phát triển module insert DB cho Customer")
+            # Giả định lưu vào bảng crm_customers (cần tạo bảng này trên supabase)
+            st.warning("Đang chờ kết nối bảng crm_customers")
 
-    # 3. NHÀ CUNG CẤP (THÊM MỚI VÀO)
+    # 3. NHÀ CUNG CẤP
     with t_supp:
         st.info("Import Danh Sách Nhà Cung Cấp (Supplier)")
         up_s = st.file_uploader("File Supplier", type=['xlsx'], key="up_s")
         if up_s and st.button("Update Suppliers"):
-             st.warning("Đang phát triển module insert DB cho Supplier")
+             st.warning("Đang chờ kết nối bảng crm_suppliers")
