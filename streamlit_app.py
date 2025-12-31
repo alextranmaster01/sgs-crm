@@ -6,10 +6,9 @@ import io
 import re
 from openpyxl import load_workbook
 
-st.set_page_config(page_title="CRM V4800 - ONLINE", layout="wide", page_icon="🪶")
+st.set_page_config(page_title="SGS CRM V4800 - ONLINE", layout="wide", page_icon="🪶")
 st.markdown("""<style>.stTabs [data-baseweb="tab-list"] { gap: 10px; } .stTabs [data-baseweb="tab"] { background-color: #ecf0f1; border-radius: 4px 4px 0 0; padding: 10px 20px; font-weight: bold; } .stTabs [aria-selected="true"] { background-color: #3498db; color: white; }</style>""", unsafe_allow_html=True)
 
-# Helper functions
 def safe_str(val): return str(val).strip() if val is not None else ""
 def safe_filename(s): return re.sub(r"[\\/:*?\"<>|]+", "_", safe_str(s))
 def to_float(val):
@@ -25,57 +24,50 @@ def clean_lookup_key(s): return re.sub(r'\s+', '', str(s)).lower() if s else ""
 if 'quote_df' not in st.session_state:
     st.session_state.quote_df = pd.DataFrame()
 
-st.title("CRM V4800 - FINAL FULL FEATURES (ONLINE)")
+st.title("SGS CRM V4800 - FINAL FULL FEATURES (ONLINE)")
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📊 Tổng quan", "💰 Báo giá NCC (DB Giá)", "📝 Báo giá KH", "📦 Đơn đặt hàng", "🚚 Theo dõi & Thanh toán", "⚙️ Master Data"])
 
-# TAB 1: DASHBOARD
+# TAB 1
 with tab1:
-    st.subheader("DASHBOARD KINH DOANH")
+    st.subheader("DASHBOARD")
     if st.button("🔄 CẬP NHẬT DATA", type="primary"): st.rerun()
-    st.info("Hệ thống CRM Online.")
 
-# TAB 2: DB GIÁ NCC (LAYOUT CHIA ĐÔI: BẢNG | ẢNH)
+# TAB 2: DB GIÁ NCC
 with tab2:
     st.subheader("Database Giá NCC")
     
-    # 1. TOOLBAR
     col_tool, col_search = st.columns([1, 1])
     with col_tool:
         uploaded_file = st.file_uploader("📥 Import Excel (Có chứa ảnh)", type=['xlsx'], key="uploader_pur")
         if uploaded_file and st.button("🚀 BẮT ĐẦU IMPORT", type="primary"):
             status_box = st.status("Đang xử lý...", expanded=True)
             try:
-                status_box.write("🖼️ Đang quét ảnh...")
+                status_box.write("🖼️ Quét ảnh...")
                 uploaded_file.seek(0)
-                wb = load_workbook(uploaded_file, data_only=False) 
-                ws = wb.active
+                wb = load_workbook(uploaded_file, data_only=False); ws = wb.active
                 image_map = {}
                 if hasattr(ws, '_images'):
                     for img in ws._images:
-                        r_idx = img.anchor._from.row + 1
-                        image_map[r_idx] = img._data()
+                        image_map[img.anchor._from.row + 1] = img._data()
                 
                 status_box.write("📖 Đọc dữ liệu...")
                 uploaded_file.seek(0)
                 df_raw = pd.read_excel(uploaded_file, header=0, dtype=str).fillna("")
                 
                 data_clean = []
-                prog_bar = status_box.progress(0)
-                total = len(df_raw)
+                prog_bar = status_box.progress(0); total = len(df_raw)
                 
                 for i, row in df_raw.iterrows():
                     prog_bar.progress(min((i + 1) / total, 1.0))
                     excel_row_idx = i + 2
-                    def get(col_name): return safe_str(row.get(col_name, ""))
+                    def get(c): return safe_str(row.get(c, ""))
                     code = safe_str(row.iloc[1])
                     if not code: continue
 
                     final_link = ""
                     if excel_row_idx in image_map:
-                        img_bytes = image_map[excel_row_idx]
-                        filename = f"{safe_filename(code)}.png"
-                        status_box.write(f"☁️ Upload ảnh: {code}...")
-                        link = backend.upload_to_drive(io.BytesIO(img_bytes), filename, folder_type="images")
+                        status_box.write(f"☁️ Up ảnh: {code}...")
+                        link = backend.upload_to_drive(io.BytesIO(image_map[excel_row_idx]), f"{safe_filename(code)}.png", "images")
                         if link: final_link = link
                     else:
                         old = safe_str(row.iloc[12]) if len(row) > 12 else ""
@@ -101,9 +93,8 @@ with tab2:
                     time.sleep(1); st.rerun()
             except Exception as e: st.error(f"Lỗi: {e}")
 
-    # 2. MAIN LAYOUT: CHIA CỘT (70% BẢNG - 30% ẢNH)
+    # CHIA CỘT: 70% BẢNG - 30% ẢNH
     col_table, col_gallery = st.columns([7, 3])
-    
     df_pur = backend.load_data("purchases")
     
     with col_table:
@@ -111,62 +102,47 @@ with tab2:
         if search and not df_pur.empty:
             df_pur = df_pur[df_pur.apply(lambda x: x.astype(str).str.contains(search, case=False, na=False)).any(axis=1)]
 
-        # Config bảng
         cfg = {
-            "image_path": st.column_config.ImageColumn("Hình Ảnh", width="small", help="Ảnh Thumbnail"),
+            "image_path": st.column_config.LinkColumn("Link Ảnh"), # Chỉ hiện link text, ko hiện ảnh nhỏ để tránh lỗi
             "total_buying_price_vnd": st.column_config.NumberColumn("Tổng Mua", format="%d"),
             "_clean_code": None, "_clean_specs": None, "_clean_name": None, "id": None, "created_at": None
         }
-        order = ["image_path", "no", "item_code", "item_name", "specs", "qty", "buying_price_rmb", "total_buying_price_rmb", "exchange_rate", "buying_price_vnd", "total_buying_price_vnd", "leadtime", "supplier_name"]
+        order = ["no", "item_code", "item_name", "specs", "qty", "buying_price_rmb", "total_buying_price_rmb", "exchange_rate", "buying_price_vnd", "total_buying_price_vnd", "leadtime", "supplier_name"]
         
-        # === BẢNG DỮ LIỆU CÓ TÍNH NĂNG CHỌN (SELECTION) ===
-        event = st.data_editor(
-            df_pur, 
-            column_config=cfg, 
-            column_order=order, 
-            use_container_width=True, 
-            height=600, 
-            key="ed_pur",
-            num_rows="dynamic",
-            on_select="rerun",       # Bật tính năng click để chọn
-            selection_mode="single-row" # Chỉ cho phép chọn 1 dòng
+        edited_pur = st.data_editor(
+            df_pur, column_config=cfg, column_order=order, 
+            use_container_width=True, height=600, key="ed_pur", num_rows="dynamic"
         )
-        
-        if st.button("💾 Lưu thay đổi"): backend.save_data("purchases", event)
+        if st.button("💾 Lưu thay đổi"): backend.save_data("purchases", edited_pur)
 
-    # 3. KHUNG XEM ẢNH (BÊN PHẢI) - TỰ ĐỘNG HIỆN THEO DÒNG ĐƯỢC CHỌN
+    # KHUNG XEM ẢNH TRỰC TIẾP (DÙNG SELECTBOX CHO CHẮC ĂN)
     with col_gallery:
-        st.info("📷 KHUNG XEM ẢNH TRỰC TIẾP")
-        
-        # Kiểm tra xem người dùng có chọn dòng nào không
-        selected_rows = event.selection.rows
-        
-        if selected_rows:
-            # Lấy index của dòng được chọn
-            idx = selected_rows[0]
-            # Lấy dữ liệu của dòng đó
-            selected_item = df_pur.iloc[idx]
+        st.info("📷 KHUNG XEM ẢNH")
+        if not df_pur.empty:
+            # Tạo list mã hàng để chọn
+            item_list = df_pur["item_code"].unique().tolist()
+            selected_code = st.selectbox("👉 Chọn mã hàng để xem ảnh:", item_list)
             
-            img_url = selected_item.get("image_path", "")
-            code = selected_item.get("item_code", "")
-            name = selected_item.get("item_name", "")
-            specs = selected_item.get("specs", "")
-            price = selected_item.get("buying_price_vnd", "")
-            supp = selected_item.get("supplier_name", "")
-
-            if img_url and "http" in str(img_url):
-                st.image(img_url, caption=f"{code}", use_container_width=True)
-            else:
-                st.warning("Sản phẩm này chưa có ảnh.")
+            if selected_code:
+                row = df_pur[df_pur["item_code"] == selected_code].iloc[0]
+                img_link = row.get("image_path", "")
                 
-            st.success(f"📦 **{code}**")
-            st.markdown(f"""
-            - **Tên:** {name}
-            - **Thông số:** {specs}
-            - **Giá:** {price} VND
-            - **NCC:** {supp}
-            """)
-        else:
-            st.write("👈 Hãy click vào một dòng bên trái để xem ảnh.")
+                st.markdown(f"**{row['item_name']}**")
+                
+                if img_link and "http" in str(img_link):
+                    with st.spinner("Đang tải ảnh từ Drive..."):
+                        # GỌI HÀM BACKEND ĐỂ TẢI DỮ LIỆU ẢNH THẬT
+                        img_bytes = backend.get_image_bytes(img_link)
+                        if img_bytes:
+                            st.image(img_bytes, caption=f"Mã: {selected_code}", use_container_width=True)
+                        else:
+                            st.error("Không tải được ảnh (File có thể bị xóa hoặc lỗi quyền).")
+                else:
+                    st.warning("Sản phẩm này chưa có link ảnh.")
+                
+                st.write("---")
+                st.write(f"**Thông số:** {row['specs']}")
+                st.write(f"**Giá:** {row['buying_price_vnd']}")
+                st.write(f"**NCC:** {row['supplier_name']}")
 
-# (Giữ nguyên code các tab khác)
+# (Giữ nguyên các Tab 3, 4, 5, 6)
