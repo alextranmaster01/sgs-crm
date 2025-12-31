@@ -11,7 +11,7 @@ def init_supabase():
     try:
         url = st.secrets["supabase"]["url"]
         key = st.secrets["supabase"]["key"]
-        clean_key = key.replace("\n", "").replace(" ", "").strip() # Fix lỗi key
+        clean_key = key.replace("\n", "").replace(" ", "").strip()
         return create_client(url, clean_key)
     except: return None
 
@@ -19,26 +19,17 @@ supabase: Client = init_supabase()
 
 # --- 2. CẤU HÌNH SCHEMA ---
 TABLES = {
-    "purchases": "crm_purchases",
-    "customers": "crm_customers",
-    "suppliers": "crm_suppliers",
-    "sales_history": "crm_sales_history",
-    "tracking": "crm_order_tracking",
-    "payment": "crm_payment_tracking",
-    "paid_history": "crm_paid_history",
-    "supplier_orders": "db_supplier_orders",
-    "customer_orders": "db_customer_orders"
+    "purchases": "crm_purchases", "customers": "crm_customers", "suppliers": "crm_suppliers",
+    "sales_history": "crm_sales_history", "tracking": "crm_order_tracking", "payment": "crm_payment_tracking",
+    "paid_history": "crm_paid_history", "supplier_orders": "db_supplier_orders", "customer_orders": "db_customer_orders"
 }
 
 SCHEMAS = {
-    "payment": ["id", "order_id", "customer_name", "amount", "status", "payment_date", "notes"],
-    "customer_orders": ["id", "order_id", "customer_name", "total_price", "order_date", "status"],
     "purchases": ["no", "item_code", "item_name", "specs", "qty", "buying_price_rmb", "total_buying_price_rmb", "exchange_rate", "buying_price_vnd", "total_buying_price_vnd", "leadtime", "supplier_name", "image_path"],
-    "tracking": ["id", "order_id", "status", "update_time", "location"],
     "customers": ["id", "short_name", "full_name", "address", "tax_code", "contact"],
     "suppliers": ["id", "short_name", "full_name", "contact", "products"],
-    "sales_history": ["id", "order_id", "profit", "date"],
-    "paid_history": ["id", "order_id", "amount", "date"]
+    "payment": ["id", "order_id", "customer_name", "amount", "status", "payment_date", "notes"],
+    "tracking": ["id", "order_id", "status", "update_time", "location"]
 }
 
 # --- 3. HÀM TẢI & LƯU DATA ---
@@ -57,7 +48,6 @@ def save_data(table_key, df):
         table_name = TABLES.get(table_key)
         valid_cols = SCHEMAS.get(table_key, [])
         
-        # Lọc cột & Làm sạch số liệu (Giống code mẫu)
         clean_df = df[df.columns.intersection(valid_cols)].copy() if valid_cols else df.copy()
         numeric_cols = ["qty", "buying_price_rmb", "total_buying_price_rmb", "exchange_rate", "buying_price_vnd", "total_buying_price_vnd", "total_price", "amount", "profit"]
         for col in numeric_cols:
@@ -92,6 +82,7 @@ def upload_to_drive(file_obj, filename, folder_type="images"):
         
         # 1. Tìm file cũ & Lấy thumbnailLink
         query = f"name = '{filename}' and '{folder_id}' in parents and trashed = false"
+        # Yêu cầu trả về thumbnailLink
         results = service.files().list(q=query, fields="files(id, thumbnailLink)").execute()
         files = results.get('files', [])
         
@@ -112,8 +103,11 @@ def upload_to_drive(file_obj, filename, folder_type="images"):
         try: service.permissions().create(fileId=file_id, body={'type': 'anyone', 'role': 'reader'}).execute()
         except: pass
         
-        # FIX LỖI HIỂN THỊ: Thay đổi kích thước ảnh thumbnail từ nhỏ (s220) sang lớn (s1000)
+        # 2. XỬ LÝ LINK: Chuyển từ ảnh nhỏ (=s220) sang ảnh lớn (=s1000)
+        # Link dạng lh3.googleusercontent... KHÔNG BAO GIỜ BỊ CHẶN
         if final_link: return final_link.replace("=s220", "=s1000")
+        
+        # Fallback nếu không có thumbnail (ít khi xảy ra)
         return f"https://drive.google.com/thumbnail?id={file_id}&sz=w1000"
         
     except Exception as e:
