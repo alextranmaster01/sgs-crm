@@ -1,13 +1,8 @@
-streamlit
+streamlit>=1.35.0
 pandas
-numpy
 supabase
-google-api-python-client
 google-auth
 google-auth-oauthlib
 google-auth-httplib2
+google-api-python-client
 openpyxl
-python-docx
-xlsxwriter
-plotly
-python-dotenv
