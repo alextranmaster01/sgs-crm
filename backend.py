@@ -61,7 +61,7 @@ def save_data(table_key, df):
         st.toast(f"✅ Đã lưu {len(data)} dòng!", icon="💾")
     except Exception as e: st.error(f"❌ Lỗi Lưu: {e}")
 
-# --- 4. KẾT NỐI DRIVE (QUAN TRỌNG: LẤY THUMBNAIL) ---
+# --- 4. KẾT NỐI DRIVE & LẤY LINK ẢNH ---
 def get_drive_service():
     try:
         creds = Credentials(
@@ -80,35 +80,29 @@ def upload_to_drive(file_obj, filename, folder_type="images"):
         if not service: return None
         folder_id = st.secrets["google"][f"folder_id_{folder_type}"]
         
-        # 1. Tìm file cũ & Lấy thumbnailLink
+        # 1. Tìm file cũ
         query = f"name = '{filename}' and '{folder_id}' in parents and trashed = false"
-        # Yêu cầu trả về thumbnailLink
-        results = service.files().list(q=query, fields="files(id, thumbnailLink)").execute()
+        results = service.files().list(q=query, fields="files(id)").execute()
         files = results.get('files', [])
         
         media = MediaIoBaseUpload(file_obj, mimetype='image/png', resumable=True)
-        final_link = ""
         file_id = ""
 
-        if files: # Update
+        if files:
             file_id = files[0]['id']
-            updated = service.files().update(fileId=file_id, media_body=media, fields='id, thumbnailLink').execute()
-            final_link = updated.get('thumbnailLink')
-        else: # Create
+            service.files().update(fileId=file_id, media_body=media).execute()
+        else:
             meta = {'name': filename, 'parents': [folder_id]}
-            created = service.files().create(body=meta, media_body=media, fields='id, thumbnailLink').execute()
+            created = service.files().create(body=meta, media_body=media, fields='id').execute()
             file_id = created.get('id')
-            final_link = created.get('thumbnailLink')
 
+        # Public file (Bắt buộc)
         try: service.permissions().create(fileId=file_id, body={'type': 'anyone', 'role': 'reader'}).execute()
         except: pass
         
-        # 2. XỬ LÝ LINK: Chuyển từ ảnh nhỏ (=s220) sang ảnh lớn (=s1000)
-        # Link dạng lh3.googleusercontent... KHÔNG BAO GIỜ BỊ CHẶN
-        if final_link: return final_link.replace("=s220", "=s1000")
-        
-        # Fallback nếu không có thumbnail (ít khi xảy ra)
-        return f"https://drive.google.com/thumbnail?id={file_id}&sz=w1000"
+        # 2. TRẢ VỀ LINK "SIÊU BỀN" (Dạng lh3.googleusercontent.com/d/...)
+        # Link này stream ảnh trực tiếp, không qua redirect của Drive -> Hiện trong App ngon lành
+        return f"https://lh3.googleusercontent.com/d/{file_id}=s200"
         
     except Exception as e:
         st.error(f"Lỗi Upload: {e}")
