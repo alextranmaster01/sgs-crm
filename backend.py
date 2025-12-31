@@ -16,13 +16,12 @@ def init_supabase():
         clean_key = key.replace("\n", "").replace(" ", "").strip()
         return create_client(url, clean_key)
     except Exception as e:
-        st.error(f"Lỗi kết nối Supabase: {e}")
         return None
 
 supabase: Client = init_supabase()
 
 # =========================================================
-# 2. CẤU HÌNH SCHEMA (ĐẢM BẢO CÓ CỘT image_path)
+# 2. CẤU HÌNH SCHEMA
 # =========================================================
 TABLES = {
     "purchases": "crm_purchases",
@@ -63,20 +62,16 @@ def load_data(table_key):
 
 def save_data(table_key, df):
     try:
-        if 'supabase' not in globals() or not supabase:
-            st.error("Chưa kết nối được Database!")
-            return
+        if 'supabase' not in globals() or not supabase: return
 
         table_name = TABLES.get(table_key)
         valid_cols = SCHEMAS.get(table_key, [])
         
-        # 1. Lọc cột rác
         if valid_cols:
             clean_df = df[df.columns.intersection(valid_cols)].copy()
         else:
             clean_df = df.copy()
 
-        # 2. Làm sạch số liệu (Xóa dấu phẩy)
         numeric_cols = ["qty", "buying_price_rmb", "total_buying_price_rmb", "exchange_rate", "buying_price_vnd", "total_buying_price_vnd", "total_price", "amount", "profit"]
         for col in numeric_cols:
             if col in clean_df.columns:
@@ -87,12 +82,12 @@ def save_data(table_key, df):
         if not data: return
 
         supabase.table(table_name).upsert(data).execute()
-        st.toast(f"✅ Đã lưu dữ liệu vào {table_name}!", icon="💾")
+        st.toast(f"✅ Đã lưu {len(data)} dòng!", icon="💾")
     except Exception as e:
         st.error(f"❌ Lỗi Lưu Data: {e}")
 
 # =========================================================
-# 4. KẾT NỐI DRIVE (FIX LỖI LINK ẢNH)
+# 4. KẾT NỐI DRIVE (FIX LỖI HIỂN THỊ ẢNH)
 # =========================================================
 def get_drive_service():
     try:
@@ -113,29 +108,40 @@ def upload_to_drive(file_obj, filename, folder_type="images"):
         
         folder_id = st.secrets["google"][f"folder_id_{folder_type}"]
         
-        # Check file cũ
+        # 1. Tìm file cũ (Lấy thêm trường thumbnailLink)
         query = f"name = '{filename}' and '{folder_id}' in parents and trashed = false"
-        results = service.files().list(q=query, fields="files(id)").execute()
+        # QUAN TRỌNG: Lấy thumbnailLink từ Google
+        results = service.files().list(q=query, fields="files(id, thumbnailLink)").execute()
         files = results.get('files', [])
         
         media = MediaIoBaseUpload(file_obj, mimetype='image/png', resumable=True)
+        final_link = ""
         file_id = ""
-
+        
+        # 2. Upload hoặc Update
         if files:
             file_id = files[0]['id']
-            service.files().update(fileId=file_id, media_body=media).execute()
+            # Khi update cũng yêu cầu trả về thumbnailLink
+            updated = service.files().update(fileId=file_id, media_body=media, fields='id, thumbnailLink').execute()
+            final_link = updated.get('thumbnailLink')
         else:
             meta = {'name': filename, 'parents': [folder_id]}
-            created = service.files().create(body=meta, media_body=media, fields='id').execute()
+            # Khi create cũng yêu cầu trả về thumbnailLink
+            created = service.files().create(body=meta, media_body=media, fields='id, thumbnailLink').execute()
             file_id = created.get('id')
+            final_link = created.get('thumbnailLink')
 
-        # Public file
+        # 3. Public file
         try: service.permissions().create(fileId=file_id, body={'type': 'anyone', 'role': 'reader'}).execute()
         except: pass
         
-        # QUAN TRỌNG: Tạo link xem trực tiếp thay vì link download
-        # Link này chắc chắn hiện được trên Streamlit
-        return f"https://drive.google.com/uc?export=view&id={file_id}"
+        # 4. XỬ LÝ LINK ẢNH (BÍ KÍP ĐỂ HIỂN THỊ ĐƯỢC)
+        if final_link:
+            # Google trả về link nhỏ (=s220), ta sửa thành =s1000 để lấy ảnh nét căng
+            return final_link.replace("=s220", "=s2000")
+        else:
+            # Dự phòng nếu không lấy được thumbnail
+            return f"https://drive.google.com/thumbnail?id={file_id}&sz=w1000"
         
     except Exception as e:
         st.error(f"Lỗi Upload: {e}")
