@@ -6,7 +6,7 @@ import io
 import re
 from openpyxl import load_workbook
 
-st.set_page_config(page_title="SGS CRM V4800 - ONLINE", layout="wide", page_icon="🪶")
+st.set_page_config(page_title="CRM V4800 - ONLINE", layout="wide", page_icon="🪶")
 st.markdown("""<style>.stTabs [data-baseweb="tab-list"] { gap: 10px; } .stTabs [data-baseweb="tab"] { background-color: #ecf0f1; border-radius: 4px 4px 0 0; padding: 10px 20px; font-weight: bold; } .stTabs [aria-selected="true"] { background-color: #3498db; color: white; }</style>""", unsafe_allow_html=True)
 
 # Helper functions
@@ -25,7 +25,7 @@ def clean_lookup_key(s): return re.sub(r'\s+', '', str(s)).lower() if s else ""
 if 'quote_df' not in st.session_state:
     st.session_state.quote_df = pd.DataFrame()
 
-st.title("SGS CRM V4800 - FINAL FULL FEATURES (ONLINE)")
+st.title("CRM V4800 - FINAL FULL FEATURES (ONLINE)")
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📊 Tổng quan", "💰 Báo giá NCC (DB Giá)", "📝 Báo giá KH", "📦 Đơn đặt hàng", "🚚 Theo dõi & Thanh toán", "⚙️ Master Data"])
 
 # TAB 1: DASHBOARD
@@ -119,44 +119,54 @@ with tab2:
         }
         order = ["image_path", "no", "item_code", "item_name", "specs", "qty", "buying_price_rmb", "total_buying_price_rmb", "exchange_rate", "buying_price_vnd", "total_buying_price_vnd", "leadtime", "supplier_name"]
         
-        # Bảng dữ liệu
-        edited_pur = st.data_editor(
+        # === BẢNG DỮ LIỆU CÓ TÍNH NĂNG CHỌN (SELECTION) ===
+        event = st.data_editor(
             df_pur, 
             column_config=cfg, 
             column_order=order, 
             use_container_width=True, 
             height=600, 
             key="ed_pur",
-            num_rows="dynamic"
+            num_rows="dynamic",
+            on_select="rerun",       # Bật tính năng click để chọn
+            selection_mode="single-row" # Chỉ cho phép chọn 1 dòng
         )
-        if st.button("💾 Lưu thay đổi"): backend.save_data("purchases", edited_pur)
+        
+        if st.button("💾 Lưu thay đổi"): backend.save_data("purchases", event)
 
-    # 3. KHUNG XEM ẢNH (BÊN PHẢI)
+    # 3. KHUNG XEM ẢNH (BÊN PHẢI) - TỰ ĐỘNG HIỆN THEO DÒNG ĐƯỢC CHỌN
     with col_gallery:
         st.info("📷 KHUNG XEM ẢNH TRỰC TIẾP")
-        if not df_pur.empty:
-            # Lấy list ảnh có link
-            df_images = df_pur[df_pur["image_path"].str.contains("http", na=False)]
+        
+        # Kiểm tra xem người dùng có chọn dòng nào không
+        selected_rows = event.selection.rows
+        
+        if selected_rows:
+            # Lấy index của dòng được chọn
+            idx = selected_rows[0]
+            # Lấy dữ liệu của dòng đó
+            selected_item = df_pur.iloc[idx]
             
-            if not df_images.empty:
-                # Cho phép chọn sản phẩm để xem ảnh to
-                selected_code = st.selectbox("Chọn mã hàng để xem ảnh:", df_images["item_code"].unique())
-                
-                # Tìm ảnh tương ứng
-                row = df_images[df_images["item_code"] == selected_code].iloc[0]
-                img_url = row["image_path"]
-                
-                st.image(img_url, caption=f"{row['item_code']} - {row['item_name']}", use_container_width=True)
-                
-                # Hiển thị thông số vắn tắt dưới ảnh
-                st.markdown(f"""
-                **Specs:** {row['specs']}  
-                **Giá:** {row['buying_price_vnd']} VND  
-                **NCC:** {row['supplier_name']}
-                """)
+            img_url = selected_item.get("image_path", "")
+            code = selected_item.get("item_code", "")
+            name = selected_item.get("item_name", "")
+            specs = selected_item.get("specs", "")
+            price = selected_item.get("buying_price_vnd", "")
+            supp = selected_item.get("supplier_name", "")
+
+            if img_url and "http" in str(img_url):
+                st.image(img_url, caption=f"{code}", use_container_width=True)
             else:
-                st.write("Chưa có sản phẩm nào có ảnh.")
+                st.warning("Sản phẩm này chưa có ảnh.")
+                
+            st.success(f"📦 **{code}**")
+            st.markdown(f"""
+            - **Tên:** {name}
+            - **Thông số:** {specs}
+            - **Giá:** {price} VND
+            - **NCC:** {supp}
+            """)
         else:
-            st.write("Chưa có dữ liệu.")
+            st.write("👈 Hãy click vào một dòng bên trái để xem ảnh.")
 
 # (Giữ nguyên code các tab khác)
