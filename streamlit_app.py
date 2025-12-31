@@ -7,7 +7,7 @@ import re
 from openpyxl import load_workbook
 
 # --- 1. PHẦN CẤU HÌNH TRANG (BẮT BUỘC PHẢI CÓ Ở ĐẦU) ---
-st.set_page_config(page_title="SGS CRM V4800 - ONLINE", layout="wide", page_icon="🪶")
+st.set_page_config(page_title="CRM V4800 - ONLINE", layout="wide", page_icon="🪶")
 
 # Các hàm phụ trợ (copy từ code cũ của bạn)
 def safe_str(val): return str(val).strip() if val is not None else ""
@@ -23,7 +23,7 @@ def fmt_num(x):
 def clean_lookup_key(s): return re.sub(r'\s+', '', str(s)).lower() if s else ""
 
 # --- 2. TẠO CÁC TAB (ĐÂY LÀ ĐOẠN BẠN ĐANG THIẾU) ---
-st.title("SGS CRM V4800 - FINAL FULL FEATURES (ONLINE)")
+st.title("CRM V4800 - FINAL FULL FEATURES (ONLINE)")
 
 # Lệnh này định nghĩa tab2 là gì. Nếu thiếu dòng này, code bên dưới sẽ lỗi NameError
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
@@ -184,3 +184,4 @@ with tab2:
             st.info("👈 Click vào 1 dòng bất kỳ bên trái để xem ảnh.")
 
 # ... Các tab khác (with tab3, with tab4...)
+
