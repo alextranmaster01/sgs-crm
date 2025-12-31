@@ -6,16 +6,16 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 
 # =========================================================
-# 1. KẾT NỐI SUPABASE
+# 1. KẾT NỐI SUPABASE (DÙNG CHỮ THƯỜNG KHỚP SECRETS)
 # =========================================================
 @st.cache_resource
 def init_supabase():
     try:
-        # Lấy thông tin từ secrets (dùng chữ thường url/key khớp với file của bạn)
+        # Lấy thông tin từ secrets
         url = st.secrets["supabase"]["url"]
         key = st.secrets["supabase"]["key"]
         
-        # Làm sạch key đề phòng lỗi copy paste bị xuống dòng
+        # Làm sạch key để tránh lỗi xuống dòng khi copy paste
         clean_key = key.replace("\n", "").replace(" ", "").strip()
         
         return create_client(url, clean_key)
@@ -23,12 +23,11 @@ def init_supabase():
         st.error(f"Lỗi kết nối Supabase: {e}")
         return None
 
-# --- DÒNG QUAN TRỌNG ĐỂ SỬA LỖI "name 'supabase' is not defined" ---
+# Khởi tạo biến toàn cục
 supabase: Client = init_supabase()
-# -------------------------------------------------------------------
 
 # =========================================================
-# 2. CẤU HÌNH BẢNG & CỘT
+# 2. CẤU HÌNH BẢNG & SCHEMA (KHUNG XƯƠNG DỮ LIỆU)
 # =========================================================
 TABLES = {
     "purchases": "crm_purchases",
@@ -42,6 +41,7 @@ TABLES = {
     "customer_orders": "db_customer_orders"
 }
 
+# Định nghĩa cột mặc định để tránh lỗi KeyError khi bảng rỗng
 SCHEMAS = {
     "payment": ["id", "order_id", "customer_name", "amount", "status", "payment_date", "notes"],
     "customer_orders": ["id", "order_id", "customer_name", "total_price", "order_date", "status"],
@@ -54,21 +54,20 @@ SCHEMAS = {
 }
 
 # =========================================================
-# 3. CÁC HÀM XỬ LÝ DATA (LOAD & SAVE)
+# 3. HÀM TẢI & LƯU DỮ LIỆU (ĐÃ FIX LỖI SỐ LIỆU)
 # =========================================================
 def load_data(table_key):
-    # Lấy danh sách cột mặc định để tránh lỗi thiếu cột
+    """Tải dữ liệu an toàn, trả về bảng trống có cột nếu DB rỗng"""
     default_cols = SCHEMAS.get(table_key, [])
     
     try:
-        # Kiểm tra biến supabase
         if 'supabase' not in globals() or not supabase:
             return pd.DataFrame(columns=default_cols)
         
         table_name = TABLES.get(table_key)
         if not table_name: return pd.DataFrame(columns=default_cols)
         
-        # Tải dữ liệu
+        # Tải dữ liệu từ Supabase
         response = supabase.table(table_name).select("*").execute()
         data = response.data
         
@@ -78,62 +77,50 @@ def load_data(table_key):
         return pd.DataFrame(data)
 
     except Exception as e:
-        # Nếu lỗi (ví dụ chưa tạo bảng), trả về bảng rỗng đúng chuẩn
-        st.warning(f"⚠️ Không tải được bảng '{table_key}'. Lỗi: {e}")
+        # st.warning(f"⚠️ Không tải được bảng '{table_key}'. Lỗi: {e}")
         return pd.DataFrame(columns=default_cols)
 
-# --- TÌM HÀM save_data CŨ VÀ THAY THẾ BẰNG HÀM NÀY ---
 def save_data(table_key, df):
+    """Lưu dữ liệu, tự động làm sạch số (1,925 -> 1925)"""
     try:
         if 'supabase' not in globals() or not supabase:
             st.error("Chưa kết nối được Database!")
             return
 
         table_name = TABLES.get(table_key)
-        
-        # 1. LẤY DANH SÁCH CỘT CHUẨN
         valid_cols = SCHEMAS.get(table_key, [])
         
-        # 2. LỌC BỎ CỘT RÁC
+        # 1. Lọc bỏ cột rác
         if valid_cols:
-            clean_df = df[df.columns.intersection(valid_cols)].copy() # .copy() để tránh lỗi SettingWithCopy
+            clean_df = df[df.columns.intersection(valid_cols)].copy()
         else:
             clean_df = df.copy()
 
-        # =========================================================
-        # 3. QUAN TRỌNG: LÀM SẠCH DỮ LIỆU SỐ (FIX LỖI 1.925)
-        # =========================================================
-        # Danh sách các cột bắt buộc phải là số
+        # 2. Làm sạch dữ liệu số (Fix lỗi invalid input syntax for type numeric)
         numeric_cols = [
-            "qty", 
-            "buying_price_rmb", "total_buying_price_rmb", 
-            "exchange_rate", 
-            "buying_price_vnd", "total_buying_price_vnd",
+            "qty", "buying_price_rmb", "total_buying_price_rmb", 
+            "exchange_rate", "buying_price_vnd", "total_buying_price_vnd",
             "total_price", "amount", "profit"
         ]
         
         for col in numeric_cols:
             if col in clean_df.columns:
-                # Bước 1: Chuyển về chuỗi để xử lý
-                clean_df[col] = clean_df[col].astype(str)
-                # Bước 2: Xóa dấu phẩy (,) thường dùng ngăn cách hàng nghìn (VD: 1,925 -> 1925)
-                clean_df[col] = clean_df[col].str.replace(",", "", regex=False)
-                # Bước 3: Ép kiểu về số (nếu lỗi thì thành 0)
+                # Chuyển về chuỗi, xóa dấu phẩy, ép kiểu số
+                clean_df[col] = clean_df[col].astype(str).str.replace(",", "", regex=False)
                 clean_df[col] = pd.to_numeric(clean_df[col], errors='coerce').fillna(0)
-        # =========================================================
 
         data = clean_df.to_dict(orient='records')
         if not data: return
 
-        # 4. GỬI LÊN DATABASE
+        # 3. Gửi lên Supabase
         supabase.table(table_name).upsert(data).execute()
-        st.toast(f"✅ Đã lưu thành công!", icon="💾")
+        st.toast(f"✅ Đã lưu thành công vào {table_name}!", icon="💾")
         
     except Exception as e:
         st.error(f"❌ Lỗi Lưu Data: {e}")
 
 # =========================================================
-# 4. KẾT NỐI GOOGLE DRIVE
+# 4. KẾT NỐI DRIVE & UPLOAD (ĐÃ FIX LỖI TRÙNG LẶP)
 # =========================================================
 def get_drive_service():
     try:
@@ -154,7 +141,7 @@ def upload_to_drive(file_obj, filename, folder_type="images"):
         
         folder_id = st.secrets["google"][f"folder_id_{folder_type}"]
         
-        # Kiểm tra file trùng
+        # 1. Kiểm tra file cũ (Chống trùng lặp)
         query = f"name = '{filename}' and '{folder_id}' in parents and trashed = false"
         results = service.files().list(q=query, fields="files(id, webContentLink)").execute()
         files = results.get('files', [])
@@ -164,18 +151,18 @@ def upload_to_drive(file_obj, filename, folder_type="images"):
         file_id = ""
 
         if files:
-            # Ghi đè
+            # 2. Ghi đè (Update) nếu đã có
             file_id = files[0]['id']
             updated = service.files().update(fileId=file_id, media_body=media, fields='id, webContentLink').execute()
             final_link = updated.get('webContentLink')
         else:
-            # Tạo mới
+            # 3. Tạo mới (Create) nếu chưa có
             meta = {'name': filename, 'parents': [folder_id]}
             created = service.files().create(body=meta, media_body=media, fields='id, webContentLink').execute()
             file_id = created.get('id')
             final_link = created.get('webContentLink')
 
-        # Public quyền xem
+        # 4. Public file (Để hiển thị trên Streamlit)
         try: service.permissions().create(fileId=file_id, body={'type': 'anyone', 'role': 'reader'}).execute()
         except: pass 
         
