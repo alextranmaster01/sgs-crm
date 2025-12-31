@@ -38,7 +38,7 @@ def load_data(table_key):
     try:
         if 'supabase' not in globals() or not supabase: return pd.DataFrame(columns=default_cols)
         table_name = TABLES.get(table_key)
-        response = supabase.table(table_name).select("*").execute()
+        response = supabase.table(table_name).select("*").order("id", desc=True).execute() # Load mới nhất lên đầu
         return pd.DataFrame(response.data) if response.data else pd.DataFrame(columns=default_cols)
     except: return pd.DataFrame(columns=default_cols)
 
@@ -96,13 +96,11 @@ def upload_to_drive(file_obj, filename, folder_type="images"):
             created = service.files().create(body=meta, media_body=media, fields='id').execute()
             file_id = created.get('id')
 
-        # Public file (Bắt buộc)
         try: service.permissions().create(fileId=file_id, body={'type': 'anyone', 'role': 'reader'}).execute()
         except: pass
         
-        # 2. TRẢ VỀ LINK "SIÊU BỀN" (Dạng lh3.googleusercontent.com/d/...)
-        # Link này stream ảnh trực tiếp, không qua redirect của Drive -> Hiện trong App ngon lành
-        return f"https://lh3.googleusercontent.com/d/{file_id}=s200"
+        # 2. TẠO LINK TRỰC TIẾP (LH3) - CHẤP HẾT MỌI LOẠI CHẶN
+        return f"https://lh3.googleusercontent.com/d/{file_id}=s3000"
         
     except Exception as e:
         st.error(f"Lỗi Upload: {e}")
