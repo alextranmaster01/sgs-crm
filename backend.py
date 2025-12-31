@@ -1,8 +1,13 @@
 import streamlit as st
 import pandas as pd
 import io
-import backend  # File backend của bạn chứa hàm upload_to_drive
+import re
 from openpyxl import load_workbook
+import backend  # Đảm bảo bạn đã có file backend.py chứa hàm upload_to_drive
+
+# Hàm hỗ trợ làm sạch tên file
+def safe_filename(s): 
+    return re.sub(r"[\\/:*?\"<>|]+", "_", str(s).strip()) if s else "unknown"
 
 def module_bao_gia_ncc():
     st.header("QUẢN LÝ BÁO GIÁ NHÀ CUNG CẤP (BG GIÁ)")
@@ -15,107 +20,132 @@ def module_bao_gia_ncc():
         "Supplier", "Images", "Type", "N/U/O/C"
     ]
 
-    col_tool, col_info = st.columns([1, 2])
-    with col_tool:
-        uploaded_file = st.file_uploader("📥 Import Excel (Chứa ảnh)", type=['xlsx'])
+    col_upload, col_action = st.columns([2, 1])
+    with col_upload:
+        uploaded_file = st.file_uploader("📥 Tải lên file Excel (Chứa ảnh dán trong ô)", type=['xlsx'])
 
-    # Biến lưu dữ liệu tạm trong session để không bị mất khi reload
-    if 'df_display' not in st.session_state:
-        st.session_state.df_display = pd.DataFrame()
+    # Biến session để giữ dữ liệu sau khi upload xong (tránh reload mất bảng)
+    if 'bg_data' not in st.session_state:
+        st.session_state.bg_data = pd.DataFrame()
 
+    # Nút bấm xử lý
+    start_process = False
     if uploaded_file is not None:
-        if st.button("🚀 BẮT ĐẦU XỬ LÝ & IMPORT", type="primary"):
-            status_box = st.status("Đang xử lý dữ liệu...", expanded=True)
-            try:
-                # --- BƯỚC 1: DÙNG OPENPYXL ĐỂ MÓC ẢNH ---
-                status_box.write("🖼️ Đang quét hình ảnh trong file Excel...")
-                uploaded_file.seek(0) # Reset con trỏ file
-                wb = load_workbook(uploaded_file, data_only=False)
-                ws = wb.active
+        with col_action:
+            st.write("") # Spacer
+            st.write("") 
+            if st.button("🚀 BẮT ĐẦU IMPORT & UPLOAD", type="primary"):
+                start_process = True
+
+    if start_process and uploaded_file:
+        status_box = st.status("Đang xử lý dữ liệu...", expanded=True)
+        try:
+            # --- BƯỚC 1: DÙNG OPENPYXL ĐỂ MÓC ẢNH RA ---
+            status_box.write("🖼️ Đang quét hình ảnh trong file Excel...")
+            uploaded_file.seek(0)
+            wb = load_workbook(uploaded_file, data_only=False)
+            ws = wb.active
+            
+            # Tạo map: Số dòng Excel -> Dữ liệu ảnh (bytes)
+            # Lưu ý: openpyxl tính dòng từ 1, pandas tính từ 0
+            image_map = {}
+            if hasattr(ws, '_images'):
+                for img in ws._images:
+                    # Lấy dòng chứa ảnh (anchor row)
+                    r = img.anchor._from.row + 1 
+                    image_map[r] = img._data()
+            
+            status_box.write(f"✅ Tìm thấy {len(image_map)} ảnh trong file.")
+
+            # --- BƯỚC 2: ĐỌC DỮ LIỆU TEXT BẰNG PANDAS ---
+            status_box.write("📖 Đang đọc dữ liệu văn bản...")
+            uploaded_file.seek(0)
+            df = pd.read_excel(uploaded_file, header=0)
+
+            # --- BƯỚC 3: MAPPING CỘT TUYỆT ĐỐI (A->O) ---
+            if len(df.columns) < 15:
+                st.error("File lỗi: Không đủ 15 cột dữ liệu (A->O).")
+                status_box.update(label="❌ Lỗi dữ liệu", state="error")
+                return
+
+            # Cắt đúng 15 cột đầu tiên và ép tên chuẩn
+            df_display = df.iloc[:, :15].copy()
+            df_display.columns = STANDARD_COLUMNS
+
+            # --- BƯỚC 4: DUYỆT TỪNG DÒNG ĐỂ UPLOAD ẢNH ---
+            status_box.write("☁️ Đang đồng bộ ảnh lên Google Drive...")
+            progress_bar = status_box.progress(0)
+            total_rows = len(df_display)
+
+            for i, row in df_display.iterrows():
+                # Cập nhật thanh tiến trình
+                progress_bar.progress(min((i + 1) / total_rows, 1.0))
                 
-                # Tạo map: Dòng (Excel) -> Dữ liệu ảnh
-                image_map = {}
-                if hasattr(ws, '_images'):
-                    for img in ws._images:
-                        # Lấy số dòng mà ảnh đang nằm (anchor)
-                        # row trong openpyxl bắt đầu từ 1
-                        r = img.anchor._from.row + 1 
-                        image_map[r] = img._data()
-
-                # --- BƯỚC 2: DÙNG PANDAS ĐỌC DỮ LIỆU ---
-                status_box.write("📖 Đang đọc dữ liệu văn bản...")
-                uploaded_file.seek(0)
-                df = pd.read_excel(uploaded_file, header=0)
-
-                # --- BƯỚC 3: MAPPING CỘT TUYỆT ĐỐI (Hard-Map A->O) ---
-                if len(df.columns) < 15:
-                    st.error("File thiếu cột (Cần ít nhất 15 cột A->O).")
-                    return
+                # Tính dòng tương ứng trong Excel
+                # Header là dòng 1 => Data bắt đầu từ dòng 2
+                # Pandas index 0 => Excel row 2
+                excel_row = i + 2
                 
-                # Cắt đúng 15 cột, gán tên chuẩn
-                df_clean = df.iloc[:, :15]
-                df_clean.columns = STANDARD_COLUMNS
-
-                # --- BƯỚC 4: UPLOAD ẢNH & GHÉP LINK ---
-                # Tiến độ
-                prog_bar = status_box.progress(0)
-                total_rows = len(df_clean)
-
-                for i, row in df_clean.iterrows():
-                    prog_bar.progress(min((i + 1) / total_rows, 1.0))
+                item_code = str(row["Item code"]).strip()
+                
+                # Logic xử lý ảnh
+                final_link = ""
+                
+                # Trường hợp 1: Có ảnh dán trong ô (ưu tiên cao nhất)
+                if excel_row in image_map:
+                    # status_box.write(f"Đang upload ảnh mã: {item_code}...")
+                    img_bytes = image_map[excel_row]
+                    file_name = f"{safe_filename(item_code)}.png"
                     
-                    item_code = str(row["Item code"]).strip()
-                    if not item_code or item_code == "nan": continue
-
-                    # Tính dòng tương ứng trong Excel
-                    # i là index của pandas (bắt đầu từ 0). Header là dòng 1. 
-                    # => Dữ liệu bắt đầu từ dòng 2 trong Excel.
-                    # => excel_row = i + 2
-                    excel_row_idx = i + 2
-
-                    # Nếu dòng này có ảnh trong map
-                    if excel_row_idx in image_map:
-                        status_box.write(f"☁️ Đang upload ảnh cho mã: {item_code}...")
-                        
-                        # Lấy data ảnh
-                        img_bytes = image_map[excel_row_idx]
-                        file_name = f"{item_code}.png"
-                        
-                        # GỌI HÀM BACKEND CỦA BẠN
-                        # upload_to_drive(file_obj, filename, folder)
+                    # GỌI HÀM CỦA BẠN ĐỂ UPLOAD
+                    try:
                         link = backend.upload_to_drive(io.BytesIO(img_bytes), file_name, "images")
-                        
                         if link:
-                            # Gán link trả về vào cột Images
-                            df_clean.at[i, "Images"] = link
-                    else:
-                        # Nếu không có ảnh mới, giữ nguyên giá trị cũ nếu là link
-                        old_val = str(row["Images"])
-                        if "http" not in old_val:
-                            df_clean.at[i, "Images"] = "" # Xóa rác nếu không phải link
+                            final_link = link
+                    except Exception as e:
+                        print(f"Lỗi upload {item_code}: {e}")
 
-                st.session_state.df_display = df_clean
-                status_box.update(label="✅ Đã xử lý xong!", state="complete", expanded=False)
+                # Trường hợp 2: Không có ảnh dán, nhưng có link sẵn trong cột M (Images)
+                if not final_link:
+                    old_val = str(row["Images"])
+                    if "http" in old_val:
+                        final_link = old_val
                 
-            except Exception as e:
-                st.error(f"Lỗi: {e}")
+                # Gán lại link vào DataFrame
+                if final_link:
+                    df_display.at[i, "Images"] = final_link
+                else:
+                    df_display.at[i, "Images"] = "" # Xóa rác nếu ko có ảnh
 
-    # --- GIAO DIỆN HIỂN THỊ (70% Bảng - 30% Ảnh) ---
-    if not st.session_state.df_display.empty:
+            # Lưu vào session
+            st.session_state.bg_data = df_display
+            status_box.update(label="✅ Hoàn tất Import & Upload!", state="complete", expanded=False)
+            
+        except Exception as e:
+            st.error(f"Có lỗi xảy ra: {e}")
+            status_box.update(label="❌ Có lỗi!", state="error")
+
+    # --- GIAO DIỆN HIỂN THỊ (Sau khi đã có dữ liệu trong session) ---
+    if not st.session_state.bg_data.empty:
+        df_show = st.session_state.bg_data
+        
+        # Chia layout 70% - 30%
         col_table, col_gallery = st.columns([7, 3])
 
         with col_table:
             st.subheader("Dữ liệu báo giá")
-            # Cấu hình hiển thị bảng
-            # Ẩn cột link ảnh dài loằng ngoằng, thay bằng LinkColumn gọn gàng
+            
+            # Cấu hình hiển thị cột cho đẹp
             column_config = {
                 "Images": st.column_config.LinkColumn("Link Ảnh"),
                 "Buying price (RMB)": st.column_config.NumberColumn(format="%.2f"),
                 "Buying price (VND)": st.column_config.NumberColumn(format="%d"),
+                "Total buying price (VND)": st.column_config.NumberColumn(format="%d"),
             }
 
+            # Bảng tương tác
             event = st.dataframe(
-                st.session_state.df_display,
+                df_show,
                 hide_index=True,
                 use_container_width=True,
                 column_config=column_config,
@@ -125,30 +155,30 @@ def module_bao_gia_ncc():
             )
 
         with col_gallery:
-            st.info("📷 KHUNG XEM ẢNH")
+            st.info("📷 XEM ẢNH CHI TIẾT")
             
-            # Logic hiển thị ảnh khi chọn dòng
+            # Logic bắt sự kiện chọn dòng
             if len(event.selection.rows) > 0:
                 idx = event.selection.rows[0]
-                row = st.session_state.df_display.iloc[idx]
+                row = df_show.iloc[idx]
                 
                 img_link = row.get("Images")
                 item_code = row.get("Item code")
                 item_name = row.get("Item name")
+                specs = row.get("Specs")
                 
-                st.markdown(f"**{item_code}**")
+                st.markdown(f"#### {item_code}")
                 st.caption(f"{item_name}")
                 
+                # Hiển thị ảnh
                 if img_link and "http" in str(img_link):
-                    # Dùng chính hàm backend để get bytes ảnh về hiển thị cho mượt
-                    # Hoặc để st.image tự load link (tuỳ backend của bạn trả về link gì)
+                    # Nếu backend trả về link xem được ngay (vd: drive.google.com/thumbnail?...)
                     st.image(img_link, caption="Ảnh sản phẩm", use_column_width=True)
                 else:
-                    st.warning("Chưa có ảnh (File Excel không có ảnh tại dòng này).")
+                    st.warning("Chưa có ảnh (Hoặc chưa Import xong).")
+                
+                st.divider()
+                st.markdown(f"**Thông số:** {specs}")
+                st.markdown(f"**NCC:** {row.get('Supplier')}")
             else:
-                st.info("👈 Chọn một dòng bên trái để xem ảnh.")
-
-# Chạy thử
-if __name__ == "__main__":
-    # st.set_page_config(layout="wide") # Đã set ở main
-    module_bao_gia_ncc()
+                st.info("👈 Vui lòng chọn một dòng bên trái để xem ảnh.")
