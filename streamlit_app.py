@@ -747,17 +747,34 @@ with t2:
             )
         else: st.info("Kho hàng trống.")
 # =============================================================================
-# --- TAB 3: BÁO GIÁ (FIXED: FORMATTING & NO DASHBOARD LINK) ---
+# --- TAB 3: BÁO GIÁ (FINAL FIX: NUMBER FORMAT & NO DASHBOARD LINK) ---
 # =============================================================================
 with t3:
     if 'quote_df' not in st.session_state: st.session_state.quote_df = pd.DataFrame()
+    if 'view_hist_df' not in st.session_state: st.session_state.view_hist_df = None
     
-    # ------------------ 1. QUẢN LÝ LỊCH SỬ (DRIVE ONLY) ------------------
+    # ------------------ 1. ADMIN: RESET LỊCH SỬ ------------------
+    with st.expander("🛠️ ADMIN: QUẢN LÝ LỊCH SỬ BÁO GIÁ"):
+        c_adm1, c_adm2 = st.columns([3, 1])
+        with c_adm1:
+            st.warning("⚠️ Chức năng này sẽ xóa toàn bộ dữ liệu trong bảng Lịch sử báo giá (crm_shared_history).")
+        with c_adm2:
+            adm_pass_q = st.text_input("Mật khẩu Admin", type="password", key="pass_reset_quote_tab3")
+            if st.button("🔴 XÓA HẾT LỊCH SỬ", key="btn_clear_hist_tab3"):
+                if adm_pass_q == "admin":
+                    try:
+                        supabase.table("crm_shared_history").delete().neq("id", 0).execute()
+                        st.toast("✅ Đã xóa toàn bộ lịch sử báo giá!", icon="🗑️")
+                        time.sleep(1.5); st.rerun()
+                    except Exception as e: st.error(f"Lỗi: {e}")
+                else: st.error("Sai mật khẩu!")
+
+    # ------------------ 2. TRA CỨU & XEM LỊCH SỬ ------------------
     with st.expander("🔎 TRA CỨU & LỊCH SỬ BÁO GIÁ", expanded=False):
         c_src1, c_src2 = st.columns(2)
         search_kw = c_src1.text_input("Tìm kiếm (Tên Khách, Quote No...)", help="Tìm file đã lưu trên Drive", key="search_kw_tab3")
         
-        # Load danh sách gợi ý từ DB (Chỉ để lấy tên file cũ, không dùng data)
+        # Load danh sách từ DB để gợi ý tên file
         df_hist_idx = load_data("crm_shared_history", order_by="date")
         if not df_hist_idx.empty:
             df_hist_idx['display'] = df_hist_idx.apply(lambda x: f"{x['date']} | {x['customer']} | Quote: {x['quote_no']}", axis=1)
@@ -771,30 +788,56 @@ with t3:
                 if len(parts) >= 3:
                     q_no_h = parts[2].replace("Quote: ", "").strip()
                     cust_h = parts[1].strip()
+                    date_h = parts[0].strip()
                     
                     search_pattern = f"HIST_{q_no_h}_{cust_h}" 
                     fid, fname, pid = search_file_in_drive_by_name(search_pattern)
                     
-                    if fid:
-                        st.success(f"✅ Tìm thấy file trên Drive: {fname}")
-                        if st.button(f"📥 Tải file chi tiết", key="btn_load_file_tab3"):
-                            fh = download_from_drive(fid)
-                            if fh:
-                                try:
-                                    df_view = pd.read_csv(fh)
-                                    # Format hiển thị số tiền có dấu phẩy cho dễ đọc
-                                    cols_fmt = [c for c in df_view.columns if any(x in c.lower() for x in ["price", "vnd", "profit", "total", "gap", "tax", "fee"])]
-                                    for c in cols_fmt:
-                                        try: df_view[c] = df_view[c].apply(lambda x: "{:,.0f}".format(float(x)) if pd.notnull(x) else x)
-                                        except: pass
-                                    st.dataframe(df_view, use_container_width=True)
-                                except Exception as e: st.error(f"Lỗi đọc file: {e}")
-                    else:
-                        st.warning(f"Không tìm thấy file trên Drive (Pattern: {search_pattern}).")
+                    c_h1, c_h2 = st.columns([3, 1])
+                    with c_h1:
+                        if fid:
+                            st.success(f"✅ Tìm thấy file: {fname}")
+                            if st.button(f"📥 Tải & Xem file chi tiết", key="btn_load_file_tab3"):
+                                fh = download_from_drive(fid)
+                                if fh:
+                                    try:
+                                        st.session_state.view_hist_df = pd.read_csv(fh)
+                                    except Exception as e: st.error(f"Lỗi đọc file: {e}")
+                        else:
+                            st.warning(f"Không tìm thấy file trên Drive (Pattern: {search_pattern}).")
+                    
+                    with c_h2:
+                        if st.button("♻️ Load Config", key="btn_reload_cfg_tab3"):
+                             hist_rows = df_hist_idx[(df_hist_idx['quote_no'] == q_no_h) & (df_hist_idx['customer'] == cust_h)]
+                             if not hist_rows.empty:
+                                 hist_row = hist_rows.iloc[0]
+                                 if 'config_data' in hist_row and hist_row['config_data']:
+                                     try:
+                                         cfg = json.loads(hist_row['config_data'])
+                                         for k in ["end", "buy", "tax", "vat", "pay", "mgmt", "trans"]:
+                                             if k in cfg: 
+                                                 st.session_state[f"pct_{k}"] = str(cfg[k])
+                                                 st.session_state[f"input_{k}_tab3"] = str(cfg[k])
+                                         st.toast("Đã load cấu hình!", icon="✅"); time.sleep(1); st.rerun()
+                                     except: st.error("Lỗi config cũ.")
+
+            if st.session_state.view_hist_df is not None:
+                st.markdown("---")
+                st.markdown("#### 📄 Nội dung file lịch sử:")
+                # Format hiển thị cho đẹp
+                df_view = st.session_state.view_hist_df.copy()
+                cols_fmt = [c for c in df_view.columns if any(x in c.lower() for x in ["price", "vnd", "profit", "total", "gap"])]
+                for c in cols_fmt:
+                    try: df_view[c] = df_view[c].apply(lambda x: "{:,.0f}".format(float(x)) if pd.notnull(x) else x)
+                    except: pass
+                st.dataframe(df_view, use_container_width=True)
+                if st.button("Đóng xem file", key="close_hist_view"):
+                    st.session_state.view_hist_df = None
+                    st.rerun()
 
     st.divider()
     
-    # ------------------ 2. TÍNH TOÁN & LÀM BÁO GIÁ ------------------
+    # ------------------ 3. TÍNH TOÁN & LÀM BÁO GIÁ ------------------
     st.subheader("TÍNH TOÁN & LÀM BÁO GIÁ")
     
     c1, c2, c3 = st.columns([2, 2, 1])
@@ -881,7 +924,6 @@ with t3:
 
     # --- MAIN EDITOR ---
     if not st.session_state.quote_df.empty:
-        # 1. Formula Buttons
         c_f1, c_f2 = st.columns(2)
         with c_f1:
             ap_f = st.text_input("Formula AP (vd: =BUY*1.1)", key="f_ap_tab3")
@@ -909,7 +951,6 @@ with t3:
                 st.rerun()
             st.markdown('</div>', unsafe_allow_html=True)
 
-        # 2. Logic Calc & Display
         st.session_state.quote_df = recalculate_quote_logic(st.session_state.quote_df, params)
         
         df_display = st.session_state.quote_df.copy()
@@ -918,13 +959,9 @@ with t3:
         cols_order = ["Select", "No", "Cảnh báo"] + [c for c in df_display.columns if c not in ["Select", "No", "Cảnh báo", "Image", "Profit_Pct_Raw"]]
         df_display = df_display[cols_order]
 
-        # Tính Total Row
-        cols_to_sum = ["Q'ty", "Buying price(RMB)", "Total buying price(rmb)", 
-                       "Buying price(VND)", "Total buying price(VND)", 
-                       "AP price(VND)", "AP total price(VND)", 
-                       "Unit price(VND)", "Total price(VND)", 
-                       "GAP", "End user(%)", "Buyer(%)", "Import tax(%)", 
-                       "VAT", "Transportation", "Management fee(%)", "Payback(%)", "Profit(VND)"]
+        cols_to_sum = ["Q'ty", "Buying price(RMB)", "Total buying price(rmb)", "Buying price(VND)", "Total buying price(VND)", 
+                       "AP price(VND)", "AP total price(VND)", "Unit price(VND)", "Total price(VND)", 
+                       "GAP", "End user(%)", "Buyer(%)", "Import tax(%)", "VAT", "Transportation", "Management fee(%)", "Payback(%)", "Profit(VND)"]
         
         total_row = {"Select": False, "No": "TOTAL", "Cảnh báo": "", "Item code": "", "Item name": "", "Specs": ""}
         for c in cols_to_sum:
@@ -937,7 +974,6 @@ with t3:
 
         df_final_view = pd.concat([df_display, pd.DataFrame([total_row])], ignore_index=True)
 
-        # Nút Global Config
         st.markdown("---")
         c_tool1, c_tool2 = st.columns([1, 3])
         with c_tool1:
@@ -961,9 +997,8 @@ with t3:
                     st.session_state.quote_df.at[idx, "Transportation"] = v_trans
                 st.rerun()
 
-        # 3. FIX HIỂN THỊ SỐ (Hàng nghìn, triệu) - QUAN TRỌNG
-        # format="%.2f": Số thực 2 số lẻ (Ngoại tệ)
-        # format="%d": Số nguyên, Streamlit tự thêm dấu phẩy ngăn cách (1,000,000)
+        # CONFIG HIỂN THỊ SỐ (FIXED)
+        # Sử dụng format="%.0f" thay vì "%d". %.0f sẽ hiển thị số thực làm tròn thành số nguyên CÓ dấu phẩy trong Streamlit.
         column_cfg = {
             "Select": st.column_config.CheckboxColumn("✅", width="small"),
             "Cảnh báo": st.column_config.TextColumn("Cảnh báo", width="small", disabled=True),
@@ -972,22 +1007,22 @@ with t3:
             "Buying price(RMB)": st.column_config.NumberColumn("Buying(RMB)", format="%.2f"),
             "Total buying price(rmb)": st.column_config.NumberColumn("Total(RMB)", format="%.2f", disabled=True),
             
-            # VNĐ Columns - Dùng %d để có dấu phẩy
-            "Buying price(VND)": st.column_config.NumberColumn("Buying(VND)", format="%d"),
-            "Total buying price(VND)": st.column_config.NumberColumn("Total(VND)", format="%d", disabled=True),
-            "AP price(VND)": st.column_config.NumberColumn("AP(VND)", format="%d"),
-            "AP total price(VND)": st.column_config.NumberColumn("Total AP(VND)", format="%d", disabled=True),
-            "Unit price(VND)": st.column_config.NumberColumn("Unit(VND)", format="%d"),
-            "Total price(VND)": st.column_config.NumberColumn("Total(VND)", format="%d", disabled=True),
-            "GAP": st.column_config.NumberColumn("GAP", format="%d", disabled=True),
-            "End user(%)": st.column_config.NumberColumn("EndUser(VNĐ)", format="%d"),
-            "Buyer(%)": st.column_config.NumberColumn("Buyer(VNĐ)", format="%d"),
-            "Import tax(%)": st.column_config.NumberColumn("Tax(VNĐ)", format="%d"),
-            "VAT": st.column_config.NumberColumn("VAT(VNĐ)", format="%d"),
-            "Transportation": st.column_config.NumberColumn("Trans(VNĐ)", format="%d"),
-            "Management fee(%)": st.column_config.NumberColumn("Mgmt(VNĐ)", format="%d"),
-            "Payback(%)": st.column_config.NumberColumn("Payback(VNĐ)", format="%d"),
-            "Profit(VND)": st.column_config.NumberColumn("Profit(VND)", format="%d", disabled=True),
+            # --- FIX: Dùng %.0f để hiển thị dấu phẩy cho tiền VNĐ ---
+            "Buying price(VND)": st.column_config.NumberColumn("Buying(VND)", format="%.0f"),
+            "Total buying price(VND)": st.column_config.NumberColumn("Total(VND)", format="%.0f", disabled=True),
+            "AP price(VND)": st.column_config.NumberColumn("AP(VND)", format="%.0f"),
+            "AP total price(VND)": st.column_config.NumberColumn("Total AP(VND)", format="%.0f", disabled=True),
+            "Unit price(VND)": st.column_config.NumberColumn("Unit(VND)", format="%.0f"),
+            "Total price(VND)": st.column_config.NumberColumn("Total(VND)", format="%.0f", disabled=True),
+            "GAP": st.column_config.NumberColumn("GAP", format="%.0f", disabled=True),
+            "End user(%)": st.column_config.NumberColumn("EndUser(VNĐ)", format="%.0f"),
+            "Buyer(%)": st.column_config.NumberColumn("Buyer(VNĐ)", format="%.0f"),
+            "Import tax(%)": st.column_config.NumberColumn("Tax(VNĐ)", format="%.0f"),
+            "VAT": st.column_config.NumberColumn("VAT(VNĐ)", format="%.0f"),
+            "Transportation": st.column_config.NumberColumn("Trans(VNĐ)", format="%.0f"),
+            "Management fee(%)": st.column_config.NumberColumn("Mgmt(VNĐ)", format="%.0f"),
+            "Payback(%)": st.column_config.NumberColumn("Payback(VNĐ)", format="%.0f"),
+            "Profit(VND)": st.column_config.NumberColumn("Profit(VND)", format="%.0f", disabled=True),
             "Profit(%)": st.column_config.TextColumn("Profit(%)", disabled=True),
         }
 
@@ -1045,12 +1080,10 @@ with t3:
                  else:
                      try:
                         out = io.BytesIO()
-                        # Export file đơn giản, không link DB
                         with pd.ExcelWriter(out, engine='openpyxl') as writer:
                              st.session_state.quote_df.to_excel(writer, index=False, sheet_name='Quote')
                         out.seek(0)
                         fname = f"QUOTE_{quote_no}_{cust_name}.xlsx"
-                        
                         curr_year = datetime.now().strftime("%Y")
                         path_list = ["QUOTATION_HISTORY", cust_name, curr_year]
                         lnk, _ = upload_to_drive_structured(out, path_list, fname)
@@ -1060,8 +1093,7 @@ with t3:
                      except Exception as e: st.error(f"Lỗi: {e}")
 
         with c_sv:
-            # --- FIX: KHÔNG GHI VÀO DB DASHBOARD (crm_shared_history) ---
-            # Chỉ lưu file CSV lên Drive để tham khảo
+            # --- FIX: LOGIC LƯU (CHỈ LƯU FILE - KHÔNG INSERT DB DASHBOARD) ---
             if st.button("💾 LƯU LỊCH SỬ (DRIVE ONLY)", key="btn_save_hist_tab3"):
                 if not cust_name: st.error("Chọn khách!")
                 else:
@@ -1071,7 +1103,8 @@ with t3:
                         st.session_state.quote_df.to_csv(csv_buf, index=False)
                         csv_buf.seek(0)
                         fname = f"HIST_{quote_no}_{cust_name}_{int(time.time())}.csv"
-                        path = ["QUOTATION_HISTORY", cust_name, datetime.now().strftime("%Y")]
+                        curr_year = datetime.now().strftime("%Y")
+                        path = ["QUOTATION_HISTORY", cust_name, curr_year]
                         lnk, _ = upload_to_drive_structured(csv_buf, path, fname)
                         
                         # 2. Lưu Config kèm theo
@@ -1084,7 +1117,7 @@ with t3:
                         upload_to_drive_structured(cfg_buffer, path, cfg_name)
                         
                         st.success("✅ Đã lưu file lịch sử & config lên Drive thành công!")
-                        st.info("ℹ️ Dữ liệu này KHÔNG được link sang Dashboard để tránh sai lệch doanh thu.")
+                        st.info("ℹ️ Dữ liệu này KHÔNG được link sang Dashboard (để tránh sai lệch doanh thu).")
                         st.markdown(f"📂 [Folder Lịch Sử]({lnk})")
                     except Exception as e: st.error(f"Lỗi lưu file: {e}")
 # =============================================================================
